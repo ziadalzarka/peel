@@ -87,6 +87,24 @@ func (r *Repo) Staged(ctx context.Context) (Diff, error) {
 	return ParseDiff(out)
 }
 
+// AllChangesText returns the raw diff between HEAD and the working tree —
+// everything uncommitted, staged or not. It is the input to a walkthrough,
+// where the split between index and working tree is not interesting.
+func (r *Repo) AllChangesText(ctx context.Context) (string, error) {
+	args := append([]string{"diff"}, diffFlags...)
+	if r.HasHead(ctx) {
+		args = append(args, "HEAD")
+	} else {
+		args = append(args, emptyTree)
+	}
+
+	out, err := r.git(ctx, args...)
+	if err != nil {
+		return "", fmt.Errorf("git diff HEAD: %w", err)
+	}
+	return out, nil
+}
+
 // Untracked lists files git does not track and .gitignore does not exclude.
 func (r *Repo) Untracked(ctx context.Context) ([]string, error) {
 	out, err := r.git(ctx, "ls-files", "--others", "--exclude-standard", "-z")

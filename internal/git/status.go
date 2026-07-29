@@ -101,6 +101,15 @@ func (e FileEntry) Diff(dir Direction) *FileDiff {
 	return e.Unstaged
 }
 
+// Primary returns the diff to show by default — the working-tree side when
+// there is one, since that is what the reviewer is deciding about.
+func (e FileEntry) Primary() *FileDiff {
+	if e.Unstaged != nil {
+		return e.Unstaged
+	}
+	return e.Staged
+}
+
 // Status is the full working-tree state peel reviews.
 type Status struct {
 	Files []FileEntry
