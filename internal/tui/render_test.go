@@ -1,0 +1,310 @@
+package tui
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/charmbracelet/x/ansi"
+	"github.com/ziadalzarka/peel/internal/store"
+)
+
+// plainRenderer renders without colour or syntax highlighting, so rows can be
+// compared as ordinary strings.
+func plainRenderer(width int) *Renderer {
+	r := NewRenderer(Theme{}, nil)
+	r.SetWidth(width)
+	return r
+}
+
+func TestRenderUnifiedLineAlignsBothLineNumbers(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+	r := plainRenderer(40)
+
+	rows := map[string]string{}
+	for i, row := range doc.Rows {
+		if row.Kind != RowLine || row.Hunk != 0 {
+			continue
+		}
+		line := doc.Hunks[0].Hunk.Lines[row.Left]
+		rows[line.Render()] = strings.TrimRight(r.Row(doc, i, RowState{}), " ")
+	}
+
+	// One marker column, then a four-wide old-line and new-line column, then the
+	// origin character. A line missing from one side leaves that column blank.
+	cases := map[string]string{
+		" package alpha":               "    1   1  package alpha",
+		"-func One() int { return 1 }": "    3     -func One() int { return 1 }",
+		"+func One() int { return 2 }": "        3 +func One() int { return 2 }",
+	}
+	for render, want := range cases {
+		got, ok := rows[render]
+		if !ok {
+			t.Fatalf("no row rendered for %q; have %v", render, keys(rows))
+		}
+		if got != want {
+			t.Errorf("line %q\n got %q\nwant %q", render, got, want)
+		}
+	}
+}
+
+func TestRenderSplitLineShowsBothSidesAcrossADivider(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutSplit)
+	r := plainRenderer(80)
+
+	var found string
+	for i, row := range doc.Rows {
+		if row.Kind != RowLine || row.Left < 0 || row.Right < 0 {
+			continue
+		}
+		lines := doc.Hunks[row.Hunk].Hunk.Lines
+		if lines[row.Left].Kind.Origin() != '-' {
+			continue
+		}
+		found = r.Row(doc, i, RowState{})
+		break
+	}
+	if found == "" {
+		t.Fatal("no replaced line was rendered side by side")
+	}
+	if !strings.Contains(found, "│") {
+		t.Errorf("split row has no divider: %q", found)
+	}
+	if !strings.Contains(found, "-func One() int { return 1 }") {
+		t.Errorf("split row is missing the old text: %q", found)
+	}
+	if !strings.Contains(found, "+func One() int { return 2 }") {
+		t.Errorf("split row is missing the new text: %q", found)
+	}
+}
+
+func TestRenderEveryRowIsExactlyOneLineOfTheGivenWidth(t *testing.T) {
+	comments := []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 4, Side: store.SideNew, Body: "short\nand a second line", Author: store.AuthorUser},
+		{ID: "c2", File: "beta.txt", Body: strings.Repeat("very long comment ", 12), Author: store.AuthorAgent},
+	}
+	for _, layout := range []Layout{LayoutUnified, LayoutSplit} {
+		for _, width := range []int{24, 40, 120} {
+			doc := Build(newSession(t, twoFileDiff), comments, nil, layout)
+			r := plainRenderer(width)
+			for i, row := range doc.Rows {
+				got := r.Row(doc, i, RowState{Cursor: i == 3})
+				if strings.Contains(got, "\n") {
+					t.Fatalf("%v width %d row %d contains a newline", layout, width, i)
+				}
+				if w := ansi.StringWidth(got); w != width {
+					t.Fatalf("%v width %d row %d (%v) rendered %d cells: %q", layout, width, i, row.Kind, w, got)
+				}
+			}
+		}
+	}
+}
+
+func TestRenderCursorGetsAMarker(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+	r := plainRenderer(60)
+	row := doc.RowOfHunk(0)
+
+	if got := r.Row(doc, row, RowState{}); strings.HasPrefix(got, "▌") {
+		t.Errorf("uncursored row starts with the marker: %q", got)
+	}
+	if got := r.Row(doc, row, RowState{Cursor: true}); !strings.HasPrefix(got, "▌") {
+		t.Errorf("cursored row = %q, want a leading marker", got)
+	}
+}
+
+func TestRenderHunkHeaderNamesWhereTheChangeLives(t *testing.T) {
+	entries := parseFiles(t, twoFileDiff)
+	staged := *entries[0].Unstaged
+	entries[0].Staged = &staged
+	doc := Build(sessionOf(entries[:1]), nil, nil, LayoutUnified)
+	r := plainRenderer(80)
+
+	first := r.Row(doc, doc.RowOfHunk(0), RowState{})
+	second := r.Row(doc, doc.RowOfHunk(1), RowState{})
+
+	if !strings.Contains(first, "index") {
+		t.Errorf("staged hunk header = %q, want it marked index", first)
+	}
+	if !strings.Contains(second, "worktree") {
+		t.Errorf("unstaged hunk header = %q, want it marked worktree", second)
+	}
+	if !strings.Contains(first, "@@ -1,4 +1,5 @@") {
+		t.Errorf("hunk header = %q, want the @@ range", first)
+	}
+}
+
+func TestRenderFileHeaderShowsStateAndCounts(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+	r := plainRenderer(80)
+
+	got := r.Row(doc, doc.RowOfFile(0), RowState{})
+	for _, want := range []string{"alpha.go", "+2 -1", "modified", "▾"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("file header = %q, want it to contain %q", got, want)
+		}
+	}
+
+	collapsed := Build(newSession(t, twoFileDiff), nil, map[string]bool{"alpha.go": true}, LayoutUnified)
+	if got := r.Row(collapsed, collapsed.RowOfFile(0), RowState{}); !strings.Contains(got, "▸") {
+		t.Errorf("collapsed file header = %q, want the closed arrow", got)
+	}
+}
+
+func TestRenderCommentShowsAuthorAndResolvedState(t *testing.T) {
+	comments := []store.Comment{
+		{ID: "open", File: "alpha.go", Body: "needs a test", Author: store.AuthorAgent},
+		{ID: "done", File: "beta.txt", Body: "fixed", Author: store.AuthorUser, Resolved: true},
+	}
+	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutUnified)
+	r := plainRenderer(80)
+
+	open := r.Row(doc, rowOfComment(doc, "open"), RowState{})
+	if !strings.Contains(open, "agent: needs a test") {
+		t.Errorf("comment row = %q", open)
+	}
+	done := r.Row(doc, rowOfComment(doc, "done"), RowState{})
+	if !strings.Contains(done, "✓ user: fixed") {
+		t.Errorf("resolved comment row = %q, want a tick", done)
+	}
+}
+
+func TestRenderSelectionSymbolsOnlyAppearWhileSelecting(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+	r := plainRenderer(60)
+
+	row := -1
+	for i, x := range doc.Rows {
+		if x.Kind == RowLine && doc.Hunks[x.Hunk].Hunk.Lines[x.Left].IsChange() {
+			row = i
+			break
+		}
+	}
+	if row < 0 {
+		t.Fatal("no changed line row")
+	}
+
+	plain := r.Row(doc, row, RowState{})
+	if strings.ContainsAny(plain, "◉○") {
+		t.Errorf("row outside line-select mode shows a selection symbol: %q", plain)
+	}
+	if got := r.Row(doc, row, RowState{Selecting: true, Selectable: true}); !strings.Contains(got, "○") {
+		t.Errorf("selectable row = %q, want ○", got)
+	}
+	if got := r.Row(doc, row, RowState{Selecting: true, Selectable: true, Selected: true}); !strings.Contains(got, "◉") {
+		t.Errorf("selected row = %q, want ◉", got)
+	}
+}
+
+// While selecting, a context line reserves the selection column too, so the
+// whole hunk keeps its alignment instead of changed lines jumping right.
+func TestRenderSelectionColumnKeepsLinesAligned(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+	r := plainRenderer(60)
+
+	var gutters []string
+	for i, row := range doc.Rows {
+		if row.Kind != RowLine || row.Hunk != 0 {
+			continue
+		}
+		changed := doc.Hunks[0].Hunk.Lines[row.Left].IsChange()
+		line := r.Row(doc, i, RowState{Selecting: true, Selectable: changed})
+		gutters = append(gutters, line[:strings.IndexAny(line, "+- ")])
+	}
+
+	for i, got := range gutters {
+		if len(got) != len(gutters[0]) {
+			t.Fatalf("line %d has a %d-cell prefix, line 0 has %d", i, len(got), len(gutters[0]))
+		}
+	}
+}
+
+func TestRenderOutOfRangeRowIsEmpty(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+	r := plainRenderer(40)
+
+	if got := r.Row(doc, -1, RowState{}); got != "" {
+		t.Errorf("row -1 = %q, want empty", got)
+	}
+	if got := r.Row(doc, doc.Len(), RowState{}); got != "" {
+		t.Errorf("row past the end = %q, want empty", got)
+	}
+}
+
+func TestFitTruncatesAndPads(t *testing.T) {
+	if got := fit("abc", 6); got != "abc   " {
+		t.Errorf("fit padded to %q", got)
+	}
+	if got := fit("abcdefgh", 4); ansi.StringWidth(got) != 4 || !strings.HasSuffix(got, "…") {
+		t.Errorf("fit truncated to %q", got)
+	}
+	if got := fit("abc", 0); got != "" {
+		t.Errorf("fit to width 0 = %q", got)
+	}
+}
+
+func TestShortenTrimsFromTheLeftSoTheFilenameSurvives(t *testing.T) {
+	if got := shorten("internal/tui/model.go", 12); got != "…tui/model.go" && ansi.StringWidth(got) > 12 {
+		t.Errorf("shorten = %q (width %d)", got, ansi.StringWidth(got))
+	}
+	if got := shorten("model.go", 20); got != "model.go" {
+		t.Errorf("short path was changed: %q", got)
+	}
+	if got := shorten("model.go", 1); got != "…" {
+		t.Errorf("shorten to 1 = %q", got)
+	}
+	if got := shorten("model.go", 0); got != "" {
+		t.Errorf("shorten to 0 = %q", got)
+	}
+}
+
+func TestHighlighterLeavesTextAloneForUnknownLanguages(t *testing.T) {
+	h := NewHighlighter()
+	if h == nil {
+		t.Skip("no formatter available")
+	}
+	if got := h.Line("notes.unknownext", "hello"); got != "hello" {
+		t.Errorf("unknown language changed the text: %q", got)
+	}
+	if got := h.Line("main.go", "   "); got != "   " {
+		t.Errorf("blank text was altered: %q", got)
+	}
+	coloured := h.Line("main.go", "func main() {}")
+	if !strings.Contains(coloured, "func") {
+		t.Errorf("highlighted line lost its text: %q", coloured)
+	}
+	if strings.Contains(coloured, "\n") {
+		t.Errorf("highlighted line gained a newline: %q", coloured)
+	}
+}
+
+func TestNilHighlighterIsInactive(t *testing.T) {
+	var h *Highlighter
+	if h.Active() {
+		t.Error("a nil highlighter should be inactive")
+	}
+	if got := h.Line("main.go", "x := 1"); got != "x := 1" {
+		t.Errorf("nil highlighter changed the text: %q", got)
+	}
+}
+
+func TestExtensionOfCachesByExtensionOrBaseName(t *testing.T) {
+	cases := map[string]string{
+		"internal/tui/model.go": ".go",
+		"Makefile":              "Makefile",
+		"a/b/Dockerfile":        "Dockerfile",
+		".gitignore":            ".gitignore",
+	}
+	for path, want := range cases {
+		if got := extensionOf(path); got != want {
+			t.Errorf("extensionOf(%q) = %q, want %q", path, got, want)
+		}
+	}
+}
+
+func keys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
