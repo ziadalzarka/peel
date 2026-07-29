@@ -825,13 +825,37 @@ func (m *Model) acceptPoll(msg loadedMsg) bool {
 	return fingerprintOf(msg.session) != m.fingerprint
 }
 
-// fingerprintOf identifies a session's diff, cheaply enough to compare on every
-// poll.
+// fingerprintOf identifies what a session puts on screen, cheaply enough to
+// compare on every poll.
+//
+// It walks the file entries rather than hashing Session.DiffText, which is
+// git diff HEAD: that text omits untracked files and reads the same whether a
+// change is staged or not, so it cannot see a new file appear or an agent stage
+// something underneath the reviewer.
 func fingerprintOf(s *app.Session) string {
 	if s == nil {
 		return ""
 	}
-	return store.Fingerprint(s.DiffText)
+	var b strings.Builder
+	for _, f := range s.Files {
+		fmt.Fprintf(&b, "%s\t%v\t%t\n", f.Path, f.State(), f.Untracked)
+		writeSideFingerprint(&b, "staged", f.Staged)
+		writeSideFingerprint(&b, "unstaged", f.Unstaged)
+	}
+	return store.Fingerprint(b.String())
+}
+
+func writeSideFingerprint(b *strings.Builder, side string, d *git.FileDiff) {
+	if d == nil {
+		return
+	}
+	fmt.Fprintf(b, "%s\t%v\t%t\t%s\t%s\n", side, d.Status, d.IsBinary, d.OldMode, d.NewMode)
+	for _, h := range d.Hunks {
+		fmt.Fprintf(b, "%s\n", h.Header())
+		for _, l := range h.Lines {
+			fmt.Fprintf(b, "%c%s\n", l.Kind.Origin(), l.Text)
+		}
+	}
 }
 
 // restoreCursor puts the cursor back on path, preferring its first unstaged
