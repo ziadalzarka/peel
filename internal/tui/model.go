@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -62,6 +63,15 @@ type Model struct {
 	walk       viewport.Model
 	walkLoaded bool
 
+	// follow re-reads the repository on a timer, for watching a build or an
+	// agent change files while reviewing.
+	follow bool
+	// pollEvery is how often follow mode checks. Zero means the default.
+	pollEvery time.Duration
+	// fingerprint identifies the diff currently on screen, so a poll that finds
+	// nothing new can be dropped instead of redrawing under the reviewer.
+	fingerprint string
+
 	busy   string
 	status string
 	err    error
@@ -69,13 +79,20 @@ type Model struct {
 	quitting bool
 }
 
+// defaultPollEvery is how often follow mode re-reads the repository. Long
+// enough that a large repository is not re-diffed constantly, short enough that
+// a build finishing feels immediate.
+const defaultPollEvery = 2 * time.Second
+
 // options are the knobs New accepts.
 type options struct {
-	theme  Theme
-	layout Layout
-	syntax *Highlighter
-	width  int
-	height int
+	theme     Theme
+	layout    Layout
+	syntax    *Highlighter
+	width     int
+	height    int
+	follow    bool
+	pollEvery time.Duration
 }
 
 // Option customises a Model.
@@ -94,6 +111,14 @@ func WithoutSyntax() Option { return func(o *options) { o.syntax = nil } }
 // WithSize sets the initial terminal size, before the first resize arrives.
 func WithSize(w, h int) Option {
 	return func(o *options) { o.width, o.height = w, h }
+}
+
+// WithFollow starts in follow mode, re-reading the repository on a timer.
+func WithFollow(on bool) Option { return func(o *options) { o.follow = on } }
+
+// WithPollInterval sets how often follow mode re-reads the repository.
+func WithPollInterval(d time.Duration) Option {
+	return func(o *options) { o.pollEvery = d }
 }
 
 // New builds the review UI for a session and the comments already on it.
@@ -116,7 +141,13 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 		renderer:  NewRenderer(cfg.theme, cfg.syntax),
 		input:     newInput(),
 		walk:      viewport.New(cfg.width, cfg.height),
+		follow:    cfg.follow,
+		pollEvery: cfg.pollEvery,
 	}
+	if m.pollEvery <= 0 {
+		m.pollEvery = defaultPollEvery
+	}
+	m.fingerprint = fingerprintOf(session)
 	m.resize(cfg.width, cfg.height)
 	m.rebuild()
 	m.cursor = m.doc.FirstStop()
@@ -132,8 +163,13 @@ func newInput() textarea.Model {
 }
 
 // Init satisfies tea.Model. The session and its comments are already loaded, so
-// there is nothing to fetch on startup.
-func (m *Model) Init() tea.Cmd { return nil }
+// the only thing to start is the follow timer.
+func (m *Model) Init() tea.Cmd {
+	if m.follow {
+		return m.tickCmd()
+	}
+	return nil
+}
 
 // Update satisfies tea.Model.
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -153,6 +189,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = ""
 		m.err = msg.err
 		return m, nil
+	case tickMsg:
+		if !m.follow {
+			return m, nil
+		}
+		return m, tea.Batch(m.pollCmd(), m.tickCmd())
 	case tea.KeyMsg:
 		return m, m.key(msg)
 	}
@@ -224,6 +265,8 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 		return m.openWalkthrough()
 	case "r":
 		return m.reload("reloaded")
+	case "f":
+		return m.toggleFollow()
 	}
 	return nil
 }
@@ -671,6 +714,39 @@ func (m *Model) reload(note string) tea.Cmd {
 	return func() tea.Msg { return load(ctx, backend, note) }
 }
 
+// toggleFollow turns the re-read timer on or off.
+func (m *Model) toggleFollow() tea.Cmd {
+	m.follow = !m.follow
+	if !m.follow {
+		m.status = "following off"
+		return nil
+	}
+	m.status = "following the repository every " + m.pollEvery.String()
+	return m.tickCmd()
+}
+
+// tickCmd schedules the next follow check.
+func (m *Model) tickCmd() tea.Cmd {
+	return tea.Tick(m.pollEvery, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+// pollCmd re-reads in the background without the "reloading" banner, since a
+// follow check that finds nothing should be invisible.
+func (m *Model) pollCmd() tea.Cmd {
+	backend, ctx := m.backend, m.ctx
+	return func() tea.Msg {
+		msg := load(ctx, backend, "")
+		loaded, ok := msg.(loadedMsg)
+		if !ok {
+			// A failed poll is dropped: it is usually a mid-write index lock,
+			// and there is no point interrupting a review over it.
+			return nil
+		}
+		loaded.poll = true
+		return loaded
+	}
+}
+
 // run performs a mutation off the UI goroutine and reloads afterwards, so the
 // document never shows a state the repository has already moved past.
 func (m *Model) run(busy, done string, op func(context.Context) error) tea.Cmd {
@@ -701,15 +777,22 @@ type loadedMsg struct {
 	session  *app.Session
 	comments []store.Comment
 	note     string
+	// poll marks a load nobody asked for, which may be dropped.
+	poll bool
 }
 
 type walkthroughMsg struct{ body string }
 
 type errMsg struct{ err error }
 
+type tickMsg struct{}
+
 // applyLoaded swaps in a freshly read session, keeping the reviewer roughly
 // where they were rather than jumping back to the top.
 func (m *Model) applyLoaded(msg loadedMsg) {
+	if msg.poll && !m.acceptPoll(msg) {
+		return
+	}
 	path := m.currentPath()
 	m.busy = ""
 	m.err = nil
@@ -721,11 +804,34 @@ func (m *Model) applyLoaded(msg loadedMsg) {
 	// The diff changed, so the cached narrative describes the old one.
 	m.walkLoaded = false
 
+	m.fingerprint = fingerprintOf(msg.session)
 	m.rebuild()
 	m.restoreCursor(path)
 	if msg.note != "" {
 		m.status = msg.note
 	}
+	if msg.poll {
+		m.status = "reloaded — the working tree changed"
+	}
+}
+
+// acceptPoll decides whether an unrequested reload is worth applying. Redrawing
+// while someone is mid-comment, or when nothing actually changed, is worse than
+// waiting for the next tick.
+func (m *Model) acceptPoll(msg loadedMsg) bool {
+	if m.mode == modeComment || m.mode == modeLineSelect {
+		return false
+	}
+	return fingerprintOf(msg.session) != m.fingerprint
+}
+
+// fingerprintOf identifies a session's diff, cheaply enough to compare on every
+// poll.
+func fingerprintOf(s *app.Session) string {
+	if s == nil {
+		return ""
+	}
+	return store.Fingerprint(s.DiffText)
 }
 
 // restoreCursor puts the cursor back on path, preferring its first unstaged

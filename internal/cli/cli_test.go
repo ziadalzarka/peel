@@ -72,15 +72,16 @@ func (f *fakeForge) SubmitReview(_ context.Context, _ forge.Ref, r forge.Review)
 
 // harness runs CLI commands against a temporary repository.
 type harness struct {
-	t      *testing.T
-	repo   *gittest.Repo
-	cli    *cli.CLI
-	stdout *bytes.Buffer
-	stderr *bytes.Buffer
-	stdin  *bytes.Buffer
-	ai     *fakeAI
-	forge  *fakeForge
-	tuiRan bool
+	t          *testing.T
+	repo       *gittest.Repo
+	cli        *cli.CLI
+	stdout     *bytes.Buffer
+	stderr     *bytes.Buffer
+	stdin      *bytes.Buffer
+	ai         *fakeAI
+	forge      *fakeForge
+	tuiRan     bool
+	tuiOptions cli.UIOptions
 }
 
 func newHarness(t *testing.T) *harness {
@@ -111,8 +112,9 @@ func newHarness(t *testing.T) *harness {
 				app.WithForgeRegistry(forge.NewRegistry(forgeProvider)),
 			)
 		},
-		RunTUI: func(context.Context, *app.App, *app.Session) error {
+		RunTUI: func(_ context.Context, _ *app.App, _ *app.Session, ui cli.UIOptions) error {
 			h.tuiRan = true
+			h.tuiOptions = ui
 			return nil
 		},
 	}
@@ -191,6 +193,37 @@ func TestNoArgsLaunchesTUI(t *testing.T) {
 	}
 	if !h.tuiRan {
 		t.Error("the TUI was not launched")
+	}
+	if h.tuiOptions != (cli.UIOptions{}) {
+		t.Errorf("UI options = %+v, want the defaults", h.tuiOptions)
+	}
+}
+
+func TestDisplayFlagsReachTheTUI(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+
+	if code := h.run("--watch", "--split"); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, h.err())
+	}
+	want := cli.UIOptions{Follow: true, Split: true}
+	if h.tuiOptions != want {
+		t.Errorf("UI options = %+v, want %+v", h.tuiOptions, want)
+	}
+}
+
+// The display flags only mean anything to the UI, so a subcommand must not be
+// broken by them appearing on the command line.
+func TestDisplayFlagsAreIgnoredBySubcommands(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+
+	out := h.mustRun("--watch", "hunks", "list")
+	if !strings.Contains(out, "unstaged") {
+		t.Errorf("hunks list output = %q", out)
+	}
+	if h.tuiRan {
+		t.Error("a subcommand launched the TUI")
 	}
 }
 

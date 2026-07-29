@@ -132,12 +132,19 @@ Git has three states, and two diffs between them:
 
 ```
 1. build a minimal patch: file header (---/+++) + the selected hunk(s) only
-2. pipe to:  git apply --cached --unidiff-zero --whitespace=nowarn -
+2. pipe to:  git apply --cached --whitespace=nowarn -
 3. re-run git diff / git diff --cached, rebuild state from scratch
 ```
 
 Step 3 is not optional. Never mutate the in-memory model to reflect what you
 think the apply did — re-read from git.
+
+**`--unidiff-zero` is deliberately not passed.** It is only needed for patches
+generated with zero context, and it works by disabling `git apply`'s overlap and
+context checks — exactly the checks that catch a miscomputed `@@` header before
+it corrupts the index. peel always reads diffs with `--unified=3`, so it never
+produces a zero-context patch and never needs the flag. Passing it would trade
+away the cheapest guard against the bug class §5 spends the most words on.
 
 ### Gotchas
 
@@ -237,24 +244,41 @@ Each phase is independently useful — the tool is worth running after phase 2.
 
 ---
 
-## 8. Keybindings (draft)
+## 8. Keybindings
 
 Vim-ish, close enough to `hunk` and `lazygit` to not need learning.
 
+The cursor rests on file headers, hunk headers and comments — never on a plain
+diff line. There is no separate file pane to focus: `s` on a file header means
+the file, `s` on a hunk header means the hunk. The file list on the left is a
+map, not a pane you move into.
+
 | Key | Action |
 |---|---|
-| `j` / `k` | next / previous hunk |
-| `J` / `K` | next / previous file |
-| `s` | stage hunk (or file, in the file pane) |
-| `u` | unstage hunk / file |
-| `a` | stage all |
-| `c` | comment on the hunk under the cursor |
+| `j` / `k` | next / previous stop (hunk, file or comment) |
+| `J` / `K` | next / previous file — from inside a file, to its header first |
+| `g` / `G` | first / last stop |
+| `ctrl+d` / `ctrl+u` | half a page down / up |
+| `tab` | collapse or expand the file |
+| `s` | stage the hunk, or the file on a file header |
+| `u` | unstage the hunk or the file |
+| `a` / `U` | stage everything / unstage everything |
+| `v` | select individual lines to stage |
+| `c` | comment at the cursor |
+| `x` | resolve or reopen the comment at the cursor |
+| `D` | delete the comment at the cursor |
 | `\` | toggle unified ↔ side-by-side |
-| `w` | open the walkthrough pane |
+| `w` | walkthrough pane (`r` regenerates, `esc` closes) |
+| `r` | reload from git |
 | `?` | help |
 | `q` | quit |
 
-Not final — settle after phase 1 is usable.
+In line-select mode: `j` / `k` move by changed line, `space` toggles one, `a`
+selects all, `n` clears, `s` / `u` act on the selection, `esc` leaves. Entering
+it forces the unified layout — a side-by-side row can hold a removal and an
+addition at once, so one selection mark per row could not say which was chosen.
+
+In the comment editor: `ctrl+s` saves, `esc` cancels.
 
 ---
 

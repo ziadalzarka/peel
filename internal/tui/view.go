@@ -70,6 +70,9 @@ func (m *Model) headerView() string {
 	}, "  ")
 
 	right := []string{m.theme.Dim.Render(m.layout.String())}
+	if m.follow {
+		right = append([]string{m.theme.Status.Render("following")}, right...)
+	}
 	if n := len(m.comments); n > 0 {
 		right = append([]string{m.theme.Comment.Render(plural(n, "comment"))}, right...)
 	}
@@ -261,6 +264,7 @@ var helpBindings = []struct{ keys, action string }{
 	{`\`, "toggle unified and side-by-side"},
 	{"w", "walkthrough (r regenerates)"},
 	{"r", "reload from git"},
+	{"f", "follow: re-read the repository as it changes"},
 	{"? / q", "help / quit"},
 }
 

@@ -8,15 +8,15 @@ import (
 	"github.com/ziadalzarka/peel/internal/app"
 )
 
-// Run opens the review UI on a session. It matches cli.TUIRunner.
-func Run(ctx context.Context, a *app.App, s *app.Session) error {
+// Run opens the review UI on a session.
+func Run(ctx context.Context, a *app.App, s *app.Session, opts ...Option) error {
 	backend := NewBackend(a, s)
 	comments, err := backend.Comments()
 	if err != nil {
 		return fmt.Errorf("load comments: %w", err)
 	}
 
-	model := New(ctx, backend, s, comments)
+	model := New(ctx, backend, s, comments, opts...)
 	program := tea.NewProgram(model, tea.WithAltScreen(), tea.WithContext(ctx))
 	if _, err := program.Run(); err != nil {
 		return fmt.Errorf("review UI: %w", err)

@@ -19,8 +19,17 @@ import (
 // Version is the build version, overridden at link time.
 var Version = "dev"
 
+// UIOptions are the display choices the review UI takes from the command line.
+// They are named here rather than imported so the CLI does not depend on the UI.
+type UIOptions struct {
+	// Follow re-reads the repository as it changes.
+	Follow bool
+	// Split starts in the side-by-side layout.
+	Split bool
+}
+
 // TUIRunner launches the interactive review UI.
-type TUIRunner func(ctx context.Context, a *app.App, s *app.Session) error
+type TUIRunner func(ctx context.Context, a *app.App, s *app.Session, ui UIOptions) error
 
 // CLI holds the environment one invocation runs in. Tests substitute the
 // writers and the two injection points to exercise commands headlessly.
@@ -39,6 +48,8 @@ type CLI struct {
 	pr string
 	// forgeName is the global --forge flag.
 	forgeName string
+	// ui holds the global flags that only affect the review UI.
+	ui UIOptions
 }
 
 // command is one entry in the dispatch table.
@@ -80,6 +91,8 @@ func (c *CLI) Run(ctx context.Context, args []string) int {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&c.pr, "pr", "", "review a pull request instead of the working tree")
 	fs.StringVar(&c.forgeName, "forge", "", "forge provider to use (default: first available)")
+	fs.BoolVar(&c.ui.Follow, "watch", false, "re-read the repository as it changes")
+	fs.BoolVar(&c.ui.Split, "split", false, "start in the side-by-side layout")
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	showHelp := fs.Bool("help", false, "show this help")
 	fs.BoolVar(showHelp, "h", false, "show this help")
@@ -184,7 +197,7 @@ func (c *CLI) runTUI(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return c.RunTUI(ctx, a, s)
+	return c.RunTUI(ctx, a, s, c.ui)
 }
 
 func (c *CLI) printUsage(w io.Writer) {
@@ -204,6 +217,8 @@ Commands:
 Flags:
   --pr <ref>       review a pull request: a number, owner/repo#number, or a URL
   --forge <name>   forge provider to use (default: first available)
+  --watch          re-read the repository as it changes
+  --split          start in the side-by-side layout
   --version        print the version and exit
   -h, --help       show this help
 
