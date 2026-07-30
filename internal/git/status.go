@@ -74,8 +74,8 @@ func (e FileEntry) State() StageState {
 	}
 }
 
-// IsBinary reports whether either side is binary, meaning only whole-file
-// staging is possible.
+// IsBinary reports whether either side is binary, meaning there is no diff to
+// show — only the fact that the file changed.
 func (e FileEntry) IsBinary() bool {
 	return (e.Unstaged != nil && e.Unstaged.IsBinary) || (e.Staged != nil && e.Staged.IsBinary)
 }
@@ -90,15 +90,6 @@ func (e FileEntry) Stats() (added, removed int) {
 		}
 	}
 	return added, removed
-}
-
-// Diff returns the side matching dir: the unstaged diff is what Forward stages,
-// the staged diff is what Reverse unstages.
-func (e FileEntry) Diff(dir Direction) *FileDiff {
-	if dir == Reverse {
-		return e.Staged
-	}
-	return e.Unstaged
 }
 
 // Primary returns the diff to show by default — the working-tree side when

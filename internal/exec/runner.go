@@ -1,5 +1,5 @@
 // Package exec abstracts running external commands so that packages depending
-// on git, gh or claude can be unit tested without those binaries present.
+// on git, gh, claude or codex can be unit tested without those binaries present.
 package exec
 
 import (

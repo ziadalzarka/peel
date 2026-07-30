@@ -16,7 +16,6 @@ type Theme struct {
 	Resolved lipgloss.Style
 	Author   lipgloss.Style
 	Cursor   lipgloss.Style
-	Selected lipgloss.Style
 	Header   lipgloss.Style
 	Footer   lipgloss.Style
 	Key      lipgloss.Style
@@ -48,13 +47,12 @@ func DefaultTheme() Theme {
 		Context:  lipgloss.NewStyle().Foreground(text),
 		Gutter:   lipgloss.NewStyle().Foreground(faint),
 		HunkHead: lipgloss.NewStyle().Foreground(purple),
-		FileHead: lipgloss.NewStyle().Foreground(blue).Bold(true),
+		FileHead: lipgloss.NewStyle().Foreground(text).Bold(true),
 		Note:     lipgloss.NewStyle().Foreground(grey).Italic(true),
 		Comment:  lipgloss.NewStyle().Foreground(yellow),
 		Resolved: lipgloss.NewStyle().Foreground(faint).Strikethrough(true),
 		Author:   lipgloss.NewStyle().Foreground(grey),
 		Cursor:   lipgloss.NewStyle().Foreground(blue).Bold(true),
-		Selected: lipgloss.NewStyle().Foreground(yellow).Bold(true),
 		Header:   lipgloss.NewStyle().Foreground(text).Bold(true),
 		Footer:   lipgloss.NewStyle().Foreground(grey),
 		Key:      lipgloss.NewStyle().Foreground(blue),

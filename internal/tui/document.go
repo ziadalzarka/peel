@@ -53,6 +53,10 @@ const (
 	RowNote
 	// RowComment is one review comment shown at its anchor.
 	RowComment
+	// RowStep is a walkthrough step's heading, shown above the files it covers.
+	RowStep
+	// RowStepText is one wrapped line of a step's explanation.
+	RowStepText
 	// RowBlank separates files.
 	RowBlank
 )
@@ -73,16 +77,20 @@ type Row struct {
 	Left    int
 	Right   int
 	Comment int
-	Text    string
-	Head    bool
+	// Step indexes into Document.Steps on a walkthrough row, and is -1 on every
+	// other row.
+	Step int
+	Text string
+	Head bool
 }
 
 // HunkRef is one addressable hunk within the document.
 type HunkRef struct {
 	File int
 	Path string
-	// Staged reports that this hunk is in the index, so `u` unstages it and `s`
-	// has nothing to do.
+	// Staged reports that this hunk is in the index rather than the working
+	// tree, which is what labels it on screen and what makes a reload put the
+	// cursor back on whatever is still unstaged.
 	Staged bool
 	ID     git.HunkID
 	Hunk   git.Hunk
@@ -99,37 +107,97 @@ type FileRef struct {
 	Collapsed bool
 }
 
+// StepRef is one walkthrough group as the document lays it out.
+type StepRef struct {
+	store.Step
+	// Files indexes into Document.Files, in the order the step names them.
+	Files []int
+	// Row is the position of the step's heading.
+	Row int
+	// Folded hides the explanation, leaving the heading, so a walkthrough that
+	// has been read can be got out of the way of the diff it describes.
+	Folded bool
+}
+
 // Document is a session flattened into navigable rows.
 type Document struct {
-	Files    []FileRef
-	Hunks    []HunkRef
-	Rows     []Row
+	Files []FileRef
+	Hunks []HunkRef
+	Rows  []Row
+	// Steps are the walkthrough groups the files are laid out under, in reading
+	// order. It is empty when there is no walkthrough on screen.
+	Steps    []StepRef
 	Comments []store.Comment
 	Layout   Layout
 }
 
 // Build flattens a session into rows. collapsed hides a file's body by path.
-func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, layout Layout) Document {
+func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, layout Layout, opts ...BuildOption) Document {
 	doc := Document{Comments: comments, Layout: layout}
 	if s == nil {
 		return doc
 	}
+	var groups Groups
+	for _, opt := range opts {
+		opt(&groups)
+	}
 	idx := indexComments(comments)
 
-	for fi := range s.Files {
-		entry := s.Files[fi]
-		hidden := collapsed[entry.Path]
-		doc.Files = append(doc.Files, FileRef{Entry: entry, Row: len(doc.Rows), Collapsed: hidden})
-		doc.add(Row{Kind: RowFile, File: fi, Hunk: -1, Left: -1, Right: -1})
-		doc.addComments(fi, -1, idx.takeFile(entry.Path))
+	for _, group := range groupFiles(s.Files, groups.Steps) {
+		doc.addStep(group, groups)
+		for _, si := range group.files {
+			entry := s.Files[si]
+			fi := len(doc.Files)
+			hidden := collapsed[entry.Path]
+			doc.Files = append(doc.Files, FileRef{Entry: entry, Row: len(doc.Rows), Collapsed: hidden})
+			doc.add(Row{Kind: RowFile, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1})
+			doc.addComments(fi, -1, idx.takeFile(entry.Path))
 
-		if !hidden {
-			doc.addBody(fi, entry, idx)
+			if !hidden {
+				doc.addBody(fi, entry, idx)
+			}
+			doc.addComments(fi, -1, idx.rest(entry.Path))
+			doc.add(Row{Kind: RowBlank, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1})
 		}
-		doc.addComments(fi, -1, idx.rest(entry.Path))
-		doc.add(Row{Kind: RowBlank, File: fi, Hunk: -1, Left: -1, Right: -1})
 	}
 	return doc
+}
+
+// addStep puts a walkthrough group's heading and explanation in front of the
+// files it covers, which is all the walkthrough is: the same diff, read in the
+// order the narrative gives it, with the narrative in place.
+func (d *Document) addStep(group fileGroup, groups Groups) {
+	if group.step == nil {
+		return
+	}
+	index := len(d.Steps)
+	ref := StepRef{Step: *group.step, Row: len(d.Rows), Folded: groups.Folded[index]}
+	// The group's files are appended by the caller, directly after this heading.
+	for i := range group.files {
+		ref.Files = append(ref.Files, len(d.Files)+i)
+	}
+	d.Steps = append(d.Steps, ref)
+
+	// The heading carries the first file it introduces, so the file list beside
+	// the diff marks the file the window is opening on rather than nothing.
+	file := -1
+	if len(ref.Files) > 0 {
+		file = ref.Files[0]
+	}
+	row := Row{Kind: RowStep, File: file, Hunk: -1, Left: -1, Right: -1, Step: index}
+	d.add(row)
+
+	row.Kind = RowStepText
+	if !ref.Folded {
+		for _, line := range wrapBody(group.step.Body, groups.Width) {
+			row.Text = line
+			d.add(row)
+		}
+	}
+	// A blank prose line closes the group, so the file header below it is not
+	// pressed against the explanation.
+	row.Text = ""
+	d.add(row)
 }
 
 func (d *Document) add(r Row) { d.Rows = append(d.Rows, r) }
@@ -144,6 +212,7 @@ func (d *Document) addComments(file, hunk int, ids []int) {
 				Left:    -1,
 				Right:   -1,
 				Comment: ci,
+				Step:    -1,
 				Text:    text,
 				Head:    n == 0,
 			})
@@ -153,8 +222,8 @@ func (d *Document) addComments(file, hunk int, ids []int) {
 
 func (d *Document) addBody(fi int, entry git.FileEntry, idx *commentIndex) {
 	if entry.IsBinary() {
-		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1,
-			Text: "binary file — whole-file staging only"})
+		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1,
+			Text: "binary file — no diff to show"})
 		return
 	}
 
@@ -169,17 +238,17 @@ func (d *Document) addBody(fi int, entry git.FileEntry, idx *commentIndex) {
 				Hunk:   h,
 			})
 			d.Files[fi].Hunks = append(d.Files[fi].Hunks, hi)
-			d.add(Row{Kind: RowHunk, File: fi, Hunk: hi, Left: -1, Right: -1})
+			d.add(Row{Kind: RowHunk, File: fi, Hunk: hi, Left: -1, Right: -1, Step: -1})
 
 			for _, pair := range pairLines(h.Lines, d.Layout) {
-				d.add(Row{Kind: RowLine, File: fi, Hunk: hi, Left: pair.left, Right: pair.right})
+				d.add(Row{Kind: RowLine, File: fi, Hunk: hi, Left: pair.left, Right: pair.right, Step: -1})
 				d.addComments(fi, hi, idx.takeLine(entry.Path, h.Lines, pair))
 			}
 		}
 	}
 
 	if len(d.Files[fi].Hunks) == 0 {
-		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Text: emptyNote(entry)})
+		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Text: emptyNote(entry)})
 	}
 }
 
@@ -289,18 +358,62 @@ func at(s []int, i int) int {
 func (d Document) Len() int { return len(d.Rows) }
 
 // IsStop reports whether the cursor may rest on row i.
+//
+// Every row can hold the cursor except the blank between files, the
+// continuation lines of a multi-line comment — a comment is addressed from its
+// first line — and a walkthrough explanation, which is addressed from its
+// heading. Diff lines are stops, so a note can be left on unchanged code without
+// a mode to enter first.
 func (d Document) IsStop(i int) bool {
 	if i < 0 || i >= len(d.Rows) {
 		return false
 	}
 	switch d.Rows[i].Kind {
-	case RowFile, RowHunk:
+	case RowComment:
+		return d.Rows[i].Head
+	case RowBlank, RowStepText:
+		return false
+	default:
+		return true
+	}
+}
+
+// IsMark reports whether row i heads something whole: a file, a hunk, a comment,
+// or a walkthrough group. These are what j and k jump between, while the arrows
+// step row by row.
+func (d Document) IsMark(i int) bool {
+	if i < 0 || i >= len(d.Rows) {
+		return false
+	}
+	switch d.Rows[i].Kind {
+	case RowFile, RowHunk, RowStep:
 		return true
 	case RowComment:
 		return d.Rows[i].Head
 	default:
 		return false
 	}
+}
+
+// NextMark returns the next file, hunk or comment after from, or from itself.
+func (d Document) NextMark(from int) int {
+	for i := from + 1; i < len(d.Rows); i++ {
+		if d.IsMark(i) {
+			return i
+		}
+	}
+	return from
+}
+
+// PrevMark returns the previous file, hunk or comment before from, or from
+// itself.
+func (d Document) PrevMark(from int) int {
+	for i := from - 1; i >= 0; i-- {
+		if d.IsMark(i) {
+			return i
+		}
+	}
+	return from
 }
 
 // FirstStop returns the first row the cursor may rest on, or 0.
@@ -333,6 +446,28 @@ func (d Document) PrevStop(from int) int {
 	return from
 }
 
+// StopBetween returns a cursor position within the inclusive row range, or -1
+// when the range holds none. fromTop picks the first one, otherwise the last —
+// so a window scrolled down lands the cursor on the row nearest the edge it
+// arrived from.
+func (d Document) StopBetween(lo, hi int, fromTop bool) int {
+	lo, hi = max(lo, 0), min(hi, len(d.Rows)-1)
+	if fromTop {
+		for i := lo; i <= hi; i++ {
+			if d.IsStop(i) {
+				return i
+			}
+		}
+		return -1
+	}
+	for i := hi; i >= lo; i-- {
+		if d.IsStop(i) {
+			return i
+		}
+	}
+	return -1
+}
+
 // LastStop returns the final cursor position.
 func (d Document) LastStop() int {
 	for i := len(d.Rows) - 1; i >= 0; i-- {
@@ -343,29 +478,44 @@ func (d Document) LastStop() int {
 	return 0
 }
 
-// NextFile returns the header row of the file after the one holding from.
+// NextFile returns the top of the file after the one holding from.
 func (d Document) NextFile(from int) int {
 	for i := from + 1; i < len(d.Rows); i++ {
 		if d.Rows[i].Kind == RowFile {
-			return i
+			return d.topOf(i)
 		}
 	}
 	return from
 }
 
-// PrevFile returns the header row of the file before the one holding from,
-// stepping to the top of the current file first.
+// PrevFile returns the top of the file before the one holding from, stepping to
+// the top of the current file first.
 func (d Document) PrevFile(from int) int {
-	start := d.RowOfFile(d.FileAt(from))
+	start := d.topOf(d.RowOfFile(d.FileAt(from)))
 	if start >= 0 && start < from {
 		return start
 	}
 	for i := from - 1; i >= 0; i-- {
 		if d.Rows[i].Kind == RowFile {
-			return i
+			return d.topOf(i)
 		}
 	}
 	return from
+}
+
+// topOf returns the row a jump to a file header should land on: the walkthrough
+// heading that introduces the file, when there is one, so jumping forward never
+// skips the note written about the group the file opens.
+func (d Document) topOf(row int) int {
+	for row > 0 {
+		switch d.Rows[row-1].Kind {
+		case RowStep, RowStepText:
+			row--
+		default:
+			return row
+		}
+	}
+	return row
 }
 
 // Nearest returns the closest cursor position at or after i, falling back to
@@ -388,6 +538,19 @@ func (d Document) FileAt(row int) int {
 	return d.Rows[row].File
 }
 
+// StepAt returns the walkthrough group a heading or explanation row belongs to,
+// and -1 on every other row.
+func (d Document) StepAt(row int) int {
+	if row < 0 || row >= len(d.Rows) {
+		return -1
+	}
+	step := d.Rows[row].Step
+	if step < 0 || step >= len(d.Steps) {
+		return -1
+	}
+	return step
+}
+
 // RowOfFile returns the header row of a file, or -1.
 func (d Document) RowOfFile(file int) int {
 	if file < 0 || file >= len(d.Files) {
@@ -408,6 +571,9 @@ func (d Document) RowOfHunk(hunk int) int {
 
 // RowOfLine returns the row displaying a hunk line, or -1.
 func (d Document) RowOfLine(hunk, line int) int {
+	if hunk < 0 || line < 0 {
+		return -1
+	}
 	for i, r := range d.Rows {
 		if r.Kind == RowLine && r.Hunk == hunk && (r.Left == line || r.Right == line) {
 			return i
@@ -416,55 +582,106 @@ func (d Document) RowOfLine(hunk, line int) int {
 	return -1
 }
 
-// TargetKind says what a stage or unstage at the cursor applies to.
+// TargetKind says what the cursor addresses.
 type TargetKind int
 
 const (
 	// TargetNone has nothing to act on.
 	TargetNone TargetKind = iota
-	// TargetFile applies to a whole file.
+	// TargetFile is a file as a whole.
 	TargetFile
-	// TargetHunk applies to one hunk.
+	// TargetHunk is one hunk.
 	TargetHunk
+	// TargetLine is the lines one row of a hunk body displays.
+	TargetLine
 )
 
-// Target is what an operation at the cursor addresses.
+// Target is what the cursor addresses.
 type Target struct {
 	Kind TargetKind
 	Path string
 	File int
 	Hunk int
-	// Staged reports that the addressed change is already in the index.
-	Staged bool
-	// Binary marks a file that can only be staged whole.
-	Binary bool
 }
 
-// TargetAt resolves the row under the cursor to something actionable.
+// TargetAt resolves the row under the cursor to the smallest thing it names,
+// which is what a comment anchors to.
 //
 // A comment row acts on its file, so operating on a commented line does what it
-// looks like it should.
+// looks like it should. A walkthrough row acts on nothing: it names a group of
+// files, and commenting on a whole group from one keypress is not what the row
+// looks like it means.
 func (d Document) TargetAt(row int) Target {
 	if row < 0 || row >= len(d.Rows) {
 		return Target{}
 	}
 	r := d.Rows[row]
+	if r.Kind == RowStep || r.Kind == RowStepText {
+		return Target{}
+	}
 	if r.Kind == RowHunk && r.Hunk >= 0 && r.Hunk < len(d.Hunks) {
 		h := d.Hunks[r.Hunk]
-		return Target{Kind: TargetHunk, Path: h.Path, File: h.File, Hunk: r.Hunk, Staged: h.Staged}
+		return Target{Kind: TargetHunk, Path: h.Path, File: h.File, Hunk: r.Hunk}
+	}
+	if r.Kind == RowLine && r.Hunk >= 0 && r.Hunk < len(d.Hunks) {
+		h := d.Hunks[r.Hunk]
+		return Target{Kind: TargetLine, Path: h.Path, File: h.File, Hunk: r.Hunk}
 	}
 	if r.File < 0 || r.File >= len(d.Files) {
 		return Target{}
 	}
-	entry := d.Files[r.File].Entry
-	return Target{
-		Kind:   TargetFile,
-		Path:   entry.Path,
-		File:   r.File,
-		Hunk:   -1,
-		Staged: entry.Staged != nil,
-		Binary: entry.IsBinary(),
+	return Target{Kind: TargetFile, Path: d.Files[r.File].Entry.Path, File: r.File, Hunk: -1}
+}
+
+// FileTargetAt resolves the row under the cursor to the file staging acts on.
+//
+// Staging is whole-file, so a hunk header or a diff line resolves to the file it
+// belongs to rather than to itself. A walkthrough row resolves to nothing: it
+// names a group of files, and staging a whole group from one keypress is not
+// what the row looks like it means.
+func (d Document) FileTargetAt(row int) (FileRef, bool) {
+	if row < 0 || row >= len(d.Rows) {
+		return FileRef{}, false
 	}
+	r := d.Rows[row]
+	if r.Kind == RowStep || r.Kind == RowStepText {
+		return FileRef{}, false
+	}
+	if r.File < 0 || r.File >= len(d.Files) {
+		return FileRef{}, false
+	}
+	return d.Files[r.File], true
+}
+
+// LineAt returns the hunk and the index of the line a row addresses, for
+// anchoring a comment.
+//
+// Where a split row shows a removal beside the addition that replaced it, the
+// new side wins: a review note is usually about the code that is arriving, not
+// the code leaving.
+func (d Document) LineAt(row int) (HunkRef, int, bool) {
+	ref, r, ok := d.hunkRow(row)
+	if !ok {
+		return HunkRef{}, 0, false
+	}
+	for _, i := range []int{r.Right, r.Left} {
+		if i >= 0 && i < len(ref.Hunk.Lines) {
+			return ref, i, true
+		}
+	}
+	return HunkRef{}, 0, false
+}
+
+// hunkRow returns a hunk-body row and the hunk it belongs to.
+func (d Document) hunkRow(row int) (HunkRef, Row, bool) {
+	if row < 0 || row >= len(d.Rows) {
+		return HunkRef{}, Row{}, false
+	}
+	r := d.Rows[row]
+	if r.Kind != RowLine || r.Hunk < 0 || r.Hunk >= len(d.Hunks) {
+		return HunkRef{}, Row{}, false
+	}
+	return d.Hunks[r.Hunk], r, true
 }
 
 // CommentAt returns the comment displayed on a row.

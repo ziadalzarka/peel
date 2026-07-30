@@ -45,6 +45,63 @@ func TestBuildFlattensFilesHunksAndLines(t *testing.T) {
 	}
 }
 
+func TestBuildPutsAStepsNoteAboveItsFiles(t *testing.T) {
+	steps := []store.Step{{
+		Number: 1,
+		Title:  "The fixture, first",
+		Files:  []string{"beta.txt"},
+		Body:   "It is read by the test the code change is for.",
+	}}
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified,
+		WithGroups(Groups{Steps: steps, Width: 60}))
+
+	// The note, its explanation and the blank that closes it come before the
+	// file header, and the file's own rows are untouched.
+	want := []RowKind{RowStep, RowStepText, RowStepText, RowFile, RowHunk, RowLine, RowLine, RowLine, RowBlank}
+	var got []RowKind
+	for _, r := range doc.Rows[:len(want)] {
+		got = append(got, r.Kind)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("rows = %v, want %v", got, want)
+		}
+	}
+	if len(doc.Steps) != 2 {
+		t.Fatalf("groups = %d, want the step plus the leftover", len(doc.Steps))
+	}
+	if got := doc.Steps[0]; got.Row != 0 || len(got.Files) != 1 || doc.Files[got.Files[0]].Entry.Path != "beta.txt" {
+		t.Errorf("first group = %+v, want beta.txt at row 0", got)
+	}
+	if got := doc.Rows[1].Text; !strings.Contains(got, "read by the test") {
+		t.Errorf("explanation row = %q", got)
+	}
+}
+
+func TestBuildShowsAFileNamedTwiceOnce(t *testing.T) {
+	steps := []store.Step{
+		{Number: 1, Title: "Both", Files: []string{"beta.txt", "alpha.go"}, Body: "One reason."},
+		{Number: 2, Title: "Alpha again", Files: []string{"alpha.go"}, Body: "Another reason."},
+	}
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified,
+		WithGroups(Groups{Steps: steps, Width: 60}))
+
+	if len(doc.Files) != 2 {
+		t.Fatalf("files = %d, want the changeset's 2", len(doc.Files))
+	}
+	if got := []string{doc.Files[0].Entry.Path, doc.Files[1].Entry.Path}; got[0] != "beta.txt" || got[1] != "alpha.go" {
+		t.Errorf("files are in %v, want the narrative's order", got)
+	}
+	if got := doc.Steps[1].Files; len(got) != 0 {
+		t.Errorf("the second group covers %v, want nothing left for it to show", got)
+	}
+	// The second group keeps its heading and explanation: it is a note the
+	// narrative wrote, and only the duplicated file is dropped.
+	if got := doc.Steps[1].Title; got != "Alpha again" {
+		t.Errorf("second group = %q, want it kept", got)
+	}
+}
+
 func TestBuildOrdersStagedSideBeforeWorkingTree(t *testing.T) {
 	entries := parseFiles(t, twoFileDiff)
 	// Give alpha.go changes on both sides, as a partially staged file has.
@@ -276,12 +333,12 @@ func TestNavigationStepsBetweenHunksAndFiles(t *testing.T) {
 		t.Fatalf("first stop is a %v, want a file header", doc.Rows[first].Kind)
 	}
 
-	hunk := doc.NextStop(first)
+	hunk := doc.NextMark(first)
 	if doc.Rows[hunk].Kind != RowHunk {
-		t.Fatalf("second stop is a %v, want a hunk header", doc.Rows[hunk].Kind)
+		t.Fatalf("second mark is a %v, want a hunk header", doc.Rows[hunk].Kind)
 	}
-	if back := doc.PrevStop(hunk); back != first {
-		t.Errorf("PrevStop = %d, want %d", back, first)
+	if back := doc.PrevMark(hunk); back != first {
+		t.Errorf("PrevMark = %d, want %d", back, first)
 	}
 
 	// From inside the first file, K goes to the top of the current file, and only
@@ -296,6 +353,34 @@ func TestNavigationStepsBetweenHunksAndFiles(t *testing.T) {
 	}
 	if got := doc.PrevFile(second); got != first {
 		t.Errorf("PrevFile from beta.txt header = %d, want alpha.go header %d", got, first)
+	}
+}
+
+// The cursor rests on diff lines, so stepping walks into a hunk body while j and
+// k jump over it to the next thing worth landing on.
+func TestStopsIncludeDiffLinesButMarksDoNot(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+
+	for i, r := range doc.Rows {
+		switch r.Kind {
+		case RowLine, RowNote:
+			if !doc.IsStop(i) || doc.IsMark(i) {
+				t.Errorf("row %d (%v) is stop=%v mark=%v, want a stop that is not a mark",
+					i, r.Kind, doc.IsStop(i), doc.IsMark(i))
+			}
+		case RowBlank:
+			if doc.IsStop(i) {
+				t.Errorf("row %d is the blank between files and should not hold the cursor", i)
+			}
+		}
+	}
+
+	hunk := doc.RowOfHunk(0)
+	if got := doc.NextStop(hunk); doc.Rows[got].Kind != RowLine {
+		t.Errorf("stepping off a hunk header lands on a %v, want the first line of its body", doc.Rows[got].Kind)
+	}
+	if got := doc.NextMark(hunk); doc.Rows[got].Kind == RowLine {
+		t.Error("j landed inside a hunk body")
 	}
 }
 
@@ -317,18 +402,18 @@ func TestNavigationAtTheEdgesStaysPut(t *testing.T) {
 func TestNearestSnapsOntoAStop(t *testing.T) {
 	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
 
-	lineRow := -1
+	blank := -1
 	for i, r := range doc.Rows {
-		if r.Kind == RowLine {
-			lineRow = i
+		if r.Kind == RowBlank {
+			blank = i
 			break
 		}
 	}
-	if lineRow < 0 {
-		t.Fatal("no line rows")
+	if blank < 0 {
+		t.Fatal("no blank rows")
 	}
-	if got := doc.Nearest(lineRow); !doc.IsStop(got) {
-		t.Errorf("Nearest(%d) = %d, which is not a stop", lineRow, got)
+	if got := doc.Nearest(blank); !doc.IsStop(got) {
+		t.Errorf("Nearest(%d) = %d, which is not a stop", blank, got)
 	}
 	if got := doc.Nearest(doc.Len() + 50); !doc.IsStop(got) {
 		t.Errorf("Nearest past the end = %d, which is not a stop", got)
@@ -342,13 +427,63 @@ func TestTargetAtDistinguishesFilesFromHunks(t *testing.T) {
 	if file.Kind != TargetFile || file.Path != "alpha.go" {
 		t.Errorf("file header target = %+v", file)
 	}
-	if file.Staged {
-		t.Error("an unstaged file should not report Staged")
-	}
 
 	hunk := doc.TargetAt(doc.RowOfHunk(0))
 	if hunk.Kind != TargetHunk || hunk.Hunk != 0 || hunk.Path != "alpha.go" {
 		t.Errorf("hunk header target = %+v", hunk)
+	}
+}
+
+// Staging is whole-file, so every row inside a file has to resolve to it.
+func TestFileTargetAtResolvesEveryRowOfAFileToTheFile(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+
+	rows := map[string]int{
+		"file header":  doc.RowOfFile(0),
+		"hunk header":  doc.RowOfHunk(0),
+		"changed line": doc.RowOfLine(0, 2),
+		"context line": doc.RowOfLine(0, 0),
+	}
+	for name, row := range rows {
+		file, ok := doc.FileTargetAt(row)
+		if !ok || file.Entry.Path != "alpha.go" {
+			t.Errorf("FileTargetAt(%s) = %q (ok=%v), want alpha.go", name, file.Entry.Path, ok)
+		}
+	}
+
+	if _, ok := doc.FileTargetAt(-1); ok {
+		t.Error("a row outside the document reports a file to stage")
+	}
+}
+
+func TestTargetAtADiffLineAddressesThatLine(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+
+	// Line 2 of the first hunk is a removal, line 0 is context.
+	change := doc.TargetAt(doc.RowOfLine(0, 2))
+	if change.Kind != TargetLine || change.Hunk != 0 || change.Path != "alpha.go" {
+		t.Errorf("changed line target = %+v", change)
+	}
+	context := doc.RowOfLine(0, 0)
+	if got := doc.TargetAt(context); got.Kind != TargetLine {
+		t.Errorf("context line target = %+v, want the line itself", got)
+	}
+	if _, index, ok := doc.LineAt(context); !ok || index != 0 {
+		t.Errorf("LineAt a context row = %d (ok=%v), want line 0 — a comment can still land there", index, ok)
+	}
+}
+
+// A split row can hold a removal and the addition that replaced it. A comment on
+// it takes the new side alone.
+func TestSplitRowAddressesTheNewSideForComments(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutSplit)
+
+	row := doc.RowOfLine(0, 2)
+	if got := doc.Rows[row].Right; got != 3 {
+		t.Fatalf("the row holding line 2 has Right = %d, want the addition at 3", got)
+	}
+	if _, index, ok := doc.LineAt(row); !ok || index != 3 {
+		t.Errorf("LineAt = %d (ok=%v), want the new side at 3", index, ok)
 	}
 }
 

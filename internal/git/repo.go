@@ -13,9 +13,10 @@ import (
 // diffFlags pin every option that affects diff output, so what peel parses does
 // not depend on the user's git config.
 //
-//	--no-renames  rename headers are applied inconsistently by `git apply`
-//	--unified=3   fixed context, so generated patches never need --unidiff-zero
-//	--no-textconv textconv output is not a patch that can be applied back
+//	--no-renames  a rename reads as a delete and an add, which is the diff
+//	              there is to review
+//	--unified=3   fixed context, so a hunk reads the same in every repository
+//	--no-textconv textconv output is a rendering, not the change itself
 var diffFlags = []string{
 	"--no-color",
 	"--no-ext-diff",
@@ -149,30 +150,6 @@ func (r *Repo) UntrackedDiff(ctx context.Context, path string) (FileDiff, error)
 	return f, nil
 }
 
-// Apply pipes a patch into the index. Direction selects whether it is applied
-// as written or reversed.
-//
-// --unidiff-zero is deliberately not passed: it disables git's overlap checks
-// and is only required for zero-context patches, which diffFlags rules out.
-func (r *Repo) Apply(ctx context.Context, patch string, dir Direction) error {
-	args := []string{"apply", "--cached", "--whitespace=nowarn"}
-	if dir == Reverse {
-		args = append(args, "--reverse")
-	}
-	args = append(args, "-")
-
-	_, err := r.runner.Run(ctx, exec.Command{
-		Name:  "git",
-		Args:  args,
-		Dir:   r.dir,
-		Stdin: strings.NewReader(patch),
-	})
-	if err != nil {
-		return fmt.Errorf("apply patch (%s): %w", dir, err)
-	}
-	return nil
-}
-
 // StageFile stages every change to one path, including deletions and untracked
 // files.
 func (r *Repo) StageFile(ctx context.Context, path string) error {
@@ -187,15 +164,6 @@ func (r *Repo) StageFile(ctx context.Context, path string) error {
 func (r *Repo) UnstageFile(ctx context.Context, path string) error {
 	if _, err := r.git(ctx, "restore", "--staged", "--", path); err != nil {
 		return fmt.Errorf("unstage %s: %w", path, err)
-	}
-	return nil
-}
-
-// IntentToAdd registers an untracked file with the index without staging its
-// contents, which is what makes its hunks addressable by `git apply --cached`.
-func (r *Repo) IntentToAdd(ctx context.Context, path string) error {
-	if _, err := r.git(ctx, "add", "--intent-to-add", "--", path); err != nil {
-		return fmt.Errorf("intent-to-add %s: %w", path, err)
 	}
 	return nil
 }

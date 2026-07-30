@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ziadalzarka/peel/internal/exec"
+	"github.com/ziadalzarka/peel/internal/store"
 )
 
 // stubProvider is a Provider whose behaviour tests control directly.
@@ -283,3 +284,85 @@ func TestClaudeCodeTimeoutIsReported(t *testing.T) {
 }
 
 var _ Provider = (*ClaudeCodeProvider)(nil)
+
+// The walkthrough is a guided tour of the changed code, not a summary. These are
+// the properties that distinguish the two, so a future edit to the instruction
+// cannot quietly turn it back into an overview.
+func TestDefaultInstructionAsksForGroupedSteps(t *testing.T) {
+	got := BuildPrompt(Request{Diff: "x"})
+
+	for _, want := range []string{
+		"step by step",
+		"Group the changed files into steps",
+		"one markdown section per step, numbered",
+		"## 1.",
+		"Order the steps so each one sets up the next",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt does not ask for grouped steps: missing %q", want)
+		}
+	}
+
+	for _, unwanted := range []string{
+		"## What changed",
+		"the intent of the change as a whole",
+		"not a file-by-file list",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Errorf("prompt still asks for an overall description: %q", unwanted)
+		}
+	}
+}
+
+func TestDefaultInstructionAsksAboutCodeNotSyntax(t *testing.T) {
+	got := BuildPrompt(Request{Diff: "x"})
+
+	for _, want := range []string{
+		"Name the functions, types, fields",
+		"describe the behaviour rather than",
+		"Do not open with a summary",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt missing %q", want)
+		}
+	}
+}
+
+func TestDefaultInstructionPinsThePathLineTheToolReads(t *testing.T) {
+	got := BuildPrompt(Request{Diff: "x"})
+
+	for _, want := range []string{
+		"must appear in at least one step",
+		"nothing but the step's file paths",
+		"it\nis read by the tool",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("prompt does not pin the machine-read path line: missing %q", want)
+		}
+	}
+}
+
+// TestDefaultInstructionParsesIntoGroups runs the instruction's own example
+// through the parser that reads a provider's reply, so the format peel asks for
+// and the format it can read cannot drift apart.
+func TestDefaultInstructionParsesIntoGroups(t *testing.T) {
+	example := "## 1. A short title for what this step does\n" +
+		"`path/to/file.go` · `path/to/other.go`\n\n" +
+		"Prose about what the step does.\n"
+
+	steps := store.ParseSteps(example)
+	if len(steps) != 1 {
+		t.Fatalf("the example parsed into %d steps, want 1", len(steps))
+	}
+	if steps[0].Number != 1 {
+		t.Errorf("step number = %d, want 1", steps[0].Number)
+	}
+	want := []string{"path/to/file.go", "path/to/other.go"}
+	if len(steps[0].Files) != 2 || steps[0].Files[0] != want[0] || steps[0].Files[1] != want[1] {
+		t.Errorf("files = %v, want %v", steps[0].Files, want)
+	}
+
+	if !strings.Contains(BuildPrompt(Request{Diff: "x"}), example[:strings.Index(example, "\n\n")]) {
+		t.Error("the instruction no longer contains the example this test parses")
+	}
+}

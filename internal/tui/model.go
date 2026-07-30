@@ -3,12 +3,10 @@ package tui
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ziadalzarka/peel/internal/app"
 	"github.com/ziadalzarka/peel/internal/git"
@@ -20,9 +18,7 @@ type mode int
 
 const (
 	modeBrowse mode = iota
-	modeLineSelect
 	modeComment
-	modeWalkthrough
 	modeHelp
 )
 
@@ -41,12 +37,10 @@ type Model struct {
 
 	cursor int
 	top    int
-
-	lineHunk   int
-	lineCursor int
-	selected   map[int]bool
-	// restoreLayout is the layout to return to after selecting lines.
-	restoreLayout Layout
+	// fileTop is the first file drawn in the side pane. It scrolls
+	// independently of the diff, and only follows the diff when the marked file
+	// has left the pane.
+	fileTop int
 
 	mode   mode
 	layout Layout
@@ -60,8 +54,24 @@ type Model struct {
 	input   textarea.Model
 	pending anchor
 
-	walk       viewport.Model
+	// walkSteps is the narrative parsed into the groups it comments on, kept so
+	// the diff can be laid out again when the terminal resizes or a step folds.
+	walkSteps []store.Step
+	// walkLoaded reports that a narrative has been fetched, so opening the
+	// walkthrough again does not pay a provider for one twice.
 	walkLoaded bool
+	// walkOn lays the diff out under the walkthrough's groups. Turning it off
+	// puts the files back in git's order with no commentary between them.
+	walkOn bool
+	// walkFolded hides a step's explanation, by step index.
+	walkFolded map[int]bool
+	// walkCode identifies the code the narrative was written about: git diff
+	// HEAD, which reads the same whether a change is staged or not, so staging a
+	// hunk does not date the narrative.
+	walkCode string
+	// walkStale reports that the code moved on under the narrative, so what it
+	// says may no longer be true and `W` is worth pressing.
+	walkStale bool
 
 	// follow re-reads the repository on a timer, for watching a build or an
 	// agent change files while reviewing.
@@ -93,6 +103,7 @@ type options struct {
 	height    int
 	follow    bool
 	pollEvery time.Duration
+	provider  string
 }
 
 // Option customises a Model.
@@ -116,6 +127,9 @@ func WithSize(w, h int) Option {
 // WithFollow starts in follow mode, re-reading the repository on a timer.
 func WithFollow(on bool) Option { return func(o *options) { o.follow = on } }
 
+// WithProvider selects the AI provider used for the walkthrough.
+func WithProvider(name string) Option { return func(o *options) { o.provider = name } }
+
 // WithPollInterval sets how often follow mode re-reads the repository.
 func WithPollInterval(d time.Duration) Option {
 	return func(o *options) { o.pollEvery = d }
@@ -129,20 +143,18 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 	}
 
 	m := &Model{
-		ctx:       ctx,
-		backend:   backend,
-		session:   session,
-		comments:  comments,
-		collapsed: map[string]bool{},
-		selected:  map[int]bool{},
-		lineHunk:  -1,
-		layout:    cfg.layout,
-		theme:     cfg.theme,
-		renderer:  NewRenderer(cfg.theme, cfg.syntax),
-		input:     newInput(),
-		walk:      viewport.New(cfg.width, cfg.height),
-		follow:    cfg.follow,
-		pollEvery: cfg.pollEvery,
+		ctx:        ctx,
+		backend:    backend,
+		session:    session,
+		comments:   comments,
+		collapsed:  map[string]bool{},
+		layout:     cfg.layout,
+		theme:      cfg.theme,
+		renderer:   NewRenderer(cfg.theme, cfg.syntax),
+		input:      newInput(),
+		walkFolded: map[int]bool{},
+		follow:     cfg.follow,
+		pollEvery:  cfg.pollEvery,
 	}
 	if m.pollEvery <= 0 {
 		m.pollEvery = defaultPollEvery
@@ -182,8 +194,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case walkthroughMsg:
 		m.busy = ""
-		m.walkLoaded = true
-		m.walk.SetContent(msg.body)
+		m.showWalkthrough(msg.body)
 		return m, nil
 	case errMsg:
 		m.busy = ""
@@ -194,10 +205,39 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Batch(m.pollCmd(), m.tickCmd())
+	case tea.MouseMsg:
+		return m, m.mouse(msg)
 	case tea.KeyMsg:
 		return m, m.key(msg)
 	}
 	return m, nil
+}
+
+// wheelLines is how far one notch of the wheel scrolls.
+const wheelLines = 3
+
+// mouse routes a wheel notch to whichever pane the pointer is over, so the file
+// list and the diff scroll separately.
+func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
+	if m.mode == modeComment || m.mode == modeHelp {
+		return nil
+	}
+
+	var delta int
+	switch msg.Button {
+	case tea.MouseButtonWheelDown:
+		delta = wheelLines
+	case tea.MouseButtonWheelUp:
+		delta = -wheelLines
+	default:
+		return nil
+	}
+	if pane := m.filePaneWidth(); pane > 0 && msg.X < pane {
+		m.scrollFiles(delta)
+		return nil
+	}
+	m.scrollDiff(delta)
+	return nil
 }
 
 // key routes a press to whichever screen has the keyboard.
@@ -207,10 +247,6 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 		return m.helpKey(msg)
 	case modeComment:
 		return m.commentKey(msg)
-	case modeWalkthrough:
-		return m.walkKey(msg)
-	case modeLineSelect:
-		return m.lineKey(msg)
 	default:
 		return m.browseKey(msg)
 	}
@@ -225,14 +261,22 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 		return tea.Quit
 	case "?":
 		m.mode = modeHelp
-	case "j", "down":
+	case "j":
+		m.moveTo(m.doc.NextMark(m.cursor))
+	case "k":
+		m.moveTo(m.doc.PrevMark(m.cursor))
+	case "down":
 		m.moveTo(m.doc.NextStop(m.cursor))
-	case "k", "up":
+	case "up":
 		m.moveTo(m.doc.PrevStop(m.cursor))
+	case "]":
+		m.scrollFiles(1)
+	case "[":
+		m.scrollFiles(-1)
 	case "J", "}":
-		m.moveTo(m.doc.NextFile(m.cursor))
+		m.showFile(m.doc.NextFile(m.cursor))
 	case "K", "{":
-		m.moveTo(m.doc.PrevFile(m.cursor))
+		m.showFile(m.doc.PrevFile(m.cursor))
 	case "g", "home":
 		m.moveTo(m.doc.FirstStop())
 	case "G", "end":
@@ -248,70 +292,25 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 	case "u":
 		return m.unstageAt()
 	case "a":
-		return m.run("staging everything", "staged everything", m.backend.StageAll)
+		return m.runCollapsing("staging everything", "staged everything", m.foldEvery(true), m.backend.StageAll)
 	case "U":
-		return m.run("unstaging everything", "unstaged everything", m.backend.UnstageAll)
+		return m.runCollapsing("unstaging everything", "unstaged everything", m.foldEvery(false), m.backend.UnstageAll)
 	case "c":
 		m.openComment()
 	case "x":
 		return m.toggleResolved()
 	case "D":
 		return m.deleteComment()
-	case "v":
-		m.enterLineSelect()
 	case `\`:
 		m.setLayout(m.layout.Toggle())
 	case "w":
-		return m.openWalkthrough()
+		return m.toggleWalkthrough()
+	case "W":
+		return m.walkCmd(true)
 	case "r":
 		return m.reload("reloaded")
 	case "f":
 		return m.toggleFollow()
-	}
-	return nil
-}
-
-func (m *Model) lineKey(msg tea.KeyMsg) tea.Cmd {
-	changed := m.changedLines()
-	if len(changed) == 0 {
-		m.mode = modeBrowse
-		return nil
-	}
-	m.status, m.err = "", nil
-
-	switch msg.String() {
-	case "ctrl+c":
-		m.quitting = true
-		return tea.Quit
-	case "esc", "q":
-		m.leaveLineSelect()
-	case "j", "down":
-		m.lineCursor = min(m.lineCursor+1, len(changed)-1)
-		m.showLine()
-	case "k", "up":
-		m.lineCursor = max(m.lineCursor-1, 0)
-		m.showLine()
-	case " ":
-		index := changed[m.lineCursor]
-		if m.selected[index] {
-			delete(m.selected, index)
-		} else {
-			m.selected[index] = true
-		}
-	case "a":
-		for _, i := range changed {
-			m.selected[i] = true
-		}
-	case "n":
-		m.selected = map[int]bool{}
-	case "c":
-		m.openComment()
-	case "s":
-		return m.stageLines()
-	case "u":
-		return m.unstageLines()
-	case "?":
-		m.mode = modeHelp
 	}
 	return nil
 }
@@ -331,20 +330,93 @@ func (m *Model) commentKey(msg tea.KeyMsg) tea.Cmd {
 	return cmd
 }
 
-func (m *Model) walkKey(msg tea.KeyMsg) tea.Cmd {
-	switch msg.String() {
-	case "ctrl+c":
-		m.quitting = true
-		return tea.Quit
-	case "esc", "q", "w":
-		m.mode = modeBrowse
-		return nil
-	case "r":
-		return m.walkCmd(true)
+// groups is the walkthrough the document is laid out under. It stays empty until
+// a narrative has been fetched and the reviewer has it on, and an empty grouping
+// is what leaves the diff in git's order with nothing between the files.
+func (m *Model) groups() Groups {
+	if !m.walkOn || !m.walkLoaded {
+		return Groups{}
 	}
-	var cmd tea.Cmd
-	m.walk, cmd = m.walk.Update(msg)
-	return cmd
+	return Groups{Steps: m.walkSteps, Folded: m.walkFolded, Width: m.walkWidth()}
+}
+
+// walkWidth is the room a step's explanation is wrapped to, leaving the indent
+// the renderer puts in front of it.
+func (m *Model) walkWidth() int { return max(m.diffWidth()-stepIndent-1, 20) }
+
+// showWalkthrough lays the diff out under a freshly generated narrative.
+func (m *Model) showWalkthrough(body string) {
+	m.walkSteps = store.ParseSteps(body)
+	m.walkLoaded = true
+	m.walkOn = true
+	m.walkFolded = map[int]bool{}
+	m.walkCode, m.walkStale = codeFingerprintOf(m.session), false
+	m.relayout()
+	if len(m.walkSteps) == 0 {
+		m.status = "the walkthrough came back empty"
+	}
+}
+
+// toggleWalkthrough shows or hides the walkthrough's grouping, fetching the
+// narrative the first time it is asked for.
+func (m *Model) toggleWalkthrough() tea.Cmd {
+	if m.walkOn {
+		m.walkOn = false
+		m.relayout()
+		m.status = "walkthrough hidden"
+		return nil
+	}
+	if !m.walkLoaded {
+		return m.walkCmd(false)
+	}
+	m.walkOn = true
+	m.relayout()
+	return nil
+}
+
+// relayout rebuilds after something that renumbers every row — switching the
+// hunk layout, or grouping the files under a walkthrough — and puts the cursor
+// back on the code it was on rather than leaving it at the same row index.
+func (m *Model) relayout() {
+	var onHunk git.HunkID
+	onLine := -1
+	switch target := m.doc.TargetAt(m.cursor); target.Kind {
+	case TargetHunk:
+		onHunk = m.doc.Hunks[target.Hunk].ID
+	case TargetLine:
+		if ref, index, ok := m.doc.LineAt(m.cursor); ok {
+			onHunk, onLine = ref.ID, index
+		}
+	}
+	path := m.currentPath()
+
+	m.rebuild()
+
+	hunk := m.findHunk(onHunk)
+	switch row := m.doc.RowOfLine(hunk, onLine); {
+	case onLine >= 0 && row >= 0:
+		m.moveTo(row)
+	case m.doc.RowOfHunk(hunk) >= 0:
+		m.moveTo(m.doc.RowOfHunk(hunk))
+	default:
+		if row := m.doc.RowOfFile(m.fileIndex(path)); row >= 0 {
+			m.moveTo(row)
+		}
+	}
+}
+
+// foldStep hides the explanation of the step at the cursor, so a walkthrough
+// that has been read stops taking room from the diff it describes.
+func (m *Model) foldStep(step int) {
+	if m.walkFolded[step] {
+		delete(m.walkFolded, step)
+	} else {
+		m.walkFolded[step] = true
+	}
+	m.rebuild()
+	if step < len(m.doc.Steps) {
+		m.moveTo(m.doc.Steps[step].Row)
+	}
 }
 
 func (m *Model) helpKey(msg tea.KeyMsg) tea.Cmd {
@@ -356,159 +428,82 @@ func (m *Model) helpKey(msg tea.KeyMsg) tea.Cmd {
 	return nil
 }
 
-// stageAt stages whatever the cursor addresses.
+// stageAt stages the file the cursor is in.
+//
+// A file is the smallest thing that can be staged, so a hunk header or a diff
+// line stages the file it belongs to. The file folds away once it is staged,
+// since it has been dealt with — `tab` opens it again.
 func (m *Model) stageAt() tea.Cmd {
-	target := m.doc.TargetAt(m.cursor)
-	switch target.Kind {
-	case TargetHunk:
-		ref := m.doc.Hunks[target.Hunk]
-		if ref.Staged {
-			m.status = "that hunk is already staged"
-			return nil
-		}
-		sels := []git.Selection{git.WholeHunk(ref.ID)}
-		return m.run("staging hunk", "staged "+ref.ID.String(), func(ctx context.Context) error {
-			return m.backend.Stage(ctx, sels)
-		})
-	case TargetFile:
-		path := target.Path
-		return m.run("staging "+path, "staged "+path, func(ctx context.Context) error {
-			return m.backend.StageFile(ctx, path)
-		})
-	default:
+	file, ok := m.doc.FileTargetAt(m.cursor)
+	if !ok {
 		m.status = "nothing to stage here"
 		return nil
 	}
+	path := file.Entry.Path
+	if file.Entry.State() == git.StateStaged {
+		// Nothing to write, but `s` still means "done with this one" — a file
+		// reopened with `tab` folds again without a pointless git call.
+		m.status = path + " is already staged"
+		m.foldNow(fold(path))
+		return nil
+	}
+	return m.runCollapsing("staging "+path, "staged "+path, fold(path), func(ctx context.Context) error {
+		return m.backend.StageFile(ctx, path)
+	})
 }
 
-// unstageAt removes whatever the cursor addresses from the index.
+// unstageAt takes the file the cursor is in back out of the index, and opens it
+// again — it is back to being something to review.
 func (m *Model) unstageAt() tea.Cmd {
-	target := m.doc.TargetAt(m.cursor)
-	switch target.Kind {
-	case TargetHunk:
-		ref := m.doc.Hunks[target.Hunk]
-		if !ref.Staged {
-			m.status = "that hunk is not staged"
-			return nil
-		}
-		sels := []git.Selection{git.WholeHunk(ref.ID)}
-		return m.run("unstaging hunk", "unstaged "+ref.ID.String(), func(ctx context.Context) error {
-			return m.backend.Unstage(ctx, sels)
-		})
-	case TargetFile:
-		if !target.Staged {
-			m.status = target.Path + " has nothing staged"
-			return nil
-		}
-		path := target.Path
-		return m.run("unstaging "+path, "unstaged "+path, func(ctx context.Context) error {
-			return m.backend.UnstageFile(ctx, path)
-		})
-	default:
+	file, ok := m.doc.FileTargetAt(m.cursor)
+	if !ok {
 		m.status = "nothing to unstage here"
 		return nil
 	}
-}
-
-func (m *Model) stageLines() tea.Cmd {
-	ref, lines, ok := m.lineSelection()
-	if !ok {
+	path := file.Entry.Path
+	if file.Entry.Staged == nil {
+		m.status = path + " has nothing staged"
 		return nil
 	}
-	if ref.Staged {
-		m.status = "those lines are already staged"
-		return nil
-	}
-	sels := []git.Selection{{Hunk: ref.ID, Lines: lines}}
-	return m.run("staging lines", fmt.Sprintf("staged %d lines", len(lines)), func(ctx context.Context) error {
-		return m.backend.Stage(ctx, sels)
+	return m.runCollapsing("unstaging "+path, "unstaged "+path, unfold(path), func(ctx context.Context) error {
+		return m.backend.UnstageFile(ctx, path)
 	})
 }
 
-func (m *Model) unstageLines() tea.Cmd {
-	ref, lines, ok := m.lineSelection()
-	if !ok {
-		return nil
+// fold and unfold name the two one-file collapse changes staging makes.
+func fold(path string) map[string]bool   { return map[string]bool{path: true} }
+func unfold(path string) map[string]bool { return map[string]bool{path: false} }
+
+// setCollapsed folds the named files away, or opens the ones marked false.
+func (m *Model) setCollapsed(collapse map[string]bool) {
+	for path, hide := range collapse {
+		if hide {
+			m.collapsed[path] = true
+		} else {
+			delete(m.collapsed, path)
+		}
 	}
-	if !ref.Staged {
-		m.status = "those lines are not staged"
-		return nil
-	}
-	sels := []git.Selection{{Hunk: ref.ID, Lines: lines}}
-	return m.run("unstaging lines", fmt.Sprintf("unstaged %d lines", len(lines)), func(ctx context.Context) error {
-		return m.backend.Unstage(ctx, sels)
-	})
 }
 
-// lineSelection returns the hunk and sorted line indexes the line-level
-// operations act on.
-func (m *Model) lineSelection() (HunkRef, []int, bool) {
-	if m.lineHunk < 0 || m.lineHunk >= len(m.doc.Hunks) {
-		m.status = "no hunk selected"
-		return HunkRef{}, nil, false
-	}
-	lines := make([]int, 0, len(m.selected))
-	for i := range m.selected {
-		lines = append(lines, i)
-	}
-	if len(lines) == 0 {
-		m.status = "select lines with space first"
-		return HunkRef{}, nil, false
-	}
-	sort.Ints(lines)
-	return m.doc.Hunks[m.lineHunk], lines, true
-}
-
-// enterLineSelect starts selecting individual lines of the hunk at the cursor.
-//
-// It forces the unified layout: a side-by-side row can hold a removal and an
-// addition at once, so one selection mark per row could not say which of the two
-// is selected.
-func (m *Model) enterLineSelect() {
-	target := m.doc.TargetAt(m.cursor)
-	if target.Kind != TargetHunk {
-		m.status = "move to a hunk to select lines"
-		return
-	}
-	if len(m.doc.Hunks[target.Hunk].Hunk.ChangedLineIndexes()) == 0 {
-		m.status = "that hunk has no changed lines"
-		return
-	}
-
-	hunkID := m.doc.Hunks[target.Hunk].ID
-	m.restoreLayout = m.layout
-	if m.layout != LayoutUnified {
-		m.layout = LayoutUnified
-		m.rebuild()
-	}
-
-	m.mode = modeLineSelect
-	m.lineHunk = m.findHunk(hunkID)
-	m.lineCursor = 0
-	m.selected = map[int]bool{}
-	if row := m.doc.RowOfHunk(m.lineHunk); row >= 0 {
-		m.cursor = row
-	}
-	m.showLine()
-}
-
-func (m *Model) leaveLineSelect() {
-	hunk := m.lineHunk
-	m.mode = modeBrowse
-	m.selected = map[int]bool{}
-	m.lineHunk = -1
-
-	var hunkID git.HunkID
-	if hunk >= 0 && hunk < len(m.doc.Hunks) {
-		hunkID = m.doc.Hunks[hunk].ID
-	}
-	if m.restoreLayout != m.layout {
-		m.layout = m.restoreLayout
-		m.rebuild()
-	}
-	if row := m.doc.RowOfHunk(m.findHunk(hunkID)); row >= 0 {
+// foldNow applies a collapse change immediately, for the cases that never reach
+// git, leaving the cursor on the file it was in.
+func (m *Model) foldNow(collapse map[string]bool) {
+	file := m.doc.FileAt(m.cursor)
+	m.setCollapsed(collapse)
+	m.rebuild()
+	if row := m.doc.RowOfFile(file); row >= 0 {
 		m.moveTo(row)
 	}
+}
+
+// foldEvery collapses or opens every file on screen, for the whole-tree
+// operations, so `a` leaves the same folded list one file at a time would.
+func (m *Model) foldEvery(collapsed bool) map[string]bool {
+	out := make(map[string]bool, len(m.doc.Files))
+	for _, f := range m.doc.Files {
+		out[f.Entry.Path] = collapsed
+	}
+	return out
 }
 
 // findHunk locates a hunk by ID after a rebuild, since rebuilding renumbers the
@@ -520,31 +515,6 @@ func (m *Model) findHunk(id git.HunkID) int {
 		}
 	}
 	return -1
-}
-
-// changedLines returns the selectable lines of the hunk being line-selected.
-func (m *Model) changedLines() []int {
-	if m.lineHunk < 0 || m.lineHunk >= len(m.doc.Hunks) {
-		return nil
-	}
-	return m.doc.Hunks[m.lineHunk].Hunk.ChangedLineIndexes()
-}
-
-// focusedLine returns the hunk line index under the line-selection cursor.
-func (m *Model) focusedLine() (int, bool) {
-	changed := m.changedLines()
-	if m.lineCursor < 0 || m.lineCursor >= len(changed) {
-		return 0, false
-	}
-	return changed[m.lineCursor], true
-}
-
-func (m *Model) showLine() {
-	index, ok := m.focusedLine()
-	if !ok {
-		return
-	}
-	m.ensureVisible(m.doc.RowOfLine(m.lineHunk, index))
 }
 
 // anchor is where a new comment will attach.
@@ -576,22 +546,25 @@ func (m *Model) openComment() {
 	m.input.Focus()
 }
 
-// anchorAt resolves the cursor to a comment anchor: the focused line while
-// selecting lines, the first changed line of a hunk, an existing comment's own
-// anchor, or the file as a whole.
+// anchorAt resolves the cursor to a comment anchor: the line under the cursor,
+// the first changed line of a hunk, an existing comment's own anchor, or the file
+// as a whole.
+//
+// A line anchor does not care whether the line changed, so a note can be left on
+// the untouched code a change breaks.
 func (m *Model) anchorAt() (anchor, bool) {
-	if m.mode == modeLineSelect {
-		if index, ok := m.focusedLine(); ok {
-			ref := m.doc.Hunks[m.lineHunk]
-			return lineAnchor(ref, ref.Hunk.Lines[index]), true
-		}
-	}
 	if c, ok := m.doc.CommentAt(m.cursor); ok {
 		return anchor{path: c.File, line: c.Line, side: sideOr(c.Side), hunk: c.Hunk}, true
 	}
 
 	target := m.doc.TargetAt(m.cursor)
 	switch target.Kind {
+	case TargetLine:
+		ref, index, ok := m.doc.LineAt(m.cursor)
+		if !ok {
+			return anchor{}, false
+		}
+		return lineAnchor(ref, ref.Hunk.Lines[index]), true
 	case TargetHunk:
 		ref := m.doc.Hunks[target.Hunk]
 		if i, ok := headlineIndex(ref.Hunk); ok {
@@ -688,16 +661,17 @@ func (m *Model) deleteComment() tea.Cmd {
 	})
 }
 
-func (m *Model) openWalkthrough() tea.Cmd {
-	m.mode = modeWalkthrough
-	if m.walkLoaded {
-		return nil
-	}
-	return m.walkCmd(false)
-}
+// walkBusyNote is the banner shown while a provider writes a narrative. It
+// doubles as the guard against a second keypress starting a second one, since
+// generating is slow enough to be pressed again out of impatience.
+const walkBusyNote = "generating walkthrough"
 
 func (m *Model) walkCmd(regenerate bool) tea.Cmd {
-	m.busy = "generating walkthrough"
+	if m.busy == walkBusyNote {
+		m.status = "already generating a walkthrough"
+		return nil
+	}
+	m.busy = walkBusyNote
 	backend, ctx := m.backend, m.ctx
 	return func() tea.Msg {
 		body, err := backend.Walkthrough(ctx, regenerate)
@@ -750,13 +724,27 @@ func (m *Model) pollCmd() tea.Cmd {
 // run performs a mutation off the UI goroutine and reloads afterwards, so the
 // document never shows a state the repository has already moved past.
 func (m *Model) run(busy, done string, op func(context.Context) error) tea.Cmd {
+	return m.runCollapsing(busy, done, nil, op)
+}
+
+// runCollapsing is run, folding or opening files once the reload lands.
+//
+// The fold travels with the reload rather than being applied on the keypress so
+// that a stage which fails leaves the file open — it still has to be reviewed.
+func (m *Model) runCollapsing(busy, done string, collapse map[string]bool, op func(context.Context) error) tea.Cmd {
 	m.busy = busy
 	backend, ctx := m.backend, m.ctx
 	return func() tea.Msg {
 		if err := op(ctx); err != nil {
 			return errMsg{err}
 		}
-		return load(ctx, backend, done)
+		msg := load(ctx, backend, done)
+		loaded, ok := msg.(loadedMsg)
+		if !ok {
+			return msg
+		}
+		loaded.collapse = collapse
+		return loaded
 	}
 }
 
@@ -779,6 +767,10 @@ type loadedMsg struct {
 	note     string
 	// poll marks a load nobody asked for, which may be dropped.
 	poll bool
+	// collapse folds the named files away, or opens them where false, as the
+	// reload is applied: staging a file gets it out of the way of what is left
+	// to review, unstaging brings it back.
+	collapse map[string]bool
 }
 
 type walkthroughMsg struct{ body string }
@@ -799,10 +791,13 @@ func (m *Model) applyLoaded(msg loadedMsg) {
 	m.session = msg.session
 	m.comments = msg.comments
 	m.mode = modeBrowse
-	m.lineHunk = -1
-	m.selected = map[int]bool{}
-	// The diff changed, so the cached narrative describes the old one.
-	m.walkLoaded = false
+	// The narrative is kept: it is the notes the reviewer is reading, and
+	// dropping it would reorder the diff underneath them every time they staged
+	// a hunk. When the code itself moved on it is marked instead, since only the
+	// reviewer knows whether waiting for a new one is worth it.
+	m.walkStale = m.walkStale || (m.walkLoaded && codeFingerprintOf(msg.session) != m.walkCode)
+
+	m.setCollapsed(msg.collapse)
 
 	m.fingerprint = fingerprintOf(msg.session)
 	m.rebuild()
@@ -819,7 +814,7 @@ func (m *Model) applyLoaded(msg loadedMsg) {
 // while someone is mid-comment, or when nothing actually changed, is worse than
 // waiting for the next tick.
 func (m *Model) acceptPoll(msg loadedMsg) bool {
-	if m.mode == modeComment || m.mode == modeLineSelect {
+	if m.mode == modeComment {
 		return false
 	}
 	return fingerprintOf(msg.session) != m.fingerprint
@@ -843,6 +838,18 @@ func fingerprintOf(s *app.Session) string {
 		writeSideFingerprint(&b, "unstaged", f.Unstaged)
 	}
 	return store.Fingerprint(b.String())
+}
+
+// codeFingerprintOf identifies the changed code a narrative describes.
+//
+// It hashes git diff HEAD rather than the file entries: that text reads the same
+// whether a change is staged or not, so a walkthrough survives the staging it is
+// there to guide, and is only dated by the code actually changing.
+func codeFingerprintOf(s *app.Session) string {
+	if s == nil {
+		return ""
+	}
+	return store.Fingerprint(s.DiffText)
 }
 
 func writeSideFingerprint(b *strings.Builder, side string, d *git.FileDiff) {
@@ -890,34 +897,25 @@ func (m *Model) currentPath() string {
 }
 
 func (m *Model) rebuild() {
-	m.doc = Build(m.session, m.comments, m.collapsed, m.layout)
+	m.doc = Build(m.session, m.comments, m.collapsed, m.layout, WithGroups(m.groups()))
 	if m.cursor >= m.doc.Len() {
 		m.cursor = m.doc.LastStop()
 	}
+	// The file pane appears with the first file, so the diff's width is only
+	// settled once the document is.
+	m.renderer.SetWidth(m.diffWidth())
 	m.clampTop()
+	m.clampFileTop()
 }
 
 // setLayout changes how hunk bodies are laid out.
 //
-// Rebuilding renumbers every row, so the cursor is put back on the same hunk
-// rather than left at the same row index — switching layout is a display change
-// and should not move the reviewer.
+// Rebuilding renumbers every row, so the cursor is put back on the same line or
+// hunk rather than left at the same row index — switching layout is a display
+// change and should not move the reviewer.
 func (m *Model) setLayout(l Layout) {
-	target := m.doc.TargetAt(m.cursor)
-	var onHunk git.HunkID
-	if target.Kind == TargetHunk {
-		onHunk = m.doc.Hunks[target.Hunk].ID
-	}
-	path := m.currentPath()
-
 	m.layout = l
-	m.rebuild()
-
-	if row := m.doc.RowOfHunk(m.findHunk(onHunk)); row >= 0 {
-		m.moveTo(row)
-	} else if row := m.doc.RowOfFile(m.fileIndex(path)); row >= 0 {
-		m.moveTo(row)
-	}
+	m.relayout()
 	m.status = l.String() + " layout"
 }
 
@@ -931,7 +929,13 @@ func (m *Model) fileIndex(path string) int {
 	return -1
 }
 
+// toggleCollapse folds whatever the cursor is on out of the way: a walkthrough
+// step's explanation, or a file's body.
 func (m *Model) toggleCollapse() {
+	if step := m.doc.StepAt(m.cursor); step >= 0 {
+		m.foldStep(step)
+		return
+	}
 	file := m.doc.FileAt(m.cursor)
 	if file < 0 || file >= len(m.doc.Files) {
 		return
@@ -946,12 +950,100 @@ func (m *Model) toggleCollapse() {
 	m.moveTo(m.doc.RowOfFile(file))
 }
 
+// showFile moves to the top of a file — its walkthrough note, where it has one —
+// and opens the window there, so a file jump reads the file from its first line
+// instead of leaving it at the bottom of a window still filled by the file
+// before it.
+func (m *Model) showFile(row int) {
+	if row < 0 || row >= m.doc.Len() {
+		return
+	}
+	switch m.doc.Rows[row].Kind {
+	case RowFile, RowStep:
+	default:
+		m.moveTo(row)
+		return
+	}
+	m.cursor = row
+	m.top = row
+	m.clampTop()
+	m.ensureFileVisible()
+}
+
 func (m *Model) moveTo(row int) {
 	if row < 0 || row >= m.doc.Len() {
 		return
 	}
 	m.cursor = row
 	m.ensureVisible(row)
+	m.ensureFileVisible()
+}
+
+// scrollDiff moves the diff window by whole lines, for the wheel. The cursor is
+// dragged along as far as it must to stay on screen, so it never addresses a row
+// the reviewer cannot see.
+func (m *Model) scrollDiff(delta int) {
+	before := m.top
+	m.top += delta
+	m.clampTop()
+	if m.top == before {
+		return
+	}
+	m.keepCursorInView()
+	m.ensureFileVisible()
+}
+
+// keepCursorInView pulls the cursor back to the nearest row inside the window,
+// so wheeling the diff moves the line cursor with it.
+func (m *Model) keepCursorInView() {
+	height := m.bodyHeight()
+	lo, hi := m.top, m.top+height-1
+	if m.cursor >= lo && m.cursor <= hi {
+		return
+	}
+	if row := m.doc.StopBetween(lo, hi, m.cursor < lo); row >= 0 {
+		m.cursor = row
+	}
+}
+
+// scrollFiles moves the file pane on its own, without touching the diff.
+func (m *Model) scrollFiles(delta int) {
+	m.fileTop += delta
+	m.clampFileTop()
+}
+
+// markedFile is the file the pane marks: the one the diff window opens on, so
+// the mark names the file being read rather than a file the cursor left behind
+// when the window scrolled past it. The blank row between files belongs to the
+// file above, so a window starting on one is already reading the file below.
+func (m *Model) markedFile() int {
+	for row := m.top; row < m.top+m.bodyHeight() && row < m.doc.Len(); row++ {
+		if m.doc.Rows[row].Kind != RowBlank && m.doc.Rows[row].File >= 0 {
+			return m.doc.Rows[row].File
+		}
+	}
+	return m.doc.FileAt(m.top)
+}
+
+// ensureFileVisible scrolls the pane only when the marked file has left it, so
+// a pane scrolled by hand stays where it was put.
+func (m *Model) ensureFileVisible() {
+	height := m.bodyHeight()
+	file := m.markedFile()
+	if file < 0 || height <= 0 {
+		return
+	}
+	if file < m.fileTop {
+		m.fileTop = file
+	}
+	if file >= m.fileTop+height {
+		m.fileTop = file - height + 1
+	}
+	m.clampFileTop()
+}
+
+func (m *Model) clampFileTop() {
+	m.fileTop = min(max(m.fileTop, 0), max(0, len(m.doc.Files)-m.bodyHeight()))
 }
 
 func (m *Model) ensureVisible(row int) {
@@ -976,11 +1068,15 @@ func (m *Model) resize(width, height int) {
 	m.width = max(width, 20)
 	m.height = max(height, 8)
 	m.renderer.SetWidth(m.diffWidth())
-	m.walk.Width = max(m.width-4, 20)
-	m.walk.Height = max(m.bodyHeight(), 3)
+	// A walkthrough's explanations are wrapped into rows, so a resize changes
+	// how many rows the document has.
+	if len(m.doc.Steps) > 0 {
+		m.relayout()
+	}
 	if m.mode == modeComment {
 		m.input.SetWidth(max(m.width-4, 20))
 	}
 	m.clampTop()
 	m.ensureVisible(m.cursor)
+	m.ensureFileVisible()
 }

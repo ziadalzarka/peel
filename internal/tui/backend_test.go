@@ -38,18 +38,17 @@ func openBackend(t *testing.T) (*app.App, *app.Session, tui.Backend) {
 	return a, session, tui.NewBackend(a, session)
 }
 
-func TestBackendStagesAHunkAndReloadShowsIt(t *testing.T) {
+func TestBackendStagesAFileAndReloadShowsIt(t *testing.T) {
 	ctx := context.Background()
 	_, session, backend := openBackend(t)
 
 	entry := session.Files[0]
 	if entry.Unstaged == nil || len(entry.Unstaged.Hunks) == 0 {
-		t.Fatalf("expected an unstaged hunk, got %+v", entry)
+		t.Fatalf("expected an unstaged change, got %+v", entry)
 	}
-	id := entry.Unstaged.ID(entry.Unstaged.Hunks[0])
 
-	if err := backend.Stage(ctx, []git.Selection{git.WholeHunk(id)}); err != nil {
-		t.Fatalf("Stage: %v", err)
+	if err := backend.StageFile(ctx, entry.Path); err != nil {
+		t.Fatalf("StageFile: %v", err)
 	}
 
 	reloaded, err := backend.Reload(ctx)
@@ -127,8 +126,6 @@ func TestBackendRefusesToStageAReadOnlySession(t *testing.T) {
 	backend := tui.NewBackend(a, session)
 
 	ops := map[string]func() error{
-		"Stage":       func() error { return backend.Stage(ctx, []git.Selection{{Hunk: git.HunkID{Path: "x"}}}) },
-		"Unstage":     func() error { return backend.Unstage(ctx, []git.Selection{{Hunk: git.HunkID{Path: "x"}}}) },
 		"StageFile":   func() error { return backend.StageFile(ctx, "main.go") },
 		"UnstageFile": func() error { return backend.UnstageFile(ctx, "main.go") },
 		"StageAll":    func() error { return backend.StageAll(ctx) },

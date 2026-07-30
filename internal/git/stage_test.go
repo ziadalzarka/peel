@@ -51,25 +51,6 @@ func (h *harness) entry(path string) git.FileEntry {
 	return e
 }
 
-// unstagedHunks returns the working-tree hunks of path.
-func (h *harness) unstagedHunks(path string) (git.FileDiff, []git.Hunk) {
-	h.t.Helper()
-	e := h.entry(path)
-	if e.Unstaged == nil {
-		h.t.Fatalf("%s has no unstaged changes", path)
-	}
-	return *e.Unstaged, e.Unstaged.Hunks
-}
-
-func (h *harness) stagedHunks(path string) (git.FileDiff, []git.Hunk) {
-	h.t.Helper()
-	e := h.entry(path)
-	if e.Staged == nil {
-		h.t.Fatalf("%s has no staged changes", path)
-	}
-	return *e.Staged, e.Staged.Hunks
-}
-
 // numbered builds a file of n lines: "line1\nline2\n...".
 func numbered(n int) string {
 	var b strings.Builder
@@ -93,7 +74,11 @@ func itoa(n int) string {
 	return string(digits)
 }
 
-func TestStageSingleHunkLeavesOthersUnstaged(t *testing.T) {
+// --- Whole-file staging ---
+
+// A file is the unit: every hunk in it goes to the index together, and nothing
+// is left behind for a second keypress.
+func TestStageFileTakesEveryHunkInIt(t *testing.T) {
 	h := newHarness(t)
 	h.fixture.Write("f.txt", numbered(30))
 	h.fixture.Commit("base")
@@ -103,177 +88,93 @@ func TestStageSingleHunkLeavesOthersUnstaged(t *testing.T) {
 	content = strings.Replace(content, "line25\n", "line25-EDITED\n", 1)
 	h.fixture.Write("f.txt", content)
 
-	file, hunks := h.unstagedHunks("f.txt")
-	if len(hunks) != 2 {
-		t.Fatalf("got %d hunks, want 2", len(hunks))
+	if got := len(h.entry("f.txt").Unstaged.Hunks); got != 2 {
+		t.Fatalf("got %d hunks, want 2", got)
 	}
 
-	if err := h.stager.Stage(h.ctx, []git.Selection{git.WholeHunk(file.ID(hunks[0]))}); err != nil {
-		t.Fatalf("Stage: %v", err)
+	if err := h.stager.StageFile(h.ctx, "f.txt"); err != nil {
+		t.Fatalf("StageFile: %v", err)
 	}
 
-	staged := h.fixture.Staged("f.txt")
-	if !strings.Contains(staged, "line3-EDITED") {
-		t.Error("index missing the staged edit")
+	if got := h.fixture.Staged("f.txt"); got != strings.TrimRight(content, "\n") {
+		t.Errorf("index contents wrong:\ngot:\n%s\nwant:\n%s", got, content)
 	}
-	if strings.Contains(staged, "line25-EDITED") {
-		t.Error("index contains the edit that was not staged")
-	}
-	// The working tree must be untouched by staging.
-	if !strings.Contains(h.fixture.Read("f.txt"), "line25-EDITED") {
-		t.Error("staging modified the working tree")
-	}
-
-	if got := h.entry("f.txt").State(); got != git.StatePartial {
-		t.Errorf("State() = %v, want partial", got)
+	if got := h.entry("f.txt").State(); got != git.StateStaged {
+		t.Errorf("State() = %v, want staged", got)
 	}
 }
 
-func TestStageSecondHunkOnlyUsesCorrectOffsets(t *testing.T) {
-	// Staging a later hunk in isolation is where naive offset handling writes
-	// the wrong lines, because the earlier hunk's growth never happened.
+func TestStageFileLeavesOtherFilesUnstaged(t *testing.T) {
 	h := newHarness(t)
-	h.fixture.Write("f.txt", numbered(40))
+	h.fixture.Write("a.txt", "a\n")
+	h.fixture.Write("b.txt", "b\n")
 	h.fixture.Commit("base")
+	h.fixture.Write("a.txt", "a-EDITED\n")
+	h.fixture.Write("b.txt", "b-EDITED\n")
 
-	content := strings.Replace(numbered(40), "line3\n", "line3\nINSERTED-A\nINSERTED-B\n", 1)
-	content = strings.Replace(content, "line35\n", "line35-EDITED\n", 1)
-	h.fixture.Write("f.txt", content)
-
-	file, hunks := h.unstagedHunks("f.txt")
-	if len(hunks) != 2 {
-		t.Fatalf("got %d hunks, want 2", len(hunks))
+	if err := h.stager.StageFile(h.ctx, "a.txt"); err != nil {
+		t.Fatalf("StageFile: %v", err)
 	}
 
-	if err := h.stager.Stage(h.ctx, []git.Selection{git.WholeHunk(file.ID(hunks[1]))}); err != nil {
-		t.Fatalf("Stage: %v", err)
+	if got := h.entry("a.txt").State(); got != git.StateStaged {
+		t.Errorf("a.txt State() = %v, want staged", got)
 	}
-
-	staged := h.fixture.Staged("f.txt")
-	if !strings.Contains(staged, "line35-EDITED") {
-		t.Error("index missing the staged edit")
-	}
-	if strings.Contains(staged, "INSERTED-A") {
-		t.Error("index contains the earlier hunk that was not staged")
-	}
-	// Exact contents: only line35 differs from the committed file.
-	want := strings.Replace(numbered(40), "line35\n", "line35-EDITED\n", 1)
-	if staged != strings.TrimRight(want, "\n") {
-		t.Errorf("index contents wrong:\ngot:\n%s", staged)
+	if got := h.entry("b.txt").State(); got != git.StateUnstaged {
+		t.Errorf("b.txt State() = %v, want unstaged", got)
 	}
 }
 
-func TestStageMultipleHunksAppliesAsOnePatch(t *testing.T) {
+func TestStageAndUnstageWholeFile(t *testing.T) {
 	h := newHarness(t)
-	h.fixture.Write("f.txt", numbered(40))
+	h.fixture.Write("f.txt", numbered(10))
 	h.fixture.Commit("base")
-
-	content := strings.Replace(numbered(40), "line3\n", "line3-EDITED\n", 1)
-	content = strings.Replace(content, "line20\n", "line20-EDITED\n", 1)
-	content = strings.Replace(content, "line37\n", "line37-EDITED\n", 1)
-	h.fixture.Write("f.txt", content)
-
-	file, hunks := h.unstagedHunks("f.txt")
-	if len(hunks) != 3 {
-		t.Fatalf("got %d hunks, want 3", len(hunks))
-	}
-
-	// Stage the first and third but not the middle — the middle's absence is
-	// what shifts the third hunk's offsets.
-	sels := []git.Selection{
-		git.WholeHunk(file.ID(hunks[0])),
-		git.WholeHunk(file.ID(hunks[2])),
-	}
-	if err := h.stager.Stage(h.ctx, sels); err != nil {
-		t.Fatalf("Stage: %v", err)
-	}
-
-	want := strings.Replace(numbered(40), "line3\n", "line3-EDITED\n", 1)
-	want = strings.Replace(want, "line37\n", "line37-EDITED\n", 1)
-	if got := h.fixture.Staged("f.txt"); got != strings.TrimRight(want, "\n") {
-		t.Errorf("index contents wrong:\ngot:\n%s\nwant:\n%s", got, want)
-	}
-}
-
-func TestUnstageSingleHunk(t *testing.T) {
-	h := newHarness(t)
-	h.fixture.Write("f.txt", numbered(40))
-	h.fixture.Commit("base")
-
-	content := strings.Replace(numbered(40), "line3\n", "line3-EDITED\n", 1)
-	content = strings.Replace(content, "line35\n", "line35-EDITED\n", 1)
-	h.fixture.Write("f.txt", content)
-	h.fixture.Git("add", "f.txt")
-
-	file, hunks := h.stagedHunks("f.txt")
-	if len(hunks) != 2 {
-		t.Fatalf("got %d staged hunks, want 2", len(hunks))
-	}
-
-	if err := h.stager.Unstage(h.ctx, []git.Selection{git.WholeHunk(file.ID(hunks[0]))}); err != nil {
-		t.Fatalf("Unstage: %v", err)
-	}
-
-	staged := h.fixture.Staged("f.txt")
-	if strings.Contains(staged, "line3-EDITED") {
-		t.Error("index still contains the unstaged edit")
-	}
-	if !strings.Contains(staged, "line35-EDITED") {
-		t.Error("index lost the edit that was left staged")
-	}
-	// Unstaging must never touch the working tree.
-	if !strings.Contains(h.fixture.Read("f.txt"), "line3-EDITED") {
-		t.Error("unstaging modified the working tree")
-	}
-}
-
-func TestUnstageSecondHunkOnlyUsesCorrectOffsets(t *testing.T) {
-	h := newHarness(t)
-	h.fixture.Write("f.txt", numbered(40))
-	h.fixture.Commit("base")
-
-	content := strings.Replace(numbered(40), "line3\n", "line3\nINSERTED-A\nINSERTED-B\n", 1)
-	content = strings.Replace(content, "line35\n", "line35-EDITED\n", 1)
-	h.fixture.Write("f.txt", content)
-	h.fixture.Git("add", "f.txt")
-
-	file, hunks := h.stagedHunks("f.txt")
-	if err := h.stager.Unstage(h.ctx, []git.Selection{git.WholeHunk(file.ID(hunks[1]))}); err != nil {
-		t.Fatalf("Unstage: %v", err)
-	}
-
-	want := strings.Replace(numbered(40), "line3\n", "line3\nINSERTED-A\nINSERTED-B\n", 1)
-	if got := h.fixture.Staged("f.txt"); got != strings.TrimRight(want, "\n") {
-		t.Errorf("index contents wrong:\ngot:\n%s\nwant:\n%s", got, want)
-	}
-}
-
-func TestStageThenUnstageRoundTrips(t *testing.T) {
-	h := newHarness(t)
-	h.fixture.Write("f.txt", numbered(20))
-	h.fixture.Commit("base")
-
-	h.fixture.Write("f.txt", strings.Replace(numbered(20), "line7\n", "line7-EDITED\n", 1))
+	h.fixture.Write("f.txt", strings.Replace(numbered(10), "line4\n", "line4-EDITED\n", 1))
 	before := h.fixture.Read("f.txt")
 
-	file, hunks := h.unstagedHunks("f.txt")
-	if err := h.stager.Stage(h.ctx, []git.Selection{git.WholeHunk(file.ID(hunks[0]))}); err != nil {
-		t.Fatalf("Stage: %v", err)
+	if err := h.stager.StageFile(h.ctx, "f.txt"); err != nil {
+		t.Fatalf("StageFile: %v", err)
+	}
+	if got := h.entry("f.txt").State(); got != git.StateStaged {
+		t.Errorf("State() = %v, want staged", got)
 	}
 
-	sfile, shunks := h.stagedHunks("f.txt")
-	if err := h.stager.Unstage(h.ctx, []git.Selection{git.WholeHunk(sfile.ID(shunks[0]))}); err != nil {
-		t.Fatalf("Unstage: %v", err)
-	}
-
-	if got := h.fixture.Read("f.txt"); got != before {
-		t.Error("round trip changed the working tree")
-	}
-	if got := h.fixture.Staged("f.txt"); got != strings.TrimRight(numbered(20), "\n") {
-		t.Errorf("index not restored to HEAD:\n%s", got)
+	if err := h.stager.UnstageFile(h.ctx, "f.txt"); err != nil {
+		t.Fatalf("UnstageFile: %v", err)
 	}
 	if got := h.entry("f.txt").State(); got != git.StateUnstaged {
 		t.Errorf("State() = %v, want unstaged", got)
+	}
+	if got := h.fixture.Read("f.txt"); got != before {
+		t.Error("the round trip changed the working tree")
+	}
+	if got := h.fixture.Staged("f.txt"); got != strings.TrimRight(numbered(10), "\n") {
+		t.Errorf("index not restored to HEAD:\n%s", got)
+	}
+}
+
+func TestStageAllAndUnstageAll(t *testing.T) {
+	h := newHarness(t)
+	h.fixture.Write("a.txt", "1\n")
+	h.fixture.Commit("base")
+	h.fixture.Write("a.txt", "2\n")
+	h.fixture.Write("b.txt", "new\n")
+
+	if err := h.stager.StageAll(h.ctx); err != nil {
+		t.Fatalf("StageAll: %v", err)
+	}
+	for _, path := range []string{"a.txt", "b.txt"} {
+		if got := h.entry(path).State(); got != git.StateStaged {
+			t.Errorf("%s State() = %v, want staged", path, got)
+		}
+	}
+
+	if err := h.stager.UnstageAll(h.ctx); err != nil {
+		t.Fatalf("UnstageAll: %v", err)
+	}
+	for _, f := range h.status().Files {
+		if f.State() == git.StateStaged {
+			t.Errorf("%s still staged after UnstageAll", f.Path)
+		}
 	}
 }
 
@@ -287,8 +188,8 @@ func TestCorpusRename(t *testing.T) {
 	h.fixture.Git("mv", "from.txt", "to.txt")
 	h.fixture.Git("restore", "--staged", ".")
 
-	// --no-renames makes this a delete plus an add, which `git apply` handles
-	// reliably where rename headers do not.
+	// --no-renames makes this a delete plus an add, which is the diff there is
+	// to review: two files, each staged on its own.
 	status := h.status()
 	from, okFrom := status.Entry("from.txt")
 	to, okTo := status.Entry("to.txt")
@@ -330,17 +231,9 @@ func TestCorpusBinaryFile(t *testing.T) {
 	if !e.IsBinary() {
 		t.Fatal("binary file not detected as binary")
 	}
-	if e.Unstaged.CanStageHunks() {
-		t.Error("CanStageHunks() = true for a binary file")
-	}
 
-	// Hunk staging must be refused rather than producing a corrupt patch.
-	fake := git.FileDiff{OldPath: "img.bin", NewPath: "img.bin", IsBinary: true}
-	if _, err := git.BuildPatch(fake, []git.Hunk{{}}, git.Forward); err == nil {
-		t.Error("BuildPatch accepted a binary file")
-	}
-
-	// Whole-file staging still works.
+	// A binary file has no diff to show, but staging it is the same operation as
+	// staging any other file.
 	if err := h.stager.StageFile(h.ctx, "img.bin"); err != nil {
 		t.Fatalf("StageFile: %v", err)
 	}
@@ -376,34 +269,11 @@ func TestCorpusUntrackedFile(t *testing.T) {
 		t.Error("reviewing an untracked file added it to the index")
 	}
 
-	// Staging a hunk of it must work, escalating via intent-to-add.
-	file, hunks := h.unstagedHunks("new.txt")
-	if err := h.stager.Stage(h.ctx, []git.Selection{git.WholeHunk(file.ID(hunks[0]))}); err != nil {
-		t.Fatalf("Stage: %v", err)
+	if err := h.stager.StageFile(h.ctx, "new.txt"); err != nil {
+		t.Fatalf("StageFile: %v", err)
 	}
 	if got := h.fixture.Staged("new.txt"); got != "alpha\nbeta\ngamma" {
 		t.Errorf("index contents = %q", got)
-	}
-}
-
-func TestCorpusUntrackedFilePartialStage(t *testing.T) {
-	h := newHarness(t)
-	h.fixture.Write("existing.txt", "x\n")
-	h.fixture.Commit("base")
-	h.fixture.Write("new.txt", "alpha\nbeta\ngamma\n")
-
-	file, hunks := h.unstagedHunks("new.txt")
-	// Stage only the first of the three added lines.
-	sel := git.Selection{Hunk: file.ID(hunks[0]), Lines: []int{0}}
-	if err := h.stager.Stage(h.ctx, []git.Selection{sel}); err != nil {
-		t.Fatalf("Stage: %v", err)
-	}
-
-	if got := h.fixture.Staged("new.txt"); got != "alpha" {
-		t.Errorf("index contents = %q, want %q", got, "alpha")
-	}
-	if got := h.fixture.Read("new.txt"); got != "alpha\nbeta\ngamma\n" {
-		t.Errorf("working tree changed: %q", got)
 	}
 }
 
@@ -414,9 +284,8 @@ func TestCorpusNoTrailingNewline(t *testing.T) {
 
 	h.fixture.Write("f.txt", "alpha\nBETA")
 
-	file, hunks := h.unstagedHunks("f.txt")
-	if err := h.stager.Stage(h.ctx, []git.Selection{git.WholeHunk(file.ID(hunks[0]))}); err != nil {
-		t.Fatalf("Stage: %v", err)
+	if err := h.stager.StageFile(h.ctx, "f.txt"); err != nil {
+		t.Fatalf("StageFile: %v", err)
 	}
 
 	// The final byte is the whole point: a lost marker appends a newline.
@@ -432,9 +301,8 @@ func TestCorpusAddTrailingNewline(t *testing.T) {
 	h.fixture.Commit("base")
 	h.fixture.Write("f.txt", "alpha\nbeta\n")
 
-	file, hunks := h.unstagedHunks("f.txt")
-	if err := h.stager.Stage(h.ctx, []git.Selection{git.WholeHunk(file.ID(hunks[0]))}); err != nil {
-		t.Fatalf("Stage: %v", err)
+	if err := h.stager.StageFile(h.ctx, "f.txt"); err != nil {
+		t.Fatalf("StageFile: %v", err)
 	}
 	if got := h.fixture.StagedRaw("f.txt"); got != "alpha\nbeta\n" {
 		t.Errorf("index contents = %q, want %q", got, "alpha\nbeta\n")
@@ -443,7 +311,8 @@ func TestCorpusAddTrailingNewline(t *testing.T) {
 
 func TestCorpusPartiallyStagedAndPartiallyModified(t *testing.T) {
 	// One file with changes in the index and different changes in the working
-	// tree at the same time.
+	// tree at the same time. peel cannot create this state any more, but git can,
+	// and it still has to be reviewable and stageable.
 	h := newHarness(t)
 	h.fixture.Write("f.txt", numbered(40))
 	h.fixture.Commit("base")
@@ -467,9 +336,10 @@ func TestCorpusPartiallyStagedAndPartiallyModified(t *testing.T) {
 			len(e.Staged.Hunks), len(e.Unstaged.Hunks))
 	}
 
-	// Staging the working-tree hunk must not disturb what is already staged.
-	if err := h.stager.Stage(h.ctx, []git.Selection{git.WholeHunk(e.Unstaged.ID(e.Unstaged.Hunks[0]))}); err != nil {
-		t.Fatalf("Stage: %v", err)
+	// Staging the file takes the working-tree half without disturbing the half
+	// already in the index.
+	if err := h.stager.StageFile(h.ctx, "f.txt"); err != nil {
+		t.Fatalf("StageFile: %v", err)
 	}
 	if got := h.fixture.Staged("f.txt"); got != strings.TrimRight(both, "\n") {
 		t.Errorf("index contents wrong:\n%s", got)
@@ -479,7 +349,7 @@ func TestCorpusPartiallyStagedAndPartiallyModified(t *testing.T) {
 	}
 }
 
-func TestCorpusUnstageOnlyTheIndexHalf(t *testing.T) {
+func TestUnstageLeavesTheWorkingTreeAlone(t *testing.T) {
 	h := newHarness(t)
 	h.fixture.Write("f.txt", numbered(40))
 	h.fixture.Commit("base")
@@ -490,9 +360,8 @@ func TestCorpusUnstageOnlyTheIndexHalf(t *testing.T) {
 	both = strings.Replace(both, "line30\n", "line30-WORKTREE\n", 1)
 	h.fixture.Write("f.txt", both)
 
-	sfile, shunks := h.stagedHunks("f.txt")
-	if err := h.stager.Unstage(h.ctx, []git.Selection{git.WholeHunk(sfile.ID(shunks[0]))}); err != nil {
-		t.Fatalf("Unstage: %v", err)
+	if err := h.stager.UnstageFile(h.ctx, "f.txt"); err != nil {
+		t.Fatalf("UnstageFile: %v", err)
 	}
 
 	if got := h.fixture.Staged("f.txt"); got != strings.TrimRight(numbered(40), "\n") {
@@ -503,109 +372,7 @@ func TestCorpusUnstageOnlyTheIndexHalf(t *testing.T) {
 	}
 }
 
-// --- Line-level staging ---
-
-func TestStageLinesWithinHunk(t *testing.T) {
-	h := newHarness(t)
-	h.fixture.Write("f.txt", "a\nb\nc\n")
-	h.fixture.Commit("base")
-	h.fixture.Write("f.txt", "a\nX\nY\nc\n")
-
-	file, hunks := h.unstagedHunks("f.txt")
-	hunk := hunks[0]
-
-	// Pick only the first added line.
-	var firstAdd int = -1
-	for i, l := range hunk.Lines {
-		if l.Kind == git.LineAdded {
-			firstAdd = i
-			break
-		}
-	}
-	if firstAdd < 0 {
-		t.Fatal("no added line found")
-	}
-
-	sel := git.Selection{Hunk: file.ID(hunk), Lines: []int{firstAdd}}
-	if err := h.stager.Stage(h.ctx, []git.Selection{sel}); err != nil {
-		t.Fatalf("Stage: %v", err)
-	}
-
-	// The hunk removes "b" and adds "X" then "Y". Picking only "+X" demotes
-	// "-b" to context and drops "+Y", so "X" is inserted after the "b" that
-	// stays — the same result `git add -p` gives for this selection.
-	if got := h.fixture.Staged("f.txt"); got != "a\nb\nX\nc" {
-		t.Errorf("index contents = %q, want %q", got, "a\nb\nX\nc")
-	}
-	if got := h.fixture.Read("f.txt"); got != "a\nX\nY\nc\n" {
-		t.Errorf("working tree changed: %q", got)
-	}
-}
-
-func TestStageOnlyRemovalWithinHunk(t *testing.T) {
-	h := newHarness(t)
-	h.fixture.Write("f.txt", "a\nb\nc\n")
-	h.fixture.Commit("base")
-	h.fixture.Write("f.txt", "a\nX\nc\n")
-
-	file, hunks := h.unstagedHunks("f.txt")
-	hunk := hunks[0]
-
-	var removal int = -1
-	for i, l := range hunk.Lines {
-		if l.Kind == git.LineRemoved {
-			removal = i
-			break
-		}
-	}
-	if removal < 0 {
-		t.Fatal("no removed line found")
-	}
-
-	sel := git.Selection{Hunk: file.ID(hunk), Lines: []int{removal}}
-	if err := h.stager.Stage(h.ctx, []git.Selection{sel}); err != nil {
-		t.Fatalf("Stage: %v", err)
-	}
-
-	// Only the deletion of "b" was staged; "X" was not added.
-	if got := h.fixture.Staged("f.txt"); got != "a\nc" {
-		t.Errorf("index contents = %q, want %q", got, "a\nc")
-	}
-}
-
-func TestUnstageLinesWithinHunk(t *testing.T) {
-	h := newHarness(t)
-	h.fixture.Write("f.txt", "a\nb\nc\n")
-	h.fixture.Commit("base")
-	h.fixture.Write("f.txt", "a\nX\nY\nc\n")
-	h.fixture.Git("add", "f.txt")
-
-	file, hunks := h.stagedHunks("f.txt")
-	hunk := hunks[0]
-
-	var firstAdd int = -1
-	for i, l := range hunk.Lines {
-		if l.Kind == git.LineAdded {
-			firstAdd = i
-			break
-		}
-	}
-
-	sel := git.Selection{Hunk: file.ID(hunk), Lines: []int{firstAdd}}
-	if err := h.stager.Unstage(h.ctx, []git.Selection{sel}); err != nil {
-		t.Fatalf("Unstage: %v", err)
-	}
-
-	// X was removed from the index; Y and the deletion of b remain staged.
-	if got := h.fixture.Staged("f.txt"); got != "a\nY\nc" {
-		t.Errorf("index contents = %q, want %q", got, "a\nY\nc")
-	}
-	if got := h.fixture.Read("f.txt"); got != "a\nX\nY\nc\n" {
-		t.Error("unstaging modified the working tree")
-	}
-}
-
-// --- Deletions, CRLF, whole-file operations, error paths ---
+// --- Deletions, CRLF, status ---
 
 func TestStageDeletedFile(t *testing.T) {
 	h := newHarness(t)
@@ -619,9 +386,8 @@ func TestStageDeletedFile(t *testing.T) {
 		t.Fatalf("gone.txt not reported as deleted")
 	}
 
-	file, hunks := h.unstagedHunks("gone.txt")
-	if err := h.stager.Stage(h.ctx, []git.Selection{git.WholeHunk(file.ID(hunks[0]))}); err != nil {
-		t.Fatalf("Stage: %v", err)
+	if err := h.stager.StageFile(h.ctx, "gone.txt"); err != nil {
+		t.Fatalf("StageFile: %v", err)
 	}
 	if _, err := h.fixture.TryGit("show", ":gone.txt"); err == nil {
 		t.Error("deleted file still present in the index")
@@ -634,90 +400,11 @@ func TestCRLFLineEndingsSurviveStaging(t *testing.T) {
 	h.fixture.Commit("base")
 	h.fixture.Write("f.txt", "alpha\r\nBETA\r\n")
 
-	file, hunks := h.unstagedHunks("f.txt")
-	if err := h.stager.Stage(h.ctx, []git.Selection{git.WholeHunk(file.ID(hunks[0]))}); err != nil {
-		t.Fatalf("Stage: %v", err)
-	}
-	if got := h.fixture.StagedRaw("f.txt"); got != "alpha\r\nBETA\r\n" {
-		t.Errorf("index contents = %q, want CRLF preserved", got)
-	}
-}
-
-func TestStageAndUnstageWholeFile(t *testing.T) {
-	h := newHarness(t)
-	h.fixture.Write("f.txt", numbered(10))
-	h.fixture.Commit("base")
-	h.fixture.Write("f.txt", strings.Replace(numbered(10), "line4\n", "line4-EDITED\n", 1))
-
 	if err := h.stager.StageFile(h.ctx, "f.txt"); err != nil {
 		t.Fatalf("StageFile: %v", err)
 	}
-	if got := h.entry("f.txt").State(); got != git.StateStaged {
-		t.Errorf("State() = %v, want staged", got)
-	}
-
-	if err := h.stager.UnstageFile(h.ctx, "f.txt"); err != nil {
-		t.Fatalf("UnstageFile: %v", err)
-	}
-	if got := h.entry("f.txt").State(); got != git.StateUnstaged {
-		t.Errorf("State() = %v, want unstaged", got)
-	}
-}
-
-func TestStageAllAndUnstageAll(t *testing.T) {
-	h := newHarness(t)
-	h.fixture.Write("a.txt", "1\n")
-	h.fixture.Commit("base")
-	h.fixture.Write("a.txt", "2\n")
-	h.fixture.Write("b.txt", "new\n")
-
-	if err := h.stager.StageAll(h.ctx); err != nil {
-		t.Fatalf("StageAll: %v", err)
-	}
-	for _, path := range []string{"a.txt", "b.txt"} {
-		if got := h.entry(path).State(); got != git.StateStaged {
-			t.Errorf("%s State() = %v, want staged", path, got)
-		}
-	}
-
-	if err := h.stager.UnstageAll(h.ctx); err != nil {
-		t.Fatalf("UnstageAll: %v", err)
-	}
-	for _, f := range h.status().Files {
-		if f.State() == git.StateStaged {
-			t.Errorf("%s still staged after UnstageAll", f.Path)
-		}
-	}
-}
-
-func TestStageRejectsStaleHunkID(t *testing.T) {
-	h := newHarness(t)
-	h.fixture.Write("f.txt", numbered(10))
-	h.fixture.Commit("base")
-	h.fixture.Write("f.txt", strings.Replace(numbered(10), "line4\n", "line4-EDITED\n", 1))
-
-	file, hunks := h.unstagedHunks("f.txt")
-	id := file.ID(hunks[0])
-
-	// The tree moves on before the selection is applied.
-	h.fixture.Write("f.txt", numbered(10))
-
-	err := h.stager.Stage(h.ctx, []git.Selection{git.WholeHunk(id)})
-	if err == nil {
-		t.Fatal("Stage succeeded against a stale hunk ID, want error")
-	}
-	if !strings.Contains(err.Error(), "reload") && !strings.Contains(err.Error(), "no longer") {
-		t.Errorf("error = %v, want it to say the tree changed", err)
-	}
-}
-
-func TestStageEmptySelectionIsNoOp(t *testing.T) {
-	h := newHarness(t)
-	h.fixture.Write("f.txt", "a\n")
-	h.fixture.Commit("base")
-
-	if err := h.stager.Stage(h.ctx, nil); err != nil {
-		t.Fatalf("Stage(nil): %v", err)
+	if got := h.fixture.StagedRaw("f.txt"); got != "alpha\r\nBETA\r\n" {
+		t.Errorf("index contents = %q, want CRLF preserved", got)
 	}
 }
 

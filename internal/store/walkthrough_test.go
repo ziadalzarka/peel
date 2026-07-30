@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -146,3 +147,106 @@ func TestFingerprintChangesWithDiff(t *testing.T) {
 }
 
 var _ WalkthroughCache = (*JSONWalkthroughCache)(nil)
+
+const groupedNarrative = "## 1. The parsed shape everything rests on\n" +
+	"`internal/git/parse.go` · `internal/git/hunk.go`\n" +
+	"\n" +
+	"`ParseDiff` gains a `NoNewline` line kind, so a file whose last line\n" +
+	"lost its newline round-trips.\n" +
+	"\n" +
+	"The **hunk** header keeps its own copy.\n" +
+	"\n" +
+	"## 2. What reads it\n" +
+	"`internal/tui/render.go`\n" +
+	"\n" +
+	"The renderer dims the marker instead of colouring it.\n" +
+	"\n" +
+	"## Worth a close look\n" +
+	"\n" +
+	"- `internal/git/parse.go:88` — the fallback swallows a short read.\n"
+
+func TestParseStepsGroupsFilesUnderTheirStep(t *testing.T) {
+	steps := ParseSteps(groupedNarrative)
+
+	if len(steps) != 3 {
+		t.Fatalf("parsed %d steps, want 3: %+v", len(steps), steps)
+	}
+
+	first := steps[0]
+	if first.Number != 1 {
+		t.Errorf("first step number = %d, want 1", first.Number)
+	}
+	if first.Title != "The parsed shape everything rests on" {
+		t.Errorf("first step title = %q", first.Title)
+	}
+	want := []string{"internal/git/parse.go", "internal/git/hunk.go"}
+	if len(first.Files) != 2 || first.Files[0] != want[0] || first.Files[1] != want[1] {
+		t.Errorf("first step files = %v, want %v", first.Files, want)
+	}
+	if strings.Contains(first.Body, "internal/git/hunk.go`\n") {
+		t.Error("the path line leaked into the body")
+	}
+	if !strings.HasPrefix(first.Body, "`ParseDiff` gains") {
+		t.Errorf("first step body starts %q", first.Body)
+	}
+	if !strings.Contains(first.Body, "The **hunk** header") {
+		t.Error("the second paragraph was dropped")
+	}
+}
+
+func TestParseStepsLeavesAClosingSectionUnnumbered(t *testing.T) {
+	steps := ParseSteps(groupedNarrative)
+
+	last := steps[len(steps)-1]
+	if last.Number != 0 {
+		t.Errorf("closing section number = %d, want 0 — it does not advance the reading order", last.Number)
+	}
+	if last.Title != "Worth a close look" {
+		t.Errorf("closing section title = %q", last.Title)
+	}
+	if len(last.Files) != 0 {
+		t.Errorf("closing section files = %v, want none: its bullet is prose, not a path line", last.Files)
+	}
+	if !strings.Contains(last.Body, "swallows a short read") {
+		t.Errorf("closing section body = %q", last.Body)
+	}
+}
+
+func TestParseStepsKeepsProseThatOpensWithAnIdentifier(t *testing.T) {
+	steps := ParseSteps("## 1. A step\n\n`ParseDiff` is the entry point.\n")
+
+	if len(steps) != 1 {
+		t.Fatalf("parsed %d steps, want 1", len(steps))
+	}
+	if len(steps[0].Files) != 0 {
+		t.Errorf("files = %v, want none — that line is a sentence, not a path list", steps[0].Files)
+	}
+	if steps[0].Body != "`ParseDiff` is the entry point." {
+		t.Errorf("body = %q", steps[0].Body)
+	}
+}
+
+func TestParseStepsFallsBackToOneStepWithoutHeadings(t *testing.T) {
+	steps := ParseSteps("A provider that ignored the format entirely.\n")
+
+	if len(steps) != 1 {
+		t.Fatalf("parsed %d steps, want the whole narrative as one", len(steps))
+	}
+	if steps[0].Title != "" || steps[0].Number != 0 {
+		t.Errorf("step = %+v, want an untitled one", steps[0])
+	}
+	if steps[0].Body != "A provider that ignored the format entirely." {
+		t.Errorf("body = %q", steps[0].Body)
+	}
+}
+
+func TestWalkthroughStepsReadsItsOwnBody(t *testing.T) {
+	w := Walkthrough{Body: groupedNarrative}
+
+	if got := len(w.Steps()); got != 3 {
+		t.Errorf("Steps() = %d steps, want 3", got)
+	}
+	if len(Walkthrough{}.Steps()) != 0 {
+		t.Error("an empty walkthrough parsed into steps")
+	}
+}

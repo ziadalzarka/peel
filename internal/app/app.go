@@ -44,12 +44,13 @@ type App struct {
 type Option func(*config)
 
 type config struct {
-	runner  exec.Runner
-	ai      *ai.Registry
-	forges  *forge.Registry
-	aiOpts  []ai.ClaudeCodeOption
-	ghOpts  []forge.GitHubOption
-	storeOp []store.Option
+	runner    exec.Runner
+	ai        *ai.Registry
+	forges    *forge.Registry
+	aiOpts    []ai.ClaudeCodeOption
+	codexOpts []ai.CodexOption
+	ghOpts    []forge.GitHubOption
+	storeOp   []store.Option
 }
 
 // WithRunner replaces the command runner used for git and every provider.
@@ -70,6 +71,11 @@ func WithForgeRegistry(r *forge.Registry) Option {
 // WithClaudeCodeOptions passes options through to the default AI provider.
 func WithClaudeCodeOptions(opts ...ai.ClaudeCodeOption) Option {
 	return func(c *config) { c.aiOpts = append(c.aiOpts, opts...) }
+}
+
+// WithCodexOptions passes options through to the default Codex AI provider.
+func WithCodexOptions(opts ...ai.CodexOption) Option {
+	return func(c *config) { c.codexOpts = append(c.codexOpts, opts...) }
 }
 
 // WithGitHubOptions passes options through to the default forge provider.
@@ -110,7 +116,11 @@ func Open(ctx context.Context, dir string, opts ...Option) (*App, error) {
 	aiRegistry := cfg.ai
 	if aiRegistry == nil {
 		claudeOpts := append([]ai.ClaudeCodeOption{ai.WithWorkdir(root)}, cfg.aiOpts...)
-		aiRegistry = ai.NewRegistry(ai.NewClaudeCode(cfg.runner, claudeOpts...))
+		codexOpts := append([]ai.CodexOption{ai.WithCodexWorkdir(root)}, cfg.codexOpts...)
+		aiRegistry = ai.NewRegistry(
+			ai.NewClaudeCode(cfg.runner, claudeOpts...),
+			ai.NewCodex(cfg.runner, codexOpts...),
+		)
 	}
 	forgeRegistry := cfg.forges
 	if forgeRegistry == nil {

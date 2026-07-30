@@ -194,8 +194,9 @@ func TestNoArgsLaunchesTUI(t *testing.T) {
 	if !h.tuiRan {
 		t.Error("the TUI was not launched")
 	}
-	if h.tuiOptions != (cli.UIOptions{}) {
-		t.Errorf("UI options = %+v, want the defaults", h.tuiOptions)
+	want := cli.UIOptions{Follow: true}
+	if h.tuiOptions != want {
+		t.Errorf("UI options = %+v, want %+v", h.tuiOptions, want)
 	}
 }
 
@@ -203,12 +204,24 @@ func TestDisplayFlagsReachTheTUI(t *testing.T) {
 	h := newHarness(t)
 	h.dirty()
 
-	if code := h.run("--watch", "--split"); code != 0 {
+	if code := h.run("--no-watch", "--split", "--provider", "codex"); code != 0 {
 		t.Fatalf("exit code = %d: %s", code, h.err())
 	}
-	want := cli.UIOptions{Follow: true, Split: true}
+	want := cli.UIOptions{Follow: false, Split: true, Provider: "codex"}
 	if h.tuiOptions != want {
 		t.Errorf("UI options = %+v, want %+v", h.tuiOptions, want)
+	}
+}
+
+func TestGlobalProviderReachesWalkthroughCommand(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+
+	if code := h.run("--provider", "fake-ai", "walkthrough"); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, h.err())
+	}
+	if h.ai.calls != 1 {
+		t.Errorf("provider called %d times, want 1", h.ai.calls)
 	}
 }
 

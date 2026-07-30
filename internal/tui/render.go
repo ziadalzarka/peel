@@ -14,20 +14,13 @@ import (
 // lineNumWidth is the width of one line-number column in the gutter.
 const lineNumWidth = 4
 
-// RowState is how the cursor and any line selection affect one row.
+// tabWidth is how far a tab advances the cursor.
+const tabWidth = 8
+
+// RowState is how the cursor affects one row.
 type RowState struct {
-	// Cursor marks the row the browse cursor rests on.
+	// Cursor marks the row the cursor rests on.
 	Cursor bool
-	// Focus marks the line the line-selection cursor rests on.
-	Focus bool
-	// Selecting reports that line selection is under way. Every line row then
-	// reserves the selection column, whether or not it can be selected, so the
-	// diff does not shift under the reviewer.
-	Selecting bool
-	// Selectable marks a line eligible for line-level staging.
-	Selectable bool
-	// Selected marks a line chosen for line-level staging.
-	Selected bool
 }
 
 // Renderer turns document rows into terminal lines.
@@ -65,6 +58,10 @@ func (r *Renderer) Row(d Document, i int, st RowState) string {
 		return r.note(row, st)
 	case RowComment:
 		return r.comment(d, row, st)
+	case RowStep:
+		return r.step(d, row, st)
+	case RowStepText:
+		return r.stepText(row)
 	default:
 		// A separator still has to fill its width, or the pane beside it shows
 		// through.
@@ -90,7 +87,7 @@ func (r *Renderer) file(d Document, row Row, st RowState) string {
 
 	summary := fmt.Sprintf("%s +%d -%d", fileLabel(entry), added, removed)
 	return r.fit(strings.Join([]string{
-		r.marker(st),
+		" ",
 		r.stateSymbol(entry.State()),
 		r.theme.Dim.Render(arrow),
 		name,
@@ -108,12 +105,23 @@ func (r *Renderer) hunk(d Document, row Row, st RowState) string {
 	if ref.Staged {
 		origin = r.theme.Staged.Render("index")
 	}
-	return r.fit(r.marker(st) + "  " + style.Render(ref.Hunk.Header()) + "  " + origin)
+	title := ref.Hunk.Section
+	if title == "" {
+		title = "⋯"
+	}
+	return r.fit(r.marker(st) + codeIndent(d.Layout) + style.Render(title) + "  " + origin)
+}
+
+func codeIndent(l Layout) string {
+	if l == LayoutSplit {
+		return strings.Repeat(" ", lineNumWidth+2)
+	}
+	return strings.Repeat(" ", 2*lineNumWidth+2)
 }
 
 func (r *Renderer) line(d Document, row Row, st RowState) string {
 	ref := d.Hunks[row.Hunk]
-	prefix := r.marker(st) + r.selectSymbol(st)
+	prefix := r.marker(st)
 	if d.Layout == LayoutSplit {
 		return r.fit(prefix + r.splitBody(ref, row))
 	}
@@ -151,24 +159,59 @@ func (r *Renderer) halfLine(ref HunkRef, index int, old bool, width int) string 
 // add/remove signal do not fight over the same characters.
 func (r *Renderer) content(path string, l git.Line) string {
 	origin := string(l.Kind.Origin())
+	text := expandTabs(l.Text)
 	if l.Kind == git.LineNoNewline {
-		return r.theme.Dim.Render(origin + l.Text)
+		return r.theme.Dim.Render(origin + text)
 	}
 	if r.syntax.Active() {
-		return r.styleFor(l).Render(origin) + r.syntax.Line(path, l.Text)
+		return r.styleFor(l).Render(origin) + r.syntax.Line(path, text)
 	}
-	return r.styleFor(l).Render(origin + l.Text)
+	return r.styleFor(l).Render(origin + text)
+}
+
+// expandTabs replaces tabs with spaces up to the next tab stop.
+//
+// It has to happen before anything measures the line: a tab is zero columns to
+// ansi.StringWidth but eight on screen, so a tab-indented line left as it is
+// gets padded to the pane width, overflows once the terminal expands it, and
+// wraps — which makes the frame a line taller than the terminal and scrolls the
+// whole display on every repaint.
+//
+// Stops are counted from the start of the text rather than the start of the
+// row, so the code on a `+` line and the code on a `-` line indent alike.
+func expandTabs(s string) string {
+	if !strings.Contains(s, "\t") {
+		return s
+	}
+	var b strings.Builder
+	col := 0
+	for _, c := range s {
+		switch c {
+		case '\t':
+			n := tabWidth - col%tabWidth
+			b.WriteString(strings.Repeat(" ", n))
+			col += n
+		case '\n':
+			b.WriteRune(c)
+			col = 0
+		default:
+			b.WriteRune(c)
+			col += ansi.StringWidth(string(c))
+		}
+	}
+	return b.String()
 }
 
 func (r *Renderer) note(row Row, st RowState) string {
-	return r.fit(r.marker(st) + "  " + r.theme.Note.Render(row.Text))
+	return r.fit(r.marker(st) + "  " + r.theme.Note.Render(expandTabs(row.Text)))
 }
 
 func (r *Renderer) comment(d Document, row Row, st RowState) string {
 	c := d.Comments[row.Comment]
-	body := r.theme.Comment.Render(row.Text)
+	text := expandTabs(row.Text)
+	body := r.theme.Comment.Render(text)
 	if c.Resolved {
-		body = r.theme.Resolved.Render(row.Text)
+		body = r.theme.Resolved.Render(text)
 	}
 
 	bar := r.theme.Comment.Render("┃")
@@ -196,25 +239,10 @@ func commentTag(c store.Comment) string {
 }
 
 func (r *Renderer) marker(st RowState) string {
-	if st.Cursor || st.Focus {
+	if st.Cursor {
 		return r.theme.Cursor.Render("▌")
 	}
 	return " "
-}
-
-// selectSymbol shows a line's selection state. The column exists only while
-// selecting, so the diff stays uncluttered the rest of the time.
-func (r *Renderer) selectSymbol(st RowState) string {
-	switch {
-	case !st.Selecting:
-		return ""
-	case !st.Selectable:
-		return " "
-	case st.Selected:
-		return r.theme.Selected.Render("◉")
-	default:
-		return r.theme.Dim.Render("○")
-	}
 }
 
 func (r *Renderer) stateSymbol(s git.StageState) string {

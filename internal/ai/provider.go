@@ -1,8 +1,8 @@
 // Package ai generates written narratives of a changeset.
 //
-// Providers are pluggable: peel ships one that shells out to the Claude Code
-// CLI, and adding another means implementing Provider and registering it. No
-// other package refers to a concrete provider.
+// Providers are pluggable: peel ships CLI-backed Claude Code and Codex
+// implementations, and adding another means implementing Provider and
+// registering it. No other package refers to a concrete provider.
 package ai
 
 import (

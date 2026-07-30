@@ -104,18 +104,6 @@ func (h Hunk) Stats() (added, removed int) {
 	return added, removed
 }
 
-// ChangedLineIndexes returns the positions in Lines that are additions or
-// removals. These are the only lines a user can select for line-level staging.
-func (h Hunk) ChangedLineIndexes() []int {
-	var out []int
-	for i, l := range h.Lines {
-		if l.IsChange() {
-			out = append(out, i)
-		}
-	}
-	return out
-}
-
 // FileDiff is the complete set of changes to a single file.
 type FileDiff struct {
 	// OldPath is the path before the change; equal to NewPath unless renamed.
@@ -149,10 +137,6 @@ func (f FileDiff) Stats() (added, removed int) {
 	}
 	return added, removed
 }
-
-// CanStageHunks reports whether individual hunks of this file may be staged.
-// Binary files can only be staged whole.
-func (f FileDiff) CanStageHunks() bool { return !f.IsBinary && len(f.Hunks) > 0 }
 
 // Diff is a parsed set of file changes — the output of one `git diff`.
 type Diff struct {

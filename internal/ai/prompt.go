@@ -6,27 +6,63 @@ import (
 )
 
 // defaultInstruction is the task given to a provider when the caller does not
-// supply one. It asks for orientation rather than a restatement of the diff:
-// the diff is already on screen, so a list of what changed adds nothing.
-const defaultInstruction = `Write a short walkthrough of this changeset for the engineer who is about to review it.
+// supply one. It asks for a guided tour of the changed code in reading order,
+// not a summary: the reviewer wants to be walked through the pieces, so an
+// overall description of the changeset's intent adds nothing they cannot get
+// from the branch name.
+const defaultInstruction = `Walk the engineer through this changeset step by step, so they can read the
+changed code in an order that makes sense.
 
-Structure it as markdown:
+Group the changed files into steps. Each step is one coherent piece of the
+change together with the files it touches — usually two or three files that
+changed for the same reason. Order the steps so each one sets up the next:
+start at the foundation the change rests on (a type, a parsed structure, a
+schema) and follow it outward to the code that consumes it, ending at the
+surface the user or caller sees. Put a file in two steps if it genuinely
+changed for two different reasons.
 
-## What changed
-Two or three sentences on the intent of the change as a whole — what it is
-trying to accomplish, not a file-by-file list.
+Every file in the changed-files list below must appear in at least one step.
+The steps are the reviewer's map of the change, so a file missing from all of
+them is a file they will not know to read.
+
+Write one markdown section per step, numbered. The line under the heading is
+nothing but the step's file paths, each in backticks, separated by " · " — it
+is read by the tool, so keep prose off it:
+
+## 1. A short title for what this step does
+` + "`path/to/file.go`" + ` · ` + "`path/to/other.go`" + `
+
+Then walk through the code itself. Name the functions, types, fields and
+constants that changed, and say what the new code does that the old code did
+not: the field that was added and what reads it, the branch that now handles a
+case that used to fall through, the call that moved, the condition that
+inverted. When the diff changes behaviour, describe the behaviour rather than
+the syntax — say what input now takes a different path, not that an if
+statement was added. Where a step only makes sense given something in an
+earlier step, say so explicitly. Aim for 60 to 150 words per step.
+
+After the steps, close with these two, unnumbered and with no path line:
 
 ## Worth a close look
-The two or three specific places a reviewer should slow down, each with the
-file path and why it matters: risky logic, a changed invariant, error handling,
-anything load-bearing.
+The two or three places a reviewer should slow down, each with its file path
+and the reason: risky logic, a changed invariant, error handling that swallows
+something, anything load-bearing.
 
 ## Questions
-Anything genuinely ambiguous from the diff alone. Omit this section if there is
-nothing real to ask.
+Anything genuinely ambiguous from the diff alone. Omit this section entirely if
+there is nothing real to ask.
 
-Be concrete and reference actual identifiers and paths. Do not restate the diff
-line by line — the reviewer can already see it. Keep it under 400 words.`
+Do not open with a summary of the changeset as a whole, and do not restate the
+diff line by line — the reviewer can already see it and wants to be guided
+through it. Reference real identifiers and real paths throughout.
+
+Use as many steps as the change needs, up to about seven. Prefer five clear
+steps over one crowded one, but on a large changeset group more coarsely rather
+than emitting a section per file: fold the mechanical follow-on edits — call
+sites updated for a renamed symbol, generated files, test fixtures moving with
+the code they cover — into the step that caused them, and say that is what they
+are instead of walking each one. Folding a file in still means listing it on
+that step's path line.`
 
 // MaxDiffBytes caps how much diff is sent to a provider. A very large changeset
 // would otherwise blow past context limits and fail; truncating produces a

@@ -14,7 +14,7 @@ import (
 func runWalkthrough(ctx context.Context, c *CLI, args []string) error {
 	fs := newFlagSet("walkthrough")
 	regen := fs.Bool("regen", false, "ignore the cached narrative and generate a new one")
-	provider := fs.String("provider", "", "AI provider to use (default: first available)")
+	provider := fs.String("provider", c.ui.Provider, "AI provider to use (default: first available)")
 	instruction := fs.String("prompt", "", "replace the default instruction given to the provider")
 	if err := parse(fs, args); err != nil {
 		return err

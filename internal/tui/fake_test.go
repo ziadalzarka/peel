@@ -60,14 +60,24 @@ func sessionOf(entries []git.FileEntry) *app.Session {
 	return &app.Session{Title: "working tree", Files: entries, Stageable: true}
 }
 
+// groupedWalkthrough is the shape the default instruction asks a provider for:
+// a numbered step, the files it covers, then the explanation.
+const groupedWalkthrough = "## 1. The function alpha exports\n" +
+	"`alpha.go`\n" +
+	"\n" +
+	"`One` returns 2 now, and `Two` arrives beside it.\n" +
+	"\n" +
+	"## 2. The fixture that follows it\n" +
+	"`beta.txt`\n" +
+	"\n" +
+	"The single line moves from old to new.\n"
+
 // fakeBackend records every call so tests can assert on what the UI asked for
 // rather than on what git did with it.
 type fakeBackend struct {
 	session  *app.Session
 	comments []store.Comment
 
-	staged        [][]git.Selection
-	unstaged      [][]git.Selection
 	stagedFiles   []string
 	unstagedFiles []string
 	stageAll      int
@@ -95,7 +105,7 @@ type fakeBackend struct {
 }
 
 func newFakeBackend(s *app.Session) *fakeBackend {
-	return &fakeBackend{session: s, resolved: map[string]bool{}, walkBody: "## What changed\n\nplenty"}
+	return &fakeBackend{session: s, resolved: map[string]bool{}, walkBody: groupedWalkthrough}
 }
 
 func (f *fakeBackend) Reload(context.Context) (*app.Session, error) {
@@ -155,22 +165,6 @@ func (f *fakeBackend) SetResolved(id string, resolved bool) error {
 			f.comments[i].Resolved = resolved
 		}
 	}
-	return nil
-}
-
-func (f *fakeBackend) Stage(_ context.Context, sels []git.Selection) error {
-	if err := f.take(); err != nil {
-		return err
-	}
-	f.staged = append(f.staged, sels)
-	return nil
-}
-
-func (f *fakeBackend) Unstage(_ context.Context, sels []git.Selection) error {
-	if err := f.take(); err != nil {
-		return err
-	}
-	f.unstaged = append(f.unstaged, sels)
 	return nil
 }
 

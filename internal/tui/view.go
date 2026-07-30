@@ -10,10 +10,17 @@ import (
 const (
 	headerHeight = 1
 	footerHeight = 2
-	// filePaneMin is the narrowest useful file pane; below it the pane is
-	// dropped entirely rather than shown truncated to uselessness.
+	// filePaneMin is the narrowest useful file pane, and the width the pane
+	// holds on to as the terminal narrows — the file list stays on screen
+	// rather than coming and going with the window.
 	filePaneMin = 14
 	filePaneMax = 30
+	// diffPaneMin is the narrowest diff worth keeping the pane beside. Below
+	// it the pane is dropped, since a diff squeezed past this is unreadable.
+	diffPaneMin = 30
+	// filePaneNameMin is the room a path needs before the pane is worth
+	// spending width on the +/- counts as well.
+	filePaneNameMin = 10
 )
 
 // View satisfies tea.Model.
@@ -24,8 +31,6 @@ func (m *Model) View() string {
 	switch m.mode {
 	case modeHelp:
 		return m.frame(m.helpView())
-	case modeWalkthrough:
-		return m.frame(m.walkView())
 	case modeComment:
 		return m.frame(m.commentView())
 	default:
@@ -43,11 +48,11 @@ func (m *Model) bodyHeight() int {
 }
 
 func (m *Model) filePaneWidth() int {
-	if m.width < 72 || len(m.doc.Files) == 0 {
+	if len(m.doc.Files) == 0 {
 		return 0
 	}
-	w := min(m.width/4, filePaneMax)
-	if w < filePaneMin {
+	w := min(max(m.width/4, filePaneMin), filePaneMax)
+	if m.width-w-1 < diffPaneMin {
 		return 0
 	}
 	return w
@@ -70,6 +75,13 @@ func (m *Model) headerView() string {
 	}, "  ")
 
 	right := []string{m.theme.Dim.Render(m.layout.String())}
+	if len(m.doc.Steps) > 0 {
+		walk := []string{m.theme.Title.Render("walkthrough"), m.theme.Dim.Render(m.doc.StepSummary())}
+		if m.walkStale {
+			walk = append(walk, m.theme.Partial.Render("stale"))
+		}
+		right = append(walk, right...)
+	}
 	if m.follow {
 		right = append([]string{m.theme.Status.Render("following")}, right...)
 	}
@@ -99,16 +111,12 @@ func (m *Model) footerView() string {
 // hints lists the keys that do something in the current mode.
 func (m *Model) hints() string {
 	switch m.mode {
-	case modeLineSelect:
-		return "j/k line · space select · a all · n none · s stage · u unstage · c comment · esc done"
 	case modeComment:
 		return "ctrl+s save · esc cancel"
-	case modeWalkthrough:
-		return "j/k scroll · r regenerate · esc close"
 	case modeHelp:
 		return "any key to close"
 	default:
-		return `j/k hunk · J/K file · s stage · u unstage · v lines · c comment · \ layout · w walkthrough · ? help · q quit`
+		return `j/k hunk · ↓/↑ line · J/K file · s stage file · u unstage · tab fold · c comment · \ layout · w walkthrough · ? help · q quit`
 	}
 }
 
@@ -135,14 +143,8 @@ func (m *Model) diffLines(height int) []string {
 	if m.doc.Len() == 0 {
 		out = append(out, fit(" "+m.theme.Note.Render(m.emptyMessage()), width))
 	} else {
-		focus := -1
-		if m.mode == modeLineSelect {
-			if index, ok := m.focusedLine(); ok {
-				focus = index
-			}
-		}
 		for i := m.top; i < m.top+height && i < m.doc.Len(); i++ {
-			out = append(out, m.renderer.Row(m.doc, i, m.rowState(i, focus)))
+			out = append(out, m.renderer.Row(m.doc, i, RowState{Cursor: i == m.cursor}))
 		}
 	}
 	return padLines(out, height, width)
@@ -155,41 +157,19 @@ func (m *Model) emptyMessage() string {
 	return "nothing to review"
 }
 
-// rowState decides how a row is marked, which is the only place the cursor and
-// the line selection meet the renderer.
-func (m *Model) rowState(i, focus int) RowState {
-	row := m.doc.Rows[i]
-	selecting := m.mode == modeLineSelect
-	st := RowState{Cursor: i == m.cursor && !selecting, Selecting: selecting}
-
-	if !selecting || row.Kind != RowLine || row.Hunk != m.lineHunk || row.Left < 0 {
-		return st
-	}
-	lines := m.doc.Hunks[m.lineHunk].Hunk.Lines
-	if row.Left >= len(lines) {
-		return st
-	}
-	st.Selectable = lines[row.Left].IsChange()
-	st.Selected = m.selected[row.Left]
-	st.Focus = row.Left == focus
-	return st
-}
-
 // fileLines draws the file overview, or nil when the pane does not fit.
+//
+// The pane scrolls on its own window, m.fileTop, so it can be moved without
+// moving the diff and vice versa.
 func (m *Model) fileLines(height int) []string {
 	width := m.filePaneWidth()
 	if width == 0 {
 		return nil
 	}
 
-	current := m.doc.FileAt(m.cursor)
-	start := 0
-	if current >= height {
-		start = current - height + 1
-	}
-
+	current := m.markedFile()
 	out := make([]string, 0, height)
-	for i := start; i < start+height; i++ {
+	for i := m.fileTop; i < m.fileTop+height; i++ {
 		if i >= len(m.doc.Files) {
 			out = append(out, strings.Repeat(" ", width))
 			continue
@@ -207,6 +187,12 @@ func (m *Model) fileRow(index int, current bool, width int) string {
 	symbol := m.renderer.stateSymbol(entry.State())
 	// 3 for the marker and the two spaces around the symbol, 1 for the gap.
 	room := width - 4 - ansi.StringWidth(counts) - 1
+	// Now that the pane stays on screen at narrow widths, it can end up with
+	// room for the counts or for the path but not both. The path wins: the
+	// file header in the diff carries the counts anyway.
+	if room < filePaneNameMin {
+		counts, room = "", width-4
+	}
 	name := shorten(entry.Path, max(room, 4))
 
 	marker := " "
@@ -216,13 +202,16 @@ func (m *Model) fileRow(index int, current bool, width int) string {
 		styled = m.theme.Cursor.Render(name)
 	}
 	line := marker + symbol + " " + styled
+	if counts == "" {
+		return fit(line, width)
+	}
 	return fit(line, width-ansi.StringWidth(counts)-1) + m.theme.Dim.Render(counts) + " "
 }
 
 func (m *Model) commentView() string {
 	width := m.width
 	lines := []string{
-		fit(" "+m.theme.Header.Render("Comment on ")+m.theme.FileHead.Render(m.pending.location()), width),
+		fit(" "+m.theme.Dim.Render("Comment on ")+m.theme.FileHead.Render(m.pending.location()), width),
 		fit("", width),
 	}
 	for _, l := range strings.Split(m.input.View(), "\n") {
@@ -231,38 +220,25 @@ func (m *Model) commentView() string {
 	return strings.Join(padLines(lines, m.bodyHeight(), width), "\n")
 }
 
-func (m *Model) walkView() string {
-	if !m.walkLoaded {
-		note := "generating a walkthrough…"
-		if m.err != nil {
-			note = "no walkthrough available"
-		}
-		return strings.Join(padLines([]string{fit(" "+m.theme.Note.Render(note), m.width)}, m.bodyHeight(), m.width), "\n")
-	}
-	lines := strings.Split(m.walk.View(), "\n")
-	for i, l := range lines {
-		lines[i] = fit(l, m.width)
-	}
-	return strings.Join(padLines(lines, m.bodyHeight(), m.width), "\n")
-}
-
 // helpBindings is the single source of truth for the help screen. The footer
 // hints are deliberately shorter; this is the full list.
 var helpBindings = []struct{ keys, action string }{
-	{"j / k", "next / previous hunk"},
+	{"j / k", "next / previous hunk, file or comment"},
+	{"↓ / ↑", "move the cursor one line (the wheel scrolls the diff)"},
 	{"J / K", "next / previous file"},
-	{"g / G", "first / last hunk"},
+	{"] / [", "scroll the file list on its own"},
+	{"g / G", "first / last row"},
 	{"ctrl+d / ctrl+u", "half a page down / up"},
-	{"tab", "collapse or expand the file"},
-	{"s", "stage the hunk, or the file on a file header"},
-	{"u", "unstage the hunk or the file"},
+	{"tab", "collapse the file, or fold a walkthrough note away"},
+	{"s", "stage the file the cursor is in — it folds away once staged"},
+	{"u", "unstage that file, opening it again"},
 	{"a / U", "stage everything / unstage everything"},
-	{"v", "select individual lines to stage"},
-	{"c", "comment at the cursor"},
+	{"c", "comment at the cursor, changed line or not"},
 	{"x", "resolve or reopen the comment at the cursor"},
 	{"D", "delete the comment at the cursor"},
 	{`\`, "toggle unified and side-by-side"},
-	{"w", "walkthrough (r regenerates)"},
+	{"w", "walkthrough: group the diff into steps, with a note before each"},
+	{"W", "regenerate the walkthrough"},
 	{"r", "reload from git"},
 	{"f", "follow: re-read the repository as it changes"},
 	{"? / q", "help / quit"},

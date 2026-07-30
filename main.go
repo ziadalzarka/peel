@@ -40,5 +40,8 @@ func runTUI(ctx context.Context, a *app.App, s *app.Session, ui cli.UIOptions) e
 	if ui.Split {
 		opts = append(opts, tui.WithLayout(tui.LayoutSplit))
 	}
+	if ui.Provider != "" {
+		opts = append(opts, tui.WithProvider(ui.Provider))
+	}
 	return tui.Run(ctx, a, s, opts...)
 }

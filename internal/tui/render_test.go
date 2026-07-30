@@ -128,8 +128,21 @@ func TestRenderHunkHeaderNamesWhereTheChangeLives(t *testing.T) {
 	if !strings.Contains(second, "worktree") {
 		t.Errorf("unstaged hunk header = %q, want it marked worktree", second)
 	}
-	if !strings.Contains(first, "@@ -1,4 +1,5 @@") {
-		t.Errorf("hunk header = %q, want the @@ range", first)
+	if strings.Contains(first, "@@") {
+		t.Errorf("hunk header = %q, want the @@ range dropped", first)
+	}
+	if !strings.Contains(first, "package alpha") {
+		t.Errorf("hunk header = %q, want git's section context", first)
+	}
+}
+
+func TestRenderHunkHeaderWithoutSectionStillSeparates(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+	r := plainRenderer(80)
+
+	got := r.Row(doc, doc.RowOfHunk(1), RowState{})
+	if !strings.Contains(got, "⋯") {
+		t.Errorf("sectionless hunk header = %q, want a separator mark", got)
 	}
 }
 
@@ -168,53 +181,37 @@ func TestRenderCommentShowsAuthorAndResolvedState(t *testing.T) {
 	}
 }
 
-func TestRenderSelectionSymbolsOnlyAppearWhileSelecting(t *testing.T) {
+// The cursor rests on diff lines now, so the marker has to appear on a line row
+// without shifting the row it marks.
+func TestRenderCursorMarksADiffLineWithoutShiftingIt(t *testing.T) {
 	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
 	r := plainRenderer(60)
 
 	row := -1
 	for i, x := range doc.Rows {
-		if x.Kind == RowLine && doc.Hunks[x.Hunk].Hunk.Lines[x.Left].IsChange() {
+		if x.Kind == RowLine {
 			row = i
 			break
 		}
 	}
 	if row < 0 {
-		t.Fatal("no changed line row")
+		t.Fatal("no diff line row")
 	}
 
 	plain := r.Row(doc, row, RowState{})
-	if strings.ContainsAny(plain, "◉○") {
-		t.Errorf("row outside line-select mode shows a selection symbol: %q", plain)
+	marked := r.Row(doc, row, RowState{Cursor: true})
+	if strings.Contains(plain, "▌") {
+		t.Errorf("a row the cursor is not on shows the marker: %q", plain)
 	}
-	if got := r.Row(doc, row, RowState{Selecting: true, Selectable: true}); !strings.Contains(got, "○") {
-		t.Errorf("selectable row = %q, want ○", got)
+	if !strings.Contains(marked, "▌") {
+		t.Errorf("the cursor row = %q, want the marker", marked)
 	}
-	if got := r.Row(doc, row, RowState{Selecting: true, Selectable: true, Selected: true}); !strings.Contains(got, "◉") {
-		t.Errorf("selected row = %q, want ◉", got)
+	if ansi.StringWidth(plain) != ansi.StringWidth(marked) {
+		t.Errorf("the marker changed the row width: %d without, %d with",
+			ansi.StringWidth(plain), ansi.StringWidth(marked))
 	}
-}
-
-// While selecting, a context line reserves the selection column too, so the
-// whole hunk keeps its alignment instead of changed lines jumping right.
-func TestRenderSelectionColumnKeepsLinesAligned(t *testing.T) {
-	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
-	r := plainRenderer(60)
-
-	var gutters []string
-	for i, row := range doc.Rows {
-		if row.Kind != RowLine || row.Hunk != 0 {
-			continue
-		}
-		changed := doc.Hunks[0].Hunk.Lines[row.Left].IsChange()
-		line := r.Row(doc, i, RowState{Selecting: true, Selectable: changed})
-		gutters = append(gutters, line[:strings.IndexAny(line, "+- ")])
-	}
-
-	for i, got := range gutters {
-		if len(got) != len(gutters[0]) {
-			t.Fatalf("line %d has a %d-cell prefix, line 0 has %d", i, len(got), len(gutters[0]))
-		}
+	if strings.TrimPrefix(marked, "▌") != strings.TrimPrefix(plain, " ") {
+		t.Errorf("the marker shifted the line body:\n%q\n%q", marked, plain)
 	}
 }
 

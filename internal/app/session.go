@@ -158,7 +158,8 @@ func (a *App) Walkthrough(ctx context.Context, s *Session, req WalkthroughReques
 		if err != nil {
 			return store.Walkthrough{}, err
 		}
-		if ok && cached.Fresh(s.Target, fingerprint) {
+		providerMatches := req.Provider == "" || cached.Provider == req.Provider
+		if ok && cached.Fresh(s.Target, fingerprint) && providerMatches {
 			return cached, nil
 		}
 	}

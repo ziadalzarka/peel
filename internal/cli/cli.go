@@ -26,6 +26,8 @@ type UIOptions struct {
 	Follow bool
 	// Split starts in the side-by-side layout.
 	Split bool
+	// Provider selects the AI provider used for the walkthrough.
+	Provider string
 }
 
 // TUIRunner launches the interactive review UI.
@@ -91,7 +93,9 @@ func (c *CLI) Run(ctx context.Context, args []string) int {
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&c.pr, "pr", "", "review a pull request instead of the working tree")
 	fs.StringVar(&c.forgeName, "forge", "", "forge provider to use (default: first available)")
-	fs.BoolVar(&c.ui.Follow, "watch", false, "re-read the repository as it changes")
+	fs.StringVar(&c.ui.Provider, "provider", "", "AI provider to use for walkthroughs (default: first available)")
+	fs.BoolVar(&c.ui.Follow, "watch", true, "re-read the repository as it changes (default)")
+	noWatch := fs.Bool("no-watch", false, "start with repository following disabled")
 	fs.BoolVar(&c.ui.Split, "split", false, "start in the side-by-side layout")
 	showVersion := fs.Bool("version", false, "print the version and exit")
 	showHelp := fs.Bool("help", false, "show this help")
@@ -101,6 +105,9 @@ func (c *CLI) Run(ctx context.Context, args []string) int {
 		fmt.Fprintf(c.Stderr, "peel: %v\n\n", err)
 		c.printUsage(c.Stderr)
 		return 2
+	}
+	if *noWatch {
+		c.ui.Follow = false
 	}
 	if *showHelp {
 		c.printUsage(c.Stdout)
@@ -217,7 +224,10 @@ Commands:
 Flags:
   --pr <ref>       review a pull request: a number, owner/repo#number, or a URL
   --forge <name>   forge provider to use (default: first available)
-  --watch          re-read the repository as it changes
+  --provider <name>
+                   AI provider to use for walkthroughs (default: first available)
+  --watch          re-read the repository as it changes (default)
+  --no-watch       start with repository following disabled
   --split          start in the side-by-side layout
   --version        print the version and exit
   -h, --help       show this help

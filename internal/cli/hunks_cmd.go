@@ -142,7 +142,7 @@ func writeHunkTable(w io.Writer, hunks []hunkJSON, s *app.Session) error {
 			state = "staged"
 		}
 		if h.Binary {
-			fmt.Fprintf(w, "  %-8s binary file — whole-file staging only\n", state)
+			fmt.Fprintf(w, "  %-8s binary file — no diff to show\n", state)
 			continue
 		}
 		fmt.Fprintf(w, "  %-8s %+d/-%d  %s\n", state, h.Added, h.Removed, h.ID)

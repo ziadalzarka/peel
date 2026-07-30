@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/ziadalzarka/peel/internal/app"
-	"github.com/ziadalzarka/peel/internal/git"
 	"github.com/ziadalzarka/peel/internal/store"
 )
 
@@ -22,8 +21,6 @@ type Backend interface {
 	RemoveComment(id string) error
 	SetResolved(id string, resolved bool) error
 
-	Stage(ctx context.Context, sels []git.Selection) error
-	Unstage(ctx context.Context, sels []git.Selection) error
 	StageFile(ctx context.Context, path string) error
 	UnstageFile(ctx context.Context, path string) error
 	StageAll(ctx context.Context) error
@@ -35,13 +32,18 @@ type Backend interface {
 
 // appBackend adapts an App and a session to the Backend interface.
 type appBackend struct {
-	app     *app.App
-	session *app.Session
+	app      *app.App
+	session  *app.Session
+	provider string
 }
 
 // NewBackend returns the Backend the real UI runs against.
-func NewBackend(a *app.App, s *app.Session) Backend {
-	return &appBackend{app: a, session: s}
+func NewBackend(a *app.App, s *app.Session, provider ...string) Backend {
+	name := ""
+	if len(provider) > 0 {
+		name = provider[0]
+	}
+	return &appBackend{app: a, session: s, provider: name}
 }
 
 // Reload re-reads the working tree. A pull request is not in this working tree,
@@ -77,20 +79,6 @@ func (b *appBackend) SetResolved(id string, resolved bool) error {
 	return err
 }
 
-func (b *appBackend) Stage(ctx context.Context, sels []git.Selection) error {
-	if err := b.stageable(); err != nil {
-		return err
-	}
-	return b.app.Stager.Stage(ctx, sels)
-}
-
-func (b *appBackend) Unstage(ctx context.Context, sels []git.Selection) error {
-	if err := b.stageable(); err != nil {
-		return err
-	}
-	return b.app.Stager.Unstage(ctx, sels)
-}
-
 func (b *appBackend) StageFile(ctx context.Context, path string) error {
 	if err := b.stageable(); err != nil {
 		return err
@@ -120,7 +108,10 @@ func (b *appBackend) UnstageAll(ctx context.Context) error {
 }
 
 func (b *appBackend) Walkthrough(ctx context.Context, regenerate bool) (string, error) {
-	got, err := b.app.Walkthrough(ctx, b.session, app.WalkthroughRequest{Regenerate: regenerate})
+	got, err := b.app.Walkthrough(ctx, b.session, app.WalkthroughRequest{
+		Provider:   b.provider,
+		Regenerate: regenerate,
+	})
 	if err != nil {
 		return "", err
 	}

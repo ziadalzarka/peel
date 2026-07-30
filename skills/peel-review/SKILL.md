@@ -27,9 +27,10 @@ every command just needs to run inside the repository.
 peel does not stage from the command line, on purpose. `peel hunks add`,
 `stage`, `unstage` and `rm` all refuse and point here.
 
-Staging is the user's decision, made in the TUI against a hunk they just read.
-If you need to stage something, use `git add` — say so first, and only when the
-user asked for it.
+Staging is the user's decision, made in the TUI against a file they just read,
+and it is whole-file: peel stages files, never hunks or lines. If you need to
+stage something, use `git add` — say so first, and only when the user asked for
+it.
 
 ## Inspect
 
@@ -43,19 +44,19 @@ peel providers
 
 ```json
 {
-  "id": "internal/git/patch.go:@-10,6+10,7",
-  "file": "internal/git/patch.go",
+  "id": "internal/git/status.go:@-10,6+10,7",
+  "file": "internal/git/status.go",
   "staged": false,
-  "header": "@@ -10,6 +10,7 @@ func BuildPatch",
+  "header": "@@ -10,6 +10,7 @@ func LoadStatus",
   "added": 3,
   "removed": 1,
-  "section": "func BuildPatch"
+  "section": "func LoadStatus"
 }
 ```
 
 - A partially staged file appears twice — once with `"staged": true` for what is
-  in the index, once with `false` for what is not. Both are real and separately
-  addressable.
+  in the index, once with `false` for what is not. Both are real; the split comes
+  from git, since peel itself only stages whole files.
 - `id` is derived from line offsets, so **it changes whenever the tree changes**.
   Re-run `hunks list` after anything touches the index; never reuse an ID from an
   earlier call.
@@ -90,7 +91,7 @@ peel comment clear [--file <path>] [--resolved] [--all]
 
 ```bash
 printf 'This drops the error.\n\nWorth returning it instead.\n' \
-  | peel comment add --file internal/git/patch.go --line 42
+  | peel comment add --file internal/git/status.go --line 42
 ```
 
 ## Walkthrough
@@ -99,9 +100,29 @@ printf 'This drops the error.\n\nWorth returning it instead.\n' \
 peel walkthrough [--regen] [--provider <name>] [--prompt "..."]
 ```
 
-Generates a narrative of the changeset and caches it. It shells out to an AI
-provider, so it is not free — read the cached one unless the diff has changed, in
-which case peel regenerates it for you. `--regen` forces a new one.
+Generates a step-by-step walkthrough of the changeset and caches it. It shells
+out to an AI provider, so it is not free — read the cached one unless the diff has
+changed, in which case peel regenerates it for you. `--regen` forces a new one.
+
+The output groups the changed files into numbered steps ordered so each sets up
+the next, starting at whatever the change rests on and following it out to the
+surface, then closes with `## Worth a close look` and `## Questions`. It walks
+the changed code rather than summarising the changeset, so it is a reasonable way
+to orient yourself in an unfamiliar diff before reading hunks.
+
+Each step is a `## N. Title` heading followed by a line of nothing but its
+backticked file paths, then the explanation:
+
+```markdown
+## 1. The type everything else reads
+`internal/git/hunk.go` · `internal/git/parse.go`
+
+`Hunk` gains a `NoNewline` line kind…
+```
+
+peel parses that line to group the files in its TUI, so a `--prompt` replacing
+the instruction should keep the shape if the result is meant to stay navigable.
+`--prompt` replaces the default entirely rather than appending to it.
 
 ## Pull requests
 
@@ -140,10 +161,8 @@ Your job is to say the things the user would not spot themselves.
 ## Common errors
 
 - **"peel does not stage from the command line"** — expected. See above.
-- **"hunk ... not found — the tree changed, reload and retry"** — the ID is
-  stale. Re-run `peel hunks list`.
 - **"peel must run inside a git repository"** — `cd` into the repo first.
 - **"no provider available"** — `peel providers` shows what is missing:
-  `claude` for walkthroughs, `gh` for pull requests.
+  `claude` or `codex` for walkthroughs, `gh` for pull requests.
 - **"comment add needs --file"** / **"needs --body, or text on stdin"** — the
   anchor and the body are both required.
