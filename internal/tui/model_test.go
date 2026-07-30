@@ -35,8 +35,8 @@ func keyMsg(name string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyTab}
 	case "enter":
 		return tea.KeyMsg{Type: tea.KeyEnter}
-	case "ctrl+s":
-		return tea.KeyMsg{Type: tea.KeyCtrlS}
+	case "alt+enter":
+		return tea.KeyMsg{Type: tea.KeyEnter, Alt: true}
 	case "ctrl+c":
 		return tea.KeyMsg{Type: tea.KeyCtrlC}
 	case "ctrl+d":
@@ -586,7 +586,7 @@ func TestCommentOnAHunkAnchorsToTheFirstAddedLine(t *testing.T) {
 		t.Fatalf("mode = %v, want comment", m.mode)
 	}
 	typeText(t, m, "needs a test")
-	press(t, m, "ctrl+s")
+	press(t, m, "enter")
 
 	if len(backend.added) != 1 {
 		t.Fatalf("AddComment called %d times, want 1", len(backend.added))
@@ -615,7 +615,7 @@ func TestCommentOnAFileHeaderIsFileLevel(t *testing.T) {
 
 	press(t, m, "c")
 	typeText(t, m, "rename this file")
-	press(t, m, "ctrl+s")
+	press(t, m, "enter")
 
 	if len(backend.added) != 1 {
 		t.Fatalf("AddComment called %d times, want 1", len(backend.added))
@@ -625,11 +625,98 @@ func TestCommentOnAFileHeaderIsFileLevel(t *testing.T) {
 	}
 }
 
-func TestEscapeCancelsAComment(t *testing.T) {
+func TestTheCommentEditorOpensInTheDiffAtTheAnchor(t *testing.T) {
+	m := newModel(t, newFakeBackend(newSession(t, twoFileDiff)))
+
+	row := lineRowOf(t, m, 0, 3)
+	m.moveTo(row)
+	press(t, m, "c")
+
+	if m.doc.DraftRow != m.cursor+1 {
+		t.Errorf("editor starts at row %d, want the row after the line it comments on (%d)", m.doc.DraftRow, m.cursor+1)
+	}
+	if m.doc.Rows[m.cursor].Kind != RowLine {
+		t.Errorf("the cursor moved to a %v, want to stay on the line being commented on", m.doc.Rows[m.cursor].Kind)
+	}
+	if got := m.View(); !strings.Contains(ansi.Strip(got), "func Two() int") {
+		t.Errorf("the editor took the diff off screen:\n%s", got)
+	}
+	if got := ansi.Strip(m.View()); !strings.Contains(got, "Write a review comment") {
+		t.Errorf("the editor is not on screen:\n%s", got)
+	}
+}
+
+func TestTheCommentEditorGrowsWithWhatIsWritten(t *testing.T) {
+	m := newModel(t, newFakeBackend(newSession(t, twoFileDiff)))
+
+	press(t, m, "j", "c")
+	opened := m.input.Height()
+	for range opened + 2 {
+		press(t, m, "alt+enter")
+	}
+
+	if m.input.Height() <= opened {
+		t.Fatalf("editor height stayed at %d after writing past it", m.input.Height())
+	}
+	if got := draftRows(m.doc); got != m.input.Height() {
+		t.Errorf("document reserves %d rows for a %d row editor", got, m.input.Height())
+	}
+}
+
+func TestEnterSavesAndAltEnterWritesAnotherLine(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	m := newModel(t, backend)
 
 	press(t, m, "j", "c")
+	typeText(t, m, "first")
+	press(t, m, "alt+enter")
+	typeText(t, m, "second")
+	if m.mode != modeComment {
+		t.Fatal("alt+enter saved the comment instead of writing another line")
+	}
+
+	press(t, m, "enter")
+	if len(backend.added) != 1 {
+		t.Fatalf("AddComment called %d times, want 1", len(backend.added))
+	}
+	if got := backend.added[0].Body; got != "first\nsecond" {
+		t.Errorf("body = %q, want both lines", got)
+	}
+}
+
+func TestCommentingLeavesTheCursorWhereItWasWritten(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	m := newModel(t, backend)
+
+	m.moveTo(lineRowOf(t, m, 0, 3))
+	ref, line, ok := m.doc.LineAt(m.cursor)
+	if !ok {
+		t.Fatal("the cursor is not on a diff line")
+	}
+
+	press(t, m, "c")
+	typeText(t, m, "needs a test")
+	press(t, m, "enter")
+
+	if draftRows(m.doc) != 0 {
+		t.Error("the editor is still in the document after saving")
+	}
+	gotRef, gotLine, ok := m.doc.LineAt(m.cursor)
+	if !ok {
+		t.Fatalf("the cursor landed on a %v, want the line the comment was written on", m.doc.Rows[m.cursor].Kind)
+	}
+	if gotRef.ID != ref.ID || gotLine != line {
+		t.Errorf("cursor is on %v line %d, want %v line %d", gotRef.ID, gotLine, ref.ID, line)
+	}
+}
+
+func TestEscapeCancelsACommentAndLeavesTheCursorAlone(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	m := newModel(t, backend)
+
+	press(t, m, "j")
+	before := m.cursor
+	press(t, m, "c")
 	typeText(t, m, "never mind")
 	press(t, m, "esc")
 
@@ -639,9 +726,41 @@ func TestEscapeCancelsAComment(t *testing.T) {
 	if m.mode != modeBrowse {
 		t.Errorf("mode = %v, want browse", m.mode)
 	}
+	if draftRows(m.doc) != 0 {
+		t.Error("the editor is still in the document after cancelling")
+	}
+	if m.cursor != before {
+		t.Errorf("cursor moved from row %d to %d", before, m.cursor)
+	}
 	if !strings.Contains(m.status, "cancelled") {
 		t.Errorf("status = %q", m.status)
 	}
+}
+
+func TestResolvingKeepsTheCursorOnTheComment(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 4, Side: store.SideNew, Body: "look again", Author: store.AuthorUser},
+	}
+	m := newModel(t, backend)
+	m.moveTo(m.doc.RowOfComment("c1"))
+
+	press(t, m, "x")
+
+	if got, ok := m.doc.CommentAt(m.cursor); !ok || got.ID != "c1" {
+		t.Errorf("cursor left the comment it resolved, landing on a %v", m.doc.Rows[m.cursor].Kind)
+	}
+}
+
+// draftRows counts the rows the comment editor is holding.
+func draftRows(d Document) int {
+	n := 0
+	for _, r := range d.Rows {
+		if r.Kind == RowDraft {
+			n++
+		}
+	}
+	return n
 }
 
 func TestEmptyCommentIsDiscarded(t *testing.T) {
@@ -650,7 +769,7 @@ func TestEmptyCommentIsDiscarded(t *testing.T) {
 
 	press(t, m, "j", "c")
 	typeText(t, m, "   ")
-	press(t, m, "ctrl+s")
+	press(t, m, "enter")
 
 	if len(backend.added) != 0 {
 		t.Fatalf("a blank comment was saved: %+v", backend.added)
@@ -667,7 +786,7 @@ func TestResolveAndDeleteActOnTheCommentAtTheCursor(t *testing.T) {
 	}
 	m := newModel(t, backend)
 
-	commentRow := rowOfComment(m.doc, "c1")
+	commentRow := m.doc.RowOfComment("c1")
 	if commentRow < 0 {
 		t.Fatal("the comment was not placed")
 	}
@@ -681,13 +800,13 @@ func TestResolveAndDeleteActOnTheCommentAtTheCursor(t *testing.T) {
 		t.Errorf("status = %q", m.status)
 	}
 
-	m.moveTo(rowOfComment(m.doc, "c1"))
+	m.moveTo(m.doc.RowOfComment("c1"))
 	press(t, m, "x")
 	if backend.resolved["c1"] {
 		t.Error("a second x did not reopen the comment")
 	}
 
-	m.moveTo(rowOfComment(m.doc, "c1"))
+	m.moveTo(m.doc.RowOfComment("c1"))
 	press(t, m, "D")
 	if got := backend.removed; len(got) != 1 || got[0] != "c1" {
 		t.Errorf("RemoveComment calls = %v, want [c1]", got)
@@ -741,7 +860,7 @@ func TestCommentOnADiffLineUsesThatLine(t *testing.T) {
 	m.moveTo(lineRowOf(t, m, 0, 2))
 	press(t, m, "c")
 	typeText(t, m, "why remove this?")
-	press(t, m, "ctrl+s")
+	press(t, m, "enter")
 
 	if len(backend.added) != 1 {
 		t.Fatalf("AddComment called %d times, want 1", len(backend.added))
@@ -760,7 +879,7 @@ func TestCommentOnAnUnchangedLineAnchorsToIt(t *testing.T) {
 	m.moveTo(lineRowOf(t, m, 0, 0))
 	press(t, m, "c")
 	typeText(t, m, "this package name is wrong")
-	press(t, m, "ctrl+s")
+	press(t, m, "enter")
 
 	if len(backend.added) != 1 {
 		t.Fatalf("AddComment called %d times, want 1", len(backend.added))

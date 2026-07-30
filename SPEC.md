@@ -291,6 +291,7 @@ rather than as whatever arrow keys the terminal would emulate.
 | `u` | unstage that file, opening it again |
 | `a` / `U` | stage everything, folding it all away / unstage everything, opening it all |
 | `c` | comment at the cursor |
+| `enter` / `alt+enter` | in the editor: save the comment / write another line |
 | `x` | resolve or reopen the comment at the cursor |
 | `D` | delete the comment at the cursor |
 | `\` | toggle unified ↔ side-by-side |
@@ -321,7 +322,14 @@ staging units: `s` on either one stages the file around it. A side-by-side row
 can hold a removal beside the addition that replaced it; a comment on it lands on
 the new side.
 
-In the comment editor: `ctrl+s` saves, `esc` cancels.
+Commenting is not a screen of its own either. `c` opens the editor in the diff,
+at the anchor the comment will attach to — under the line, the hunk header or the
+file header the cursor was on — so the code being commented on stays in front of
+the reviewer writing about it. The editor opens three rows tall and grows a row
+per line written. `enter` saves, since most notes are one line and reaching for a
+chord to finish one is the wrong default; `alt+enter` writes another line and
+`esc` cancels. Either way the cursor is left on what it was on: a note written is
+not progress through the diff, and neither is resolving one with `x`.
 
 ---
 

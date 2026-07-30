@@ -53,6 +53,9 @@ const (
 	RowNote
 	// RowComment is one review comment shown at its anchor.
 	RowComment
+	// RowDraft is one line of the editor for a comment being written, shown at
+	// the anchor the comment will attach to.
+	RowDraft
 	// RowStep is a walkthrough step's heading, shown above the files it covers.
 	RowStep
 	// RowStepText is one wrapped line of a step's explanation.
@@ -119,6 +122,29 @@ type StepRef struct {
 	Folded bool
 }
 
+// Draft is the comment being written, laid out where the comment itself will
+// appear once it is saved — so writing one neither takes the diff off screen nor
+// moves the code it is about.
+type Draft struct {
+	anchor
+	// Height is how many rows the editor needs. Zero means nothing is being
+	// written, which is what leaves the document with no draft in it.
+	Height int
+}
+
+// buildConfig collects the optional inputs to Build.
+type buildConfig struct {
+	groups Groups
+	draft  Draft
+}
+
+// BuildOption customises how a document is laid out.
+type BuildOption func(*buildConfig)
+
+// WithDraft reserves rows for the comment editor at the anchor the comment will
+// attach to.
+func WithDraft(d Draft) BuildOption { return func(c *buildConfig) { c.draft = d } }
+
 // Document is a session flattened into navigable rows.
 type Document struct {
 	Files []FileRef
@@ -129,22 +155,27 @@ type Document struct {
 	Steps    []StepRef
 	Comments []store.Comment
 	Layout   Layout
+	// Draft is the comment being written, if one is.
+	Draft Draft
+	// DraftRow is the first row of the editor, and -1 when nothing is being
+	// written. The rest of the editor follows it, one row per line.
+	DraftRow int
 }
 
 // Build flattens a session into rows. collapsed hides a file's body by path.
 func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, layout Layout, opts ...BuildOption) Document {
-	doc := Document{Comments: comments, Layout: layout}
+	var cfg buildConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+	doc := Document{Comments: comments, Layout: layout, Draft: cfg.draft, DraftRow: -1}
 	if s == nil {
 		return doc
 	}
-	var groups Groups
-	for _, opt := range opts {
-		opt(&groups)
-	}
 	idx := indexComments(comments)
 
-	for _, group := range groupFiles(s.Files, groups.Steps) {
-		doc.addStep(group, groups)
+	for _, group := range groupFiles(s.Files, cfg.groups.Steps) {
+		doc.addStep(group, cfg.groups)
 		for _, si := range group.files {
 			entry := s.Files[si]
 			fi := len(doc.Files)
@@ -152,15 +183,61 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 			doc.Files = append(doc.Files, FileRef{Entry: entry, Row: len(doc.Rows), Collapsed: hidden})
 			doc.add(Row{Kind: RowFile, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1})
 			doc.addComments(fi, -1, idx.takeFile(entry.Path))
+			doc.addDraft(fi, -1, doc.draftOnFile(entry.Path))
 
 			if !hidden {
 				doc.addBody(fi, entry, idx)
 			}
 			doc.addComments(fi, -1, idx.rest(entry.Path))
+			// A draft whose line is not on screen — a collapsed file, or a line
+			// the diff no longer holds — still has to be somewhere, and it goes
+			// where the comments in the same position go: under its file.
+			doc.addDraft(fi, -1, doc.Draft.path == entry.Path)
 			doc.add(Row{Kind: RowBlank, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1})
 		}
 	}
 	return doc
+}
+
+// addDraft lays the editor out here, if this is where the comment being written
+// belongs and it has not already been placed.
+func (d *Document) addDraft(file, hunk int, here bool) {
+	if !here || d.Draft.Height <= 0 || d.DraftRow >= 0 {
+		return
+	}
+	d.DraftRow = len(d.Rows)
+	for range d.Draft.Height {
+		d.add(Row{Kind: RowDraft, File: file, Hunk: hunk, Left: -1, Right: -1, Step: -1})
+	}
+}
+
+// draftOnFile reports that the comment being written is a note on the file as a
+// whole, which is where a draft with no line of its own goes.
+func (d Document) draftOnFile(path string) bool {
+	return d.Draft.path == path && d.Draft.line <= 0 && d.Draft.hunk == ""
+}
+
+// draftOnHunk reports that the comment being written is about a hunk that has no
+// line to hang it on.
+func (d Document) draftOnHunk(ref HunkRef) bool {
+	return d.Draft.path == ref.Path && d.Draft.line <= 0 && d.Draft.hunk == ref.ID.String()
+}
+
+// draftOnLine reports that the comment being written anchors to either line of a
+// displayed pair.
+func (d Document) draftOnLine(path string, lines []git.Line, pair linePair) bool {
+	if d.Draft.path != path || d.Draft.line <= 0 {
+		return false
+	}
+	for _, i := range []int{pair.left, pair.right} {
+		if i < 0 || i >= len(lines) {
+			continue
+		}
+		if anchors(lines[i], d.Draft.side, d.Draft.line) {
+			return true
+		}
+	}
+	return false
 }
 
 // addStep puts a walkthrough group's heading and explanation in front of the
@@ -239,10 +316,12 @@ func (d *Document) addBody(fi int, entry git.FileEntry, idx *commentIndex) {
 			})
 			d.Files[fi].Hunks = append(d.Files[fi].Hunks, hi)
 			d.add(Row{Kind: RowHunk, File: fi, Hunk: hi, Left: -1, Right: -1, Step: -1})
+			d.addDraft(fi, hi, d.draftOnHunk(d.Hunks[hi]))
 
 			for _, pair := range pairLines(h.Lines, d.Layout) {
 				d.add(Row{Kind: RowLine, File: fi, Hunk: hi, Left: pair.left, Right: pair.right, Step: -1})
 				d.addComments(fi, hi, idx.takeLine(entry.Path, h.Lines, pair))
+				d.addDraft(fi, hi, d.draftOnLine(entry.Path, h.Lines, pair))
 			}
 		}
 	}
@@ -361,9 +440,10 @@ func (d Document) Len() int { return len(d.Rows) }
 //
 // Every row can hold the cursor except the blank between files, the
 // continuation lines of a multi-line comment — a comment is addressed from its
-// first line — and a walkthrough explanation, which is addressed from its
-// heading. Diff lines are stops, so a note can be left on unchanged code without
-// a mode to enter first.
+// first line — a walkthrough explanation, which is addressed from its heading,
+// and the comment editor, which has the keyboard to itself while it is open.
+// Diff lines are stops, so a note can be left on unchanged code without a mode
+// to enter first.
 func (d Document) IsStop(i int) bool {
 	if i < 0 || i >= len(d.Rows) {
 		return false
@@ -371,7 +451,7 @@ func (d Document) IsStop(i int) bool {
 	switch d.Rows[i].Kind {
 	case RowComment:
 		return d.Rows[i].Head
-	case RowBlank, RowStepText:
+	case RowBlank, RowStepText, RowDraft:
 		return false
 	default:
 		return true
@@ -582,6 +662,19 @@ func (d Document) RowOfLine(hunk, line int) int {
 	return -1
 }
 
+// RowOfComment returns the first row of a comment, by ID, or -1.
+func (d Document) RowOfComment(id string) int {
+	if id == "" {
+		return -1
+	}
+	for i, r := range d.Rows {
+		if r.Kind == RowComment && r.Head && d.Comments[r.Comment].ID == id {
+			return i
+		}
+	}
+	return -1
+}
+
 // TargetKind says what the cursor addresses.
 type TargetKind int
 
@@ -728,7 +821,7 @@ func (x *commentIndex) takeLine(path string, lines []git.Line, pair linePair) []
 			if i < 0 || i >= len(lines) {
 				continue
 			}
-			if anchors(lines[i], c) {
+			if anchors(lines[i], c.Side, c.Line) {
 				return true
 			}
 		}
@@ -754,9 +847,10 @@ func (x *commentIndex) take(path string, match func(store.Comment) bool) []int {
 	return out
 }
 
-func anchors(l git.Line, c store.Comment) bool {
-	if c.Side == store.SideOld {
-		return l.OldLine == c.Line
+// anchors reports that a note on the given line number and side belongs to l.
+func anchors(l git.Line, side store.Side, line int) bool {
+	if side == store.SideOld {
+		return l.OldLine == line
 	}
-	return l.NewLine == c.Line
+	return l.NewLine == line
 }

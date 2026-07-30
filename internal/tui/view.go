@@ -28,14 +28,13 @@ func (m *Model) View() string {
 	if m.quitting {
 		return ""
 	}
-	switch m.mode {
-	case modeHelp:
+	if m.mode == modeHelp {
 		return m.frame(m.helpView())
-	case modeComment:
-		return m.frame(m.commentView())
-	default:
-		return m.frame(m.bodyView())
 	}
+	// The comment editor has no screen of its own: it is drawn into the diff at
+	// the anchor it will attach to, so what is being commented on stays in front
+	// of the reviewer writing about it.
+	return m.frame(m.bodyView())
 }
 
 // frame stacks the header, a body of exactly bodyHeight lines, and the footer.
@@ -112,7 +111,7 @@ func (m *Model) footerView() string {
 func (m *Model) hints() string {
 	switch m.mode {
 	case modeComment:
-		return "ctrl+s save · esc cancel"
+		return "enter save · alt+enter new line · esc cancel"
 	case modeHelp:
 		return "any key to close"
 	default:
@@ -143,8 +142,10 @@ func (m *Model) diffLines(height int) []string {
 	if m.doc.Len() == 0 {
 		out = append(out, fit(" "+m.theme.Note.Render(m.emptyMessage()), width))
 	} else {
+		editor := m.draftLines()
 		for i := m.top; i < m.top+height && i < m.doc.Len(); i++ {
-			out = append(out, m.renderer.Row(m.doc, i, RowState{Cursor: i == m.cursor}))
+			st := RowState{Cursor: i == m.cursor, Draft: nthLine(editor, i-m.doc.DraftRow)}
+			out = append(out, m.renderer.Row(m.doc, i, st))
 		}
 	}
 	return padLines(out, height, width)
@@ -208,16 +209,13 @@ func (m *Model) fileRow(index int, current bool, width int) string {
 	return fit(line, width-ansi.StringWidth(counts)-1) + m.theme.Dim.Render(counts) + " "
 }
 
-func (m *Model) commentView() string {
-	width := m.width
-	lines := []string{
-		fit(" "+m.theme.Dim.Render("Comment on ")+m.theme.FileHead.Render(m.pending.location()), width),
-		fit("", width),
+// nthLine returns line n of the comment editor, or "" for a row that is not one
+// of its.
+func nthLine(lines []string, n int) string {
+	if n < 0 || n >= len(lines) {
+		return ""
 	}
-	for _, l := range strings.Split(m.input.View(), "\n") {
-		lines = append(lines, fit(" "+l, width))
-	}
-	return strings.Join(padLines(lines, m.bodyHeight(), width), "\n")
+	return lines[n]
 }
 
 // helpBindings is the single source of truth for the help screen. The footer
@@ -234,6 +232,7 @@ var helpBindings = []struct{ keys, action string }{
 	{"u", "unstage that file, opening it again"},
 	{"a / U", "stage everything / unstage everything"},
 	{"c", "comment at the cursor, changed line or not"},
+	{"enter / alt+enter", "in the editor: save the comment / write another line"},
 	{"x", "resolve or reopen the comment at the cursor"},
 	{"D", "delete the comment at the cursor"},
 	{`\`, "toggle unified and side-by-side"},

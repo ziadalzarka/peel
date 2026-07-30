@@ -242,7 +242,7 @@ func TestBuildAnchorsCommentsToTheirLines(t *testing.T) {
 		t.Errorf("row after the file header = %v (ok=%v), want c2", got.ID, ok)
 	}
 
-	c1 := rowOfComment(doc, "c1")
+	c1 := doc.RowOfComment("c1")
 	if c1 < 0 {
 		t.Fatal("c1 was not placed")
 	}
@@ -254,7 +254,7 @@ func TestBuildAnchorsCommentsToTheirLines(t *testing.T) {
 		t.Errorf("c1 anchored to new line %d, want 4", line.NewLine)
 	}
 
-	c3 := rowOfComment(doc, "c3")
+	c3 := doc.RowOfComment("c3")
 	if c3 < 0 {
 		t.Fatal("c3 was not placed")
 	}
@@ -269,7 +269,7 @@ func TestBuildKeepsCommentsWhoseLineIsNoLongerInTheDiff(t *testing.T) {
 	}
 	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutUnified)
 
-	row := rowOfComment(doc, "stale")
+	row := doc.RowOfComment("stale")
 	if row < 0 {
 		t.Fatal("a comment whose line left the diff was dropped")
 	}
@@ -299,13 +299,80 @@ func TestBuildPlacesEachCommentOnceAcrossBothSides(t *testing.T) {
 	}
 }
 
+func TestBuildReservesRowsForTheCommentBeingWritten(t *testing.T) {
+	draft := Draft{anchor: anchor{path: "alpha.go", line: 4, side: store.SideNew}, Height: 3}
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified, WithDraft(draft))
+
+	if doc.DraftRow < 0 {
+		t.Fatal("the editor was not placed")
+	}
+	prev := doc.Rows[doc.DraftRow-1]
+	if prev.Kind != RowLine {
+		t.Fatalf("the editor follows a %v, want the line it comments on", prev.Kind)
+	}
+	if line := doc.Hunks[prev.Hunk].Hunk.Lines[prev.Left]; line.NewLine != 4 {
+		t.Errorf("the editor sits under new line %d, want 4", line.NewLine)
+	}
+	for i := range draft.Height {
+		if got := doc.Rows[doc.DraftRow+i].Kind; got != RowDraft {
+			t.Errorf("row %d of the editor is a %v, want a draft row", i, got)
+		}
+	}
+	if doc.IsStop(doc.DraftRow) {
+		t.Error("the cursor can rest on the editor, which has the keyboard already")
+	}
+}
+
+func TestBuildPutsAFileLevelDraftUnderItsFileHeader(t *testing.T) {
+	draft := Draft{anchor: anchor{path: "beta.txt", side: store.SideNew}, Height: 2}
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified, WithDraft(draft))
+
+	if doc.DraftRow < 0 {
+		t.Fatal("the editor was not placed")
+	}
+	if prev := doc.Rows[doc.DraftRow-1]; prev.Kind != RowFile || doc.Files[prev.File].Entry.Path != "beta.txt" {
+		t.Errorf("the editor follows a %v, want beta.txt's header", prev.Kind)
+	}
+}
+
+func TestBuildKeepsADraftWhoseLineIsNoLongerInTheDiff(t *testing.T) {
+	draft := Draft{anchor: anchor{path: "alpha.go", line: 900, side: store.SideNew}, Height: 2}
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified, WithDraft(draft))
+
+	if doc.DraftRow < 0 {
+		t.Fatal("a draft whose line left the diff was dropped")
+	}
+	if doc.Rows[doc.DraftRow].File != 0 {
+		t.Errorf("the editor landed on file %d, want alpha.go", doc.Rows[doc.DraftRow].File)
+	}
+}
+
+func TestBuildPlacesTheDraftOnceAcrossBothSides(t *testing.T) {
+	entries := parseFiles(t, twoFileDiff)
+	staged := *entries[0].Unstaged
+	entries[0].Staged = &staged
+
+	draft := Draft{anchor: anchor{path: "alpha.go", line: 4, side: store.SideNew}, Height: 2}
+	doc := Build(&app.Session{Files: entries[:1], Stageable: true}, nil, nil, LayoutUnified, WithDraft(draft))
+
+	rows := 0
+	for _, r := range doc.Rows {
+		if r.Kind == RowDraft {
+			rows++
+		}
+	}
+	if rows != draft.Height {
+		t.Errorf("draft rows = %d, want %d even though the line appears on both sides", rows, draft.Height)
+	}
+}
+
 func TestBuildSplitsMultiLineCommentBodiesIntoRows(t *testing.T) {
 	comments := []store.Comment{
 		{ID: "c1", File: "alpha.go", Body: "first\nsecond\nthird", Author: store.AuthorUser},
 	}
 	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutUnified)
 
-	head := rowOfComment(doc, "c1")
+	head := doc.RowOfComment("c1")
 	if head < 0 {
 		t.Fatal("comment was not placed")
 	}
@@ -491,7 +558,7 @@ func TestTargetAtCommentRowActsOnItsFile(t *testing.T) {
 	comments := []store.Comment{{ID: "c1", File: "beta.txt", Body: "note", Author: store.AuthorUser}}
 	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutUnified)
 
-	row := rowOfComment(doc, "c1")
+	row := doc.RowOfComment("c1")
 	target := doc.TargetAt(row)
 	if target.Kind != TargetFile || target.Path != "beta.txt" {
 		t.Errorf("comment row target = %+v, want beta.txt as a file", target)
@@ -533,18 +600,6 @@ new mode 100755
 	if !hasNote(doc, "100755") {
 		t.Errorf("rows = %v, want a note naming the new mode", noteTexts(doc))
 	}
-}
-
-func rowOfComment(d Document, id string) int {
-	for i, r := range d.Rows {
-		if r.Kind != RowComment || !r.Head {
-			continue
-		}
-		if d.Comments[r.Comment].ID == id {
-			return i
-		}
-	}
-	return -1
 }
 
 func hasNote(d Document, substr string) bool {

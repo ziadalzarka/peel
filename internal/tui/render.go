@@ -17,10 +17,19 @@ const lineNumWidth = 4
 // tabWidth is how far a tab advances the cursor.
 const tabWidth = 8
 
-// RowState is how the cursor affects one row.
+const (
+	resetSequence = "\x1b[0m"
+	fillProbe     = "x"
+)
+
+// RowState is what a row needs from outside the document to be drawn.
 type RowState struct {
 	// Cursor marks the row the cursor rests on.
 	Cursor bool
+	// Draft is the line of the comment editor a draft row shows. The editor
+	// arrives per frame rather than through the document, since it changes on
+	// every keystroke and the document does not.
+	Draft string
 }
 
 // Renderer turns document rows into terminal lines.
@@ -28,12 +37,21 @@ type Renderer struct {
 	theme  Theme
 	syntax *Highlighter
 	width  int
+
+	addedFill   string
+	removedFill string
 }
 
 // NewRenderer returns a renderer. A nil syntax highlighter disables colouring
 // by language.
 func NewRenderer(theme Theme, syntax *Highlighter) *Renderer {
-	return &Renderer{theme: theme, syntax: syntax, width: 80}
+	return &Renderer{
+		theme:       theme,
+		syntax:      syntax,
+		width:       80,
+		addedFill:   fillSequence(theme.AddedFill),
+		removedFill: fillSequence(theme.RemovedFill),
+	}
 }
 
 // SetWidth sets the width rows are fitted to.
@@ -58,6 +76,8 @@ func (r *Renderer) Row(d Document, i int, st RowState) string {
 		return r.note(row, st)
 	case RowComment:
 		return r.comment(d, row, st)
+	case RowDraft:
+		return r.draft(st)
 	case RowStep:
 		return r.step(d, row, st)
 	case RowStepText:
@@ -122,24 +142,28 @@ func codeIndent(l Layout) string {
 func (r *Renderer) line(d Document, row Row, st RowState) string {
 	ref := d.Hunks[row.Hunk]
 	prefix := r.marker(st)
+	width := r.width - ansi.StringWidth(prefix)
 	if d.Layout == LayoutSplit {
-		return r.fit(prefix + r.splitBody(ref, row))
+		return prefix + r.splitBody(ref, row, width)
 	}
-	return r.fit(prefix + r.unifiedBody(ref, row))
+	return prefix + r.unifiedBody(ref, row, width)
 }
 
-func (r *Renderer) unifiedBody(ref HunkRef, row Row) string {
+func (r *Renderer) unifiedBody(ref HunkRef, row Row, width int) string {
 	l := ref.Hunk.Lines[row.Left]
-	return r.gutter(l.OldLine) + r.gutter(l.NewLine) + " " + r.content(ref.Path, l)
+	body := r.gutter(l.OldLine) + r.gutter(l.NewLine) + " " + r.content(ref.Path, l)
+	return fill(r.fillFor(l), fit(body, width))
 }
 
 // splitBody puts the old side left of the new side. Either index may be -1,
 // where the change has no counterpart on that side.
-func (r *Renderer) splitBody(ref HunkRef, row Row) string {
-	half := (r.width - 5) / 2
+func (r *Renderer) splitBody(ref HunkRef, row Row, width int) string {
+	divider := r.theme.Dim.Render(" │ ")
+	sides := width - ansi.StringWidth(divider)
+	half := sides / 2
 	left := r.halfLine(ref, row.Left, true, half)
-	right := r.halfLine(ref, row.Right, false, half)
-	return left + r.theme.Dim.Render(" │ ") + right
+	right := r.halfLine(ref, row.Right, false, sides-half)
+	return left + divider + right
 }
 
 func (r *Renderer) halfLine(ref HunkRef, index int, old bool, width int) string {
@@ -151,7 +175,18 @@ func (r *Renderer) halfLine(ref HunkRef, index int, old bool, width int) string 
 	if old {
 		num = l.OldLine
 	}
-	return fit(r.gutter(num)+" "+r.content(ref.Path, l), width)
+	return fill(r.fillFor(l), fit(r.gutter(num)+" "+r.content(ref.Path, l), width))
+}
+
+func (r *Renderer) fillFor(l git.Line) string {
+	switch l.Kind {
+	case git.LineAdded:
+		return r.addedFill
+	case git.LineRemoved:
+		return r.removedFill
+	default:
+		return ""
+	}
 }
 
 // content renders a line's origin character and text. The origin keeps the diff
@@ -214,16 +249,29 @@ func (r *Renderer) comment(d Document, row Row, st RowState) string {
 		body = r.theme.Resolved.Render(text)
 	}
 
+	gap := strings.Repeat(" ", commentIndent-1)
 	bar := r.theme.Comment.Render("┃")
 	if !row.Head {
 		indent := strings.Repeat(" ", ansi.StringWidth(commentTag(c)))
-		return r.fit(r.marker(st) + "   " + bar + " " + indent + body)
+		return r.fit(r.marker(st) + gap + bar + " " + indent + body)
 	}
 	tag := r.theme.Author.Render(commentTag(c))
 	if st.Cursor {
 		tag = r.theme.Cursor.Render(commentTag(c))
 	}
-	return r.fit(r.marker(st) + "   " + bar + " " + tag + body)
+	return r.fit(r.marker(st) + gap + bar + " " + tag + body)
+}
+
+// commentIndent is how far a comment's bar sits from the left edge, marker
+// included. The editor for a comment being written is indented to match, so it
+// stands exactly where the comment will.
+const commentIndent = 4
+
+// draft renders one line of the comment editor. The editor draws its own bar —
+// the same ┃ a saved comment carries — so the only thing left to do here is put
+// it in the comment column and fit it to the pane.
+func (r *Renderer) draft(st RowState) string {
+	return r.fit(r.marker(st) + strings.Repeat(" ", commentIndent-1) + st.Draft)
 }
 
 // commentTag prefixes a comment with who wrote it, and marks it resolved.
@@ -294,6 +342,31 @@ func fileLabel(e git.FileEntry) string {
 		return "renamed"
 	}
 	return string(diff.Status)
+}
+
+// fill paints seq behind an already-fitted row.
+//
+// Every escape inside the row — one per syntax token — ends in a reset, which
+// clears the background along with the colour, so the sequence has to be armed
+// again after each of them or the tint stops at the first coloured word.
+func fill(seq, s string) string {
+	if seq == "" {
+		return s
+	}
+	for _, reset := range []string{resetSequence, ansi.ResetStyle} {
+		s = strings.ReplaceAll(s, reset, reset+seq)
+	}
+	return seq + s + resetSequence
+}
+
+// fillSequence is the escape a background-only style opens with, or "" when the
+// terminal takes no colour and the style renders its text bare.
+func fillSequence(style lipgloss.Style) string {
+	rendered := style.Render(fillProbe)
+	if i := strings.Index(rendered, fillProbe); i > 0 {
+		return rendered[:i]
+	}
+	return ""
 }
 
 // fit truncates to width and pads short lines, so callers can compose columns

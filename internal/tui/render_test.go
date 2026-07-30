@@ -4,7 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/ziadalzarka/peel/internal/git"
 	"github.com/ziadalzarka/peel/internal/store"
 )
 
@@ -171,11 +173,11 @@ func TestRenderCommentShowsAuthorAndResolvedState(t *testing.T) {
 	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutUnified)
 	r := plainRenderer(80)
 
-	open := r.Row(doc, rowOfComment(doc, "open"), RowState{})
+	open := r.Row(doc, doc.RowOfComment("open"), RowState{})
 	if !strings.Contains(open, "agent: needs a test") {
 		t.Errorf("comment row = %q", open)
 	}
-	done := r.Row(doc, rowOfComment(doc, "done"), RowState{})
+	done := r.Row(doc, doc.RowOfComment("done"), RowState{})
 	if !strings.Contains(done, "✓ user: fixed") {
 		t.Errorf("resolved comment row = %q, want a tick", done)
 	}
@@ -224,6 +226,116 @@ func TestRenderOutOfRangeRowIsEmpty(t *testing.T) {
 	}
 	if got := r.Row(doc, doc.Len(), RowState{}); got != "" {
 		t.Errorf("row past the end = %q, want empty", got)
+	}
+}
+
+// The fills are set by hand rather than taken from DefaultTheme, which renders
+// bare when the test binary's output is not a terminal.
+const (
+	testAddedFill   = "\x1b[42m"
+	testRemovedFill = "\x1b[41m"
+)
+
+func TestRenderBandsChangedLinesInTheirColour(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+	r := plainRenderer(40)
+	r.addedFill, r.removedFill = testAddedFill, testRemovedFill
+
+	rows := map[string]string{}
+	for i, row := range doc.Rows {
+		if row.Kind != RowLine || row.Hunk != 0 {
+			continue
+		}
+		rows[doc.Hunks[0].Hunk.Lines[row.Left].Render()] = r.Row(doc, i, RowState{})
+	}
+
+	for render, want := range map[string]string{
+		"+func One() int { return 2 }": testAddedFill,
+		"-func One() int { return 1 }": testRemovedFill,
+		" package alpha":               "",
+	} {
+		got, ok := rows[render]
+		if !ok {
+			t.Fatalf("no row rendered for %q; have %v", render, keys(rows))
+		}
+		if want == "" {
+			if strings.Contains(got, "\x1b") {
+				t.Errorf("context line %q was banded: %q", render, got)
+			}
+			continue
+		}
+		if !strings.HasPrefix(got, " "+want) {
+			t.Errorf("line %q = %q, want the band to open the row after the marker", render, got)
+		}
+		if !strings.HasSuffix(got, resetSequence) {
+			t.Errorf("line %q = %q, want the band to close at the end of the row", render, got)
+		}
+		if !strings.Contains(got, render) {
+			t.Errorf("line %q = %q, want the band to leave the text alone", render, got)
+		}
+	}
+}
+
+func TestRenderBandsBothSidesOfASplitRow(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutSplit)
+	r := plainRenderer(80)
+	r.addedFill, r.removedFill = testAddedFill, testRemovedFill
+
+	var got string
+	for i, row := range doc.Rows {
+		if row.Kind == RowLine && row.Left >= 0 && row.Right >= 0 &&
+			doc.Hunks[row.Hunk].Hunk.Lines[row.Left].Kind == git.LineRemoved {
+			got = r.Row(doc, i, RowState{})
+			break
+		}
+	}
+	if got == "" {
+		t.Fatal("no replaced line was rendered side by side")
+	}
+	red, green := strings.Index(got, testRemovedFill), strings.Index(got, testAddedFill)
+	if red < 0 || green < 0 {
+		t.Fatalf("split row = %q, want both sides banded", got)
+	}
+	if red > green {
+		t.Errorf("split row = %q, want the removed side banded left of the added one", got)
+	}
+}
+
+func TestRenderBandSurvivesSyntaxHighlighting(t *testing.T) {
+	h := NewHighlighter()
+	if h == nil {
+		t.Skip("no formatter available")
+	}
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+	r := NewRenderer(Theme{}, h)
+	r.SetWidth(60)
+	r.addedFill = testAddedFill
+
+	var got string
+	for i, row := range doc.Rows {
+		if row.Kind == RowLine && doc.Hunks[row.Hunk].Hunk.Lines[row.Left].Kind == git.LineAdded {
+			got = r.Row(doc, i, RowState{})
+			break
+		}
+	}
+	if !strings.Contains(got, "\x1b[38") {
+		t.Fatalf("added row = %q, want it syntax highlighted", got)
+	}
+	spans := strings.Split(strings.TrimSuffix(got, resetSequence), resetSequence)
+	for _, span := range spans[1:] {
+		if !strings.HasPrefix(span, testAddedFill) {
+			t.Errorf("added row = %q, want the band armed again after every reset", got)
+			break
+		}
+	}
+}
+
+func TestFillLeavesAnUnbandedLineAlone(t *testing.T) {
+	if got := fill("", "plain"); got != "plain" {
+		t.Errorf("fill without a colour changed the line: %q", got)
+	}
+	if got := fillSequence(lipgloss.NewStyle()); got != "" {
+		t.Errorf("a style with no background has the sequence %q", got)
 	}
 }
 

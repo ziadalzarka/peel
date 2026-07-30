@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ziadalzarka/peel/internal/app"
@@ -151,7 +152,7 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 		layout:     cfg.layout,
 		theme:      cfg.theme,
 		renderer:   NewRenderer(cfg.theme, cfg.syntax),
-		input:      newInput(),
+		input:      newInput(cfg.theme),
 		walkFolded: map[int]bool{},
 		follow:     cfg.follow,
 		pollEvery:  cfg.pollEvery,
@@ -166,11 +167,38 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 	return m
 }
 
-func newInput() textarea.Model {
+// draftMinHeight and draftMaxHeight bound the inline editor. It opens small, so
+// it barely parts the diff, and grows a row per line written until it would take
+// the pane over — past that it scrolls inside itself.
+const (
+	draftMinHeight = 3
+	draftMaxHeight = 12
+)
+
+func newInput(theme Theme) textarea.Model {
 	ta := textarea.New()
 	ta.Placeholder = "Write a review comment…"
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 4000
+	// The editor draws in the comment's own bar and colour, so a note being
+	// written reads as the note it is about to become. The line being typed on
+	// takes the same colour rather than the library's highlight band, which would
+	// sit as a block of background across a diff that now tints its own lines.
+	ta.Prompt = "┃ "
+	// Enter saves, since most comments are one line and reaching for a chord to
+	// finish one is the wrong default. Writing a second line is the deliberate
+	// press.
+	ta.KeyMap.InsertNewline = key.NewBinding(
+		key.WithKeys("alt+enter"),
+		key.WithHelp("alt+enter", "new line"),
+	)
+	for _, style := range []*textarea.Style{&ta.FocusedStyle, &ta.BlurredStyle} {
+		style.Prompt = theme.Comment
+		style.Text = theme.Comment
+		style.CursorLine = theme.Comment
+		style.Placeholder = theme.Note
+	}
+	ta.SetHeight(draftMinHeight)
 	return ta
 }
 
@@ -318,16 +346,28 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 func (m *Model) commentKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
-		m.input.Blur()
-		m.mode = modeBrowse
+		m.closeComment()
 		m.status = "comment cancelled"
 		return nil
-	case "ctrl+s", "alt+enter":
+	case "enter":
 		return m.submitComment()
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
+	m.fitDraft()
 	return cmd
+}
+
+// fitDraft sizes the editor to what has been written, so the diff parts by
+// exactly as much as the comment needs and closes back up as lines are deleted.
+func (m *Model) fitDraft() {
+	want := min(max(m.input.LineCount(), draftMinHeight), draftMaxHeight)
+	if want == m.input.Height() {
+		return
+	}
+	m.input.SetHeight(want)
+	m.relayout()
+	m.revealDraft()
 }
 
 // groups is the walkthrough the document is laid out under. It stays empty until
@@ -374,35 +414,68 @@ func (m *Model) toggleWalkthrough() tea.Cmd {
 	return nil
 }
 
-// relayout rebuilds after something that renumbers every row — switching the
-// hunk layout, or grouping the files under a walkthrough — and puts the cursor
-// back on the code it was on rather than leaving it at the same row index.
-func (m *Model) relayout() {
-	var onHunk git.HunkID
-	onLine := -1
+// spot identifies what the cursor is on in a way that survives a rebuild, since
+// rebuilding renumbers every row.
+type spot struct {
+	path string
+	// comment is the ID of the comment the cursor is on, when it is on one.
+	comment string
+	hunk    git.HunkID
+	// line indexes into the hunk's lines, and is -1 when the cursor is not on
+	// one. Hunk IDs carry the hunk header, so a hunk that kept its ID kept its
+	// lines too and the index still names the same code.
+	line int
+}
+
+// spot records where the cursor is, so a rebuild can put it back.
+func (m *Model) spot() spot {
+	at := spot{path: m.currentPath(), line: -1}
+	if c, ok := m.doc.CommentAt(m.cursor); ok {
+		at.comment = c.ID
+		return at
+	}
 	switch target := m.doc.TargetAt(m.cursor); target.Kind {
 	case TargetHunk:
-		onHunk = m.doc.Hunks[target.Hunk].ID
+		at.hunk = m.doc.Hunks[target.Hunk].ID
 	case TargetLine:
 		if ref, index, ok := m.doc.LineAt(m.cursor); ok {
-			onHunk, onLine = ref.ID, index
+			at.hunk, at.line = ref.ID, index
 		}
 	}
-	path := m.currentPath()
+	return at
+}
 
-	m.rebuild()
-
-	hunk := m.findHunk(onHunk)
-	switch row := m.doc.RowOfLine(hunk, onLine); {
-	case onLine >= 0 && row >= 0:
+// moveToSpot puts the cursor back on what spot named, falling back through the
+// hunk and then the file when the exact line has gone.
+func (m *Model) moveToSpot(at spot) {
+	if row := m.doc.RowOfComment(at.comment); row >= 0 {
 		m.moveTo(row)
-	case m.doc.RowOfHunk(hunk) >= 0:
-		m.moveTo(m.doc.RowOfHunk(hunk))
-	default:
-		if row := m.doc.RowOfFile(m.fileIndex(path)); row >= 0 {
-			m.moveTo(row)
-		}
+		return
 	}
+	hunk := m.findHunk(at.hunk)
+	if row := m.doc.RowOfLine(hunk, at.line); row >= 0 {
+		m.moveTo(row)
+		return
+	}
+	if row := m.doc.RowOfHunk(hunk); row >= 0 {
+		m.moveTo(row)
+		return
+	}
+	if row := m.doc.RowOfFile(m.fileIndex(at.path)); row >= 0 {
+		m.moveTo(row)
+		return
+	}
+	m.moveTo(m.doc.Nearest(min(m.cursor, max(m.doc.Len()-1, 0))))
+}
+
+// relayout rebuilds after something that renumbers every row — switching the
+// hunk layout, grouping the files under a walkthrough, or opening the comment
+// editor — and puts the cursor back on the code it was on rather than leaving it
+// at the same row index.
+func (m *Model) relayout() {
+	at := m.spot()
+	m.rebuild()
+	m.moveToSpot(at)
 }
 
 // foldStep hides the explanation of the step at the cursor, so a walkthrough
@@ -532,6 +605,9 @@ func (a anchor) location() string {
 	return fmt.Sprintf("%s:%d", a.path, a.line)
 }
 
+// openComment opens the editor where the comment will land, rather than on a
+// screen of its own: what is being commented on stays in front of the reviewer
+// while they write about it.
 func (m *Model) openComment() {
 	got, ok := m.anchorAt()
 	if !ok {
@@ -541,9 +617,51 @@ func (m *Model) openComment() {
 	m.pending = got
 	m.mode = modeComment
 	m.input.Reset()
-	m.input.SetWidth(max(m.width-4, 20))
-	m.input.SetHeight(6)
+	m.input.SetWidth(m.draftWidth())
+	m.input.SetHeight(draftMinHeight)
 	m.input.Focus()
+	m.status = "commenting on " + got.location()
+
+	m.relayout()
+	m.revealDraft()
+}
+
+// closeComment puts the editor away, leaving the cursor on the code it was
+// opened from.
+func (m *Model) closeComment() {
+	m.input.Blur()
+	m.mode = modeBrowse
+	m.relayout()
+}
+
+// draft is the comment being written, or the zero draft when nothing is.
+func (m *Model) draft() Draft {
+	if m.mode != modeComment {
+		return Draft{}
+	}
+	return Draft{anchor: m.pending, Height: m.input.Height()}
+}
+
+// draftWidth is the room the editor has, leaving the indent that lines it up
+// with the comment bar.
+func (m *Model) draftWidth() int { return max(m.diffWidth()-commentIndent, 20) }
+
+// revealDraft scrolls the editor into view without taking the cursor off the
+// code the comment is about.
+func (m *Model) revealDraft() {
+	if m.doc.DraftRow < 0 {
+		return
+	}
+	m.ensureVisible(m.doc.DraftRow + m.doc.Draft.Height - 1)
+	m.ensureFileVisible()
+}
+
+// draftLines is the editor as the rows that show it, one line each.
+func (m *Model) draftLines() []string {
+	if m.doc.DraftRow < 0 {
+		return nil
+	}
+	return strings.Split(m.input.View(), "\n")
 }
 
 // anchorAt resolves the cursor to a comment anchor: the line under the cursor,
@@ -612,14 +730,13 @@ func sideOr(s store.Side) store.Side {
 
 func (m *Model) submitComment() tea.Cmd {
 	body := strings.TrimSpace(m.input.Value())
-	m.input.Blur()
-	m.mode = modeBrowse
+	got := m.pending
+	m.closeComment()
 	if body == "" {
 		m.status = "empty comment discarded"
 		return nil
 	}
 
-	got := m.pending
 	comment := store.Comment{
 		File:   got.path,
 		Line:   got.line,
@@ -628,7 +745,10 @@ func (m *Model) submitComment() tea.Cmd {
 		Hunk:   got.hunk,
 		Author: store.AuthorUser,
 	}
-	return m.run("saving comment", "commented on "+got.location(), func(context.Context) error {
+	// Saving reloads, and a reload normally moves the reviewer on to what is
+	// left to review. Writing a note is not progress through the diff, so this
+	// one puts the cursor back where it was written.
+	return m.runHere("saving comment", "commented on "+got.location(), func(context.Context) error {
 		_, err := m.backend.AddComment(comment)
 		return err
 	})
@@ -645,7 +765,7 @@ func (m *Model) toggleResolved() tea.Cmd {
 	if !want {
 		done = "reopened " + c.Location()
 	}
-	return m.run("updating comment", done, func(context.Context) error {
+	return m.runHere("updating comment", done, func(context.Context) error {
 		return m.backend.SetResolved(c.ID, want)
 	})
 }
@@ -727,6 +847,23 @@ func (m *Model) run(busy, done string, op func(context.Context) error) tea.Cmd {
 	return m.runCollapsing(busy, done, nil, op)
 }
 
+// runHere is run for the changes that are not progress through the diff — a
+// note written, a comment resolved. A reload normally moves the reviewer on to
+// what is left to review; these put the cursor back where it was instead.
+func (m *Model) runHere(busy, done string, op func(context.Context) error) tea.Cmd {
+	at := m.spot()
+	cmd := m.runCollapsing(busy, done, nil, op)
+	return func() tea.Msg {
+		msg := cmd()
+		loaded, ok := msg.(loadedMsg)
+		if !ok {
+			return msg
+		}
+		loaded.at = &at
+		return loaded
+	}
+}
+
 // runCollapsing is run, folding or opening files once the reload lands.
 //
 // The fold travels with the reload rather than being applied on the keypress so
@@ -771,6 +908,9 @@ type loadedMsg struct {
 	// reload is applied: staging a file gets it out of the way of what is left
 	// to review, unstaging brings it back.
 	collapse map[string]bool
+	// at puts the cursor back on what it was on, instead of on whatever is left
+	// to review in the file. Nil leaves the usual restore alone.
+	at *spot
 }
 
 type walkthroughMsg struct{ body string }
@@ -790,6 +930,9 @@ func (m *Model) applyLoaded(msg loadedMsg) {
 	m.err = nil
 	m.session = msg.session
 	m.comments = msg.comments
+	// A reload that lands under an open editor takes the keyboard back, so the
+	// editor has to be put away with it rather than left focused and invisible.
+	m.input.Blur()
 	m.mode = modeBrowse
 	// The narrative is kept: it is the notes the reviewer is reading, and
 	// dropping it would reorder the diff underneath them every time they staged
@@ -801,7 +944,11 @@ func (m *Model) applyLoaded(msg loadedMsg) {
 
 	m.fingerprint = fingerprintOf(msg.session)
 	m.rebuild()
-	m.restoreCursor(path)
+	if msg.at != nil {
+		m.moveToSpot(*msg.at)
+	} else {
+		m.restoreCursor(path)
+	}
 	if msg.note != "" {
 		m.status = msg.note
 	}
@@ -897,7 +1044,7 @@ func (m *Model) currentPath() string {
 }
 
 func (m *Model) rebuild() {
-	m.doc = Build(m.session, m.comments, m.collapsed, m.layout, WithGroups(m.groups()))
+	m.doc = Build(m.session, m.comments, m.collapsed, m.layout, WithGroups(m.groups()), WithDraft(m.draft()))
 	if m.cursor >= m.doc.Len() {
 		m.cursor = m.doc.LastStop()
 	}
@@ -1068,15 +1215,16 @@ func (m *Model) resize(width, height int) {
 	m.width = max(width, 20)
 	m.height = max(height, 8)
 	m.renderer.SetWidth(m.diffWidth())
+	if m.mode == modeComment {
+		m.input.SetWidth(m.draftWidth())
+	}
 	// A walkthrough's explanations are wrapped into rows, so a resize changes
 	// how many rows the document has.
 	if len(m.doc.Steps) > 0 {
 		m.relayout()
 	}
-	if m.mode == modeComment {
-		m.input.SetWidth(max(m.width-4, 20))
-	}
 	m.clampTop()
 	m.ensureVisible(m.cursor)
 	m.ensureFileVisible()
+	m.revealDraft()
 }

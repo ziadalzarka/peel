@@ -48,6 +48,7 @@ peel --provider codex     # use Codex for the walkthrough instead of Claude
 | `u` | unstage that file, opening it again |
 | `a` / `U` | stage everything / unstage everything |
 | `c` | comment at the cursor, changed line or not |
+| `enter` / `alt+enter` | in the editor: save the comment / write another line |
 | `x` / `D` | resolve / delete the comment at the cursor |
 | `\` | toggle unified and side-by-side |
 | `w` / `W` | walkthrough on-off / regenerate it |
@@ -59,6 +60,10 @@ There is one cursor and it rests anywhere — file headers, hunk headers, commen
 and every line of a diff body, changed or not. Nothing to enter first: `s`
 anywhere inside a file stages that file, `c` anywhere leaves a note there,
 including on the untouched code a change breaks.
+
+`c` opens the editor inline, in the diff, exactly where the comment will sit once
+it is saved — the code stays on screen while you write about it, and the cursor
+is still on it afterwards. `enter` saves it; `alt+enter` writes another line.
 
 The mouse works too. The wheel scrolls whichever pane it is over and drags the
 cursor along, so the cursor never addresses a row that has left the screen.

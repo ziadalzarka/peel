@@ -25,12 +25,9 @@ type Groups struct {
 	Width int
 }
 
-// BuildOption customises how a document is laid out.
-type BuildOption func(*Groups)
-
 // WithGroups lays the diff out in the walkthrough's reading order, with each
 // step's explanation above the files it covers.
-func WithGroups(g Groups) BuildOption { return func(dst *Groups) { *dst = g } }
+func WithGroups(g Groups) BuildOption { return func(c *buildConfig) { c.groups = g } }
 
 // leftoverTitle heads the group holding whatever the narrative never placed.
 const leftoverTitle = "Not grouped"

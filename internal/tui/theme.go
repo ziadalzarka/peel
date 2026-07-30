@@ -5,26 +5,28 @@ import "github.com/charmbracelet/lipgloss"
 // Theme holds every style the UI draws with, so colours are chosen in one
 // place rather than scattered through the renderers.
 type Theme struct {
-	Added    lipgloss.Style
-	Removed  lipgloss.Style
-	Context  lipgloss.Style
-	Gutter   lipgloss.Style
-	HunkHead lipgloss.Style
-	FileHead lipgloss.Style
-	Note     lipgloss.Style
-	Comment  lipgloss.Style
-	Resolved lipgloss.Style
-	Author   lipgloss.Style
-	Cursor   lipgloss.Style
-	Header   lipgloss.Style
-	Footer   lipgloss.Style
-	Key      lipgloss.Style
-	Status   lipgloss.Style
-	Error    lipgloss.Style
-	Staged   lipgloss.Style
-	Partial  lipgloss.Style
-	Dim      lipgloss.Style
-	Title    lipgloss.Style
+	Added       lipgloss.Style
+	AddedFill   lipgloss.Style
+	Removed     lipgloss.Style
+	RemovedFill lipgloss.Style
+	Context     lipgloss.Style
+	Gutter      lipgloss.Style
+	HunkHead    lipgloss.Style
+	FileHead    lipgloss.Style
+	Note        lipgloss.Style
+	Comment     lipgloss.Style
+	Resolved    lipgloss.Style
+	Author      lipgloss.Style
+	Cursor      lipgloss.Style
+	Header      lipgloss.Style
+	Footer      lipgloss.Style
+	Key         lipgloss.Style
+	Status      lipgloss.Style
+	Error       lipgloss.Style
+	Staged      lipgloss.Style
+	Partial     lipgloss.Style
+	Dim         lipgloss.Style
+	Title       lipgloss.Style
 }
 
 // DefaultTheme returns the built-in colour scheme. Colours are adaptive so the
@@ -39,28 +41,33 @@ func DefaultTheme() Theme {
 		grey   = lipgloss.AdaptiveColor{Light: "#6e7781", Dark: "#8b949e"}
 		faint  = lipgloss.AdaptiveColor{Light: "#8c959f", Dark: "#6e7681"}
 		text   = lipgloss.AdaptiveColor{Light: "#1f2328", Dark: "#e6edf3"}
+
+		greenFill = lipgloss.AdaptiveColor{Light: "#e6ffec", Dark: "#16321f"}
+		redFill   = lipgloss.AdaptiveColor{Light: "#ffebe9", Dark: "#3a1c1f"}
 	)
 
 	return Theme{
-		Added:    lipgloss.NewStyle().Foreground(green),
-		Removed:  lipgloss.NewStyle().Foreground(red),
-		Context:  lipgloss.NewStyle().Foreground(text),
-		Gutter:   lipgloss.NewStyle().Foreground(faint),
-		HunkHead: lipgloss.NewStyle().Foreground(purple),
-		FileHead: lipgloss.NewStyle().Foreground(text).Bold(true),
-		Note:     lipgloss.NewStyle().Foreground(grey).Italic(true),
-		Comment:  lipgloss.NewStyle().Foreground(yellow),
-		Resolved: lipgloss.NewStyle().Foreground(faint).Strikethrough(true),
-		Author:   lipgloss.NewStyle().Foreground(grey),
-		Cursor:   lipgloss.NewStyle().Foreground(blue).Bold(true),
-		Header:   lipgloss.NewStyle().Foreground(text).Bold(true),
-		Footer:   lipgloss.NewStyle().Foreground(grey),
-		Key:      lipgloss.NewStyle().Foreground(blue),
-		Status:   lipgloss.NewStyle().Foreground(green),
-		Error:    lipgloss.NewStyle().Foreground(red).Bold(true),
-		Staged:   lipgloss.NewStyle().Foreground(green),
-		Partial:  lipgloss.NewStyle().Foreground(yellow),
-		Dim:      lipgloss.NewStyle().Foreground(faint),
-		Title:    lipgloss.NewStyle().Foreground(purple).Bold(true),
+		Added:       lipgloss.NewStyle().Foreground(green),
+		AddedFill:   lipgloss.NewStyle().Background(greenFill),
+		Removed:     lipgloss.NewStyle().Foreground(red),
+		RemovedFill: lipgloss.NewStyle().Background(redFill),
+		Context:     lipgloss.NewStyle().Foreground(text),
+		Gutter:      lipgloss.NewStyle().Foreground(faint),
+		HunkHead:    lipgloss.NewStyle().Foreground(purple),
+		FileHead:    lipgloss.NewStyle().Foreground(text).Bold(true),
+		Note:        lipgloss.NewStyle().Foreground(grey).Italic(true),
+		Comment:     lipgloss.NewStyle().Foreground(yellow),
+		Resolved:    lipgloss.NewStyle().Foreground(faint).Strikethrough(true),
+		Author:      lipgloss.NewStyle().Foreground(grey),
+		Cursor:      lipgloss.NewStyle().Foreground(blue).Bold(true),
+		Header:      lipgloss.NewStyle().Foreground(text).Bold(true),
+		Footer:      lipgloss.NewStyle().Foreground(grey),
+		Key:         lipgloss.NewStyle().Foreground(blue),
+		Status:      lipgloss.NewStyle().Foreground(green),
+		Error:       lipgloss.NewStyle().Foreground(red).Bold(true),
+		Staged:      lipgloss.NewStyle().Foreground(green),
+		Partial:     lipgloss.NewStyle().Foreground(yellow),
+		Dim:         lipgloss.NewStyle().Foreground(faint),
+		Title:       lipgloss.NewStyle().Foreground(purple).Bold(true),
 	}
 }
