@@ -217,6 +217,39 @@ func TestRenderCursorMarksADiffLineWithoutShiftingIt(t *testing.T) {
 	}
 }
 
+// A marker only at the far left of a split row says which row the cursor is on
+// but leaves the other pane unmarked, so each side gets one.
+func TestRenderCursorMarksBothSidesOfASplitRow(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutSplit)
+	r := plainRenderer(60)
+
+	row := -1
+	for i, x := range doc.Rows {
+		if x.Kind == RowLine {
+			row = i
+			break
+		}
+	}
+	if row < 0 {
+		t.Fatal("no diff line row")
+	}
+
+	plain := r.Row(doc, row, RowState{})
+	marked := r.Row(doc, row, RowState{Cursor: true})
+	if strings.Contains(plain, "▌") {
+		t.Errorf("a split row the cursor is not on shows a marker: %q", plain)
+	}
+	if !strings.HasPrefix(marked, "▌") {
+		t.Errorf("the cursor row = %q, want the old side marked at the left edge", marked)
+	}
+	if !strings.Contains(marked, splitRule+"▌") {
+		t.Errorf("the cursor row = %q, want the new side marked across the divider", marked)
+	}
+	if got := strings.ReplaceAll(marked, "▌", " "); got != plain {
+		t.Errorf("the markers shifted the split row:\n%q\n%q", got, plain)
+	}
+}
+
 func TestRenderOutOfRangeRowIsEmpty(t *testing.T) {
 	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
 	r := plainRenderer(40)

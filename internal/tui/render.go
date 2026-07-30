@@ -22,8 +22,12 @@ const (
 	fillProbe     = "x"
 )
 
-// splitDivider separates the two sides of a split row.
-const splitDivider = " │ "
+// splitRule is the line drawn between the two sides of a split row.
+const splitRule = " │"
+
+// splitDivider is what a split row spends between its halves: the rule, then a
+// column the new side's marker stands in.
+const splitDivider = splitRule + " "
 
 // RowState is what a row needs from outside the document to be drawn.
 type RowState struct {
@@ -170,7 +174,7 @@ func (r *Renderer) line(d Document, row Row, st RowState) string {
 	prefix := r.marker(st)
 	width := r.width - ansi.StringWidth(prefix)
 	if d.Layout == LayoutSplit {
-		return prefix + r.splitBody(ref, row, width)
+		return prefix + r.splitBody(ref, row, st, width)
 	}
 	return prefix + r.unifiedBody(ref, row, width)
 }
@@ -182,9 +186,10 @@ func (r *Renderer) unifiedBody(ref HunkRef, row Row, width int) string {
 }
 
 // splitBody puts the old side left of the new side. Either index may be -1,
-// where the change has no counterpart on that side.
-func (r *Renderer) splitBody(ref HunkRef, row Row, width int) string {
-	divider := r.theme.Dim.Render(splitDivider)
+// where the change has no counterpart on that side. The cursor is marked once
+// against each half.
+func (r *Renderer) splitBody(ref HunkRef, row Row, st RowState, width int) string {
+	divider := r.theme.Dim.Render(splitRule) + r.marker(st)
 	sides := width - ansi.StringWidth(divider)
 	half := sides / 2
 	left := r.halfLine(ref, row.Left, true, half)
