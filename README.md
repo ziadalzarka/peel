@@ -8,13 +8,26 @@ whole thing again in the terminal, re-deciding what you decided five minutes ago
 
 `peel` is one pass. Read a file, press `s`, and it is staged, folded away, and the
 next file is in front of you — what is left open is what is left to review.
-Comments you leave land in a store Claude Code can read, so "address my review
-comments" needs no copy-paste.
 
 ![peel reviewing its own working tree](docs/screenshots/review.png)
 
 The file list on the left is the review queue and a `✓` marks a staged file. The
 footer is the whole keymap.
+
+- **Staging is the review.** `s` stages a file and moves you to the next one still
+  open, so a pass is `s` after `s`. Whole files only — no patch generation, so
+  nothing here can write the wrong lines into your index.
+- **Comment where the code is.** `c` anywhere — changed line or not — opens the
+  editor inline, in the diff, at the spot the note will sit.
+- **Notes an agent can read.** Comments go to `.git/peel/comments.json`, which
+  Claude Code reads through the bundled skill, so "address my review comments"
+  needs no copy-paste. `C` copies them as text for an agent that cannot.
+- **A walkthrough in the diff.** `w` reorders the diff into the steps an AI
+  narrative reads it in, each explanation above the code it covers.
+- **It keeps up.** Follow mode re-reads the repository as it changes, and the
+  screen moves on the keypress rather than waiting for git.
+- **Read-only bases.** `--rev` reviews further back than HEAD, `--pr` reviews a
+  GitHub pull request.
 
 ## Install
 
@@ -87,9 +100,13 @@ and every line of a diff body, changed or not. Nothing to enter first: `s`
 anywhere inside a file stages that file, `c` anywhere leaves a note there,
 including on the untouched code a change breaks.
 
+### Comments
+
 `c` opens the editor inline, in the diff, exactly where the comment will sit once
 it is saved — the code stays on screen while you write about it, and the cursor
 is still on it afterwards. `enter` saves it; `alt+enter` writes another line.
+
+![writing a comment inline, in the diff](docs/screenshots/comment.png)
 
 A comment says who wrote it: `user:` for yours, `agent:` for one Claude Code left
 through the skill. The two are kept apart because only one of them is yours to
@@ -98,36 +115,31 @@ change that writes nothing, and `X` deletes every one of them at once, after
 asking. Neither can reach a note you wrote, and nothing an agent writes replaces
 one: comments are only ever appended.
 
+### Long lines and the mouse
+
 A line too long for the pane is read by scrolling to it rather than by wrapping
 it: `h` and `l` slide the code sideways under the line numbers, which stay put
-along with the `+` and `-`, so a row scrolled out to column 90 still says which
-line it is and whether it was added. `$` goes out to the end of the longest line
-in the diff and `0` comes back. The header names the column while you are away
-from the first one.
+along with the `+` and `-`. `$` goes out to the end of the longest line and `0`
+comes back; the header names the column while you are away from the first one.
 
-The mouse works too. The wheel scrolls whichever pane it is over and drags the
-cursor along, so the cursor never addresses a row that has left the screen. A
-horizontal wheel — a two-finger swipe, or shift and the wheel — slides the code,
-in terminals that report one: Ghostty, kitty, iTerm2, WezTerm and Alacritty all
-do. Where yours does not, or swallows the swipe for its own scrollback, `h` and
-`l` do the same thing.
+The wheel scrolls whichever pane it is over and drags the cursor along, so the
+cursor never addresses a row that has left the screen. A horizontal wheel — a
+two-finger swipe, or shift and the wheel — slides the code, in terminals that
+report one: Ghostty, kitty, iTerm2, WezTerm and Alacritty all do. Where yours
+does not, `h` and `l` do the same thing.
 
 ### Staging is whole-file
 
 A file is the unit a review decision is actually made in, so that is the unit
-peel stages: `git add` and `git restore --staged`, one path at a time. No patch
-generation, so none of `git add -p`'s failure modes — nothing here can write the
-wrong lines into your index. If you want to split a file, `git add -p` already
-does that well.
+peel stages: `git add` and `git restore --staged`, one path at a time. If you
+want to split a file, `git add -p` already does that well.
 
-Staging collapses the file and moves the cursor to the next file still to review,
-so a pass is `s` after `s` and never a jump back to find where you were. Files
-you have already staged or folded are passed over on the way, since they have
-been dealt with; only when nothing below is still open does the cursor stay on
-what you just staged. The fold
-is display only: `space` reads a staged file back without touching the index, and a
-stage that fails leaves the file open, and the cursor on it, because it still has
-to be dealt with.
+Staging collapses the file and moves the cursor to the next one still to review,
+never back to find where you were. Files already staged or folded are passed over
+on the way, since they have been dealt with; only when nothing below is still
+open does the cursor stay put. The fold is display only: `space` reads a staged
+file back without touching the index, and a stage that fails leaves the file
+open, and the cursor on it, because it still has to be dealt with.
 
 The fold and the move happen on the keypress, before git has been asked anything —
 as does a note appearing in the diff, and a comment resolving. None of it is in
