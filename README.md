@@ -32,6 +32,19 @@ footer is the whole keymap.
 ## Install
 
 ```sh
+brew install ziadalzarka/tap/peel
+```
+
+The skill ships inside the keg rather than in your skills directory, so link it
+once and Claude Code can read your review comments:
+
+```sh
+ln -sfn "$(brew --prefix peel)/libexec/skills/peel-review" ~/.claude/skills/peel-review
+```
+
+From a checkout instead:
+
+```sh
 make install          # builds and installs to /opt/homebrew/bin
 go build -o peel .    # or just build it here
 ```
@@ -220,6 +233,24 @@ internal/tui       the review UI
 
 `internal/git` never imports `internal/tui` — navigation and rendering are
 testable without a terminal, and the git layer stays reusable.
+
+## Release
+
+Tag a version and push the tag. CI runs the tests, cross-compiles darwin and
+linux for both architectures, publishes the archives with a checksum file, and
+bumps the formula in
+[ziadalzarka/homebrew-tap](https://github.com/ziadalzarka/homebrew-tap).
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Nothing about that is CI-only: `make dist VERSION=v0.1.0` writes the same four
+archives, and `.github/scripts/formula.sh v0.1.0 dist` prints the formula they
+produce, so a release can be read before it is tagged. Pushing to the tap needs a
+`HOMEBREW_TAP_TOKEN` secret — a fine-grained token with contents write on the tap
+repository, and the only thing the release cannot do for itself.
 
 See [SPEC.md](SPEC.md) for the design and the reasoning behind each decision,
 including the ones that were reversed.
