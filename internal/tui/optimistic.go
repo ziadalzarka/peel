@@ -226,3 +226,17 @@ func withoutComment(comments []store.Comment, id string) []store.Comment {
 	}
 	return out
 }
+
+func withoutComments(comments []store.Comment, ids []string) []store.Comment {
+	gone := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		gone[id] = true
+	}
+	out := make([]store.Comment, 0, len(comments))
+	for _, c := range comments {
+		if !gone[c.ID] {
+			out = append(out, c)
+		}
+	}
+	return out
+}

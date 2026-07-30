@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/ziadalzarka/peel/internal/ai"
 	"github.com/ziadalzarka/peel/internal/exec"
@@ -42,6 +43,10 @@ type App struct {
 	Root string
 	// StateDir is where peel keeps its files, inside the git directory.
 	StateDir string
+
+	// lookPath reports whether an executable is on PATH, which is how the
+	// clipboard tool is chosen. Injected for tests.
+	lookPath func(string) bool
 }
 
 // OpenCommand hands a file to whatever the desktop opens it with.
@@ -58,12 +63,52 @@ func (a *App) OpenFile(ctx context.Context, path string) error {
 	return err
 }
 
+// ClipboardCommands are the ways peel knows to reach the system clipboard, most
+// preferred first: the desktop's own tool, then either X11 selection helper,
+// then Windows' one for a working tree under WSL. The first one on PATH wins.
+var ClipboardCommands = [][]string{
+	{"pbcopy"},
+	{"wl-copy"},
+	{"xclip", "-selection", "clipboard"},
+	{"xsel", "--clipboard", "--input"},
+	{"clip.exe"},
+}
+
+// Copy puts text on the system clipboard, by piping it into whichever of
+// ClipboardCommands this machine has.
+func (a *App) Copy(ctx context.Context, text string) error {
+	for _, argv := range ClipboardCommands {
+		if !a.lookPath(argv[0]) {
+			continue
+		}
+		_, err := a.Runner.Run(ctx, exec.Command{
+			Name:  argv[0],
+			Args:  argv[1:],
+			Dir:   a.Root,
+			Stdin: strings.NewReader(text),
+		})
+		return err
+	}
+	return fmt.Errorf("nothing on PATH to copy with; install one of %s", strings.Join(clipboardNames(), ", "))
+}
+
+// clipboardNames lists the clipboard tools by name, for the error that says none
+// of them is installed.
+func clipboardNames() []string {
+	out := make([]string, 0, len(ClipboardCommands))
+	for _, argv := range ClipboardCommands {
+		out = append(out, argv[0])
+	}
+	return out
+}
+
 // Option customises how an App is opened. Tests use these to substitute fakes;
 // nothing in normal operation needs them.
 type Option func(*config)
 
 type config struct {
 	runner    exec.Runner
+	lookPath  func(string) bool
 	ai        *ai.Registry
 	forges    *forge.Registry
 	aiOpts    []ai.ClaudeCodeOption
@@ -75,6 +120,12 @@ type config struct {
 // WithRunner replaces the command runner used for git and every provider.
 func WithRunner(r exec.Runner) Option {
 	return func(c *config) { c.runner = r }
+}
+
+// WithLookPath overrides binary detection, for tests: it decides which clipboard
+// tool Copy pipes into.
+func WithLookPath(fn func(string) bool) Option {
+	return func(c *config) { c.lookPath = fn }
 }
 
 // WithAIRegistry replaces the default AI provider set.
@@ -112,7 +163,7 @@ func WithStoreOptions(opts ...store.Option) Option {
 // State lives in the working tree's own git directory rather than the shared
 // one, so each worktree keeps its own review notes.
 func Open(ctx context.Context, dir string, opts ...Option) (*App, error) {
-	cfg := &config{runner: exec.NewOSRunner()}
+	cfg := &config{runner: exec.NewOSRunner(), lookPath: exec.LookPath}
 	for _, opt := range opts {
 		opt(cfg)
 	}
@@ -157,5 +208,6 @@ func Open(ctx context.Context, dir string, opts ...Option) (*App, error) {
 		Runner:       cfg.runner,
 		Root:         root,
 		StateDir:     stateDir,
+		lookPath:     cfg.lookPath,
 	}, nil
 }

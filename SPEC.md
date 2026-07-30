@@ -91,6 +91,7 @@ it doesn't get relitigated.
 | **Changes are drawn before they are written** | optimistic, with rollback: the screen moves on the keypress, git is asked behind it | Added 2026-07-30. A stage is `git add` plus a full re-read — 50ms in a small repository, several hundred in a large one — and the answer is never in doubt, only slow. Waiting for it before redrawing makes a decision that has already been made look like peel thinking about it, and staging is a key pressed file after file. The guess is a prediction of a whole-file stage and nothing cleverer; the re-read behind it stays authoritative, and a write that fails restores the screen it was drawn over. Two rules keep the guess from being seen: writes are queued, so peel's own git calls cannot race for the index lock, and a read-back landing while another write is out is dropped rather than undrawing it. `q` waits for the writes it has already reported |
 | **Agent → index** | **Read-only. No flag, no escape hatch** | Claude Code can already run `git add` directly, so `peel hunks add` adds no capability — only a way for things to enter the index unreviewed |
 | **Comment store** | JSON at `.git/peel/comments.json` | Per-repo, survives restarts, invisible to `git status`, readable with no daemon running |
+| **Two reviews, one store** | every comment carries an author; `A` hides the agent's, `X` clears them, `peel comment clear --author agent` does the same from the CLI | Added 2026-07-30. An agent's pass and the reviewer's own notes land in the same file, and only the reviewer's are irreplaceable. Nothing an agent writes can overwrite one — `add` only ever appends — so deleting is the only way to lose one, and the agent's review is removable as a group without a key that can reach a note the reviewer wrote |
 | **Agent hookup** | CLI + `SKILL.md` | Agent pulls on demand. Deliberately *not* hunk's live-daemon model — see §6 |
 | **Walkthrough** | pluggable CLI providers: `claude -p` or `codex exec` | Reuses existing Claude Code or Codex auth. Claude stays the default; `--provider` selects explicitly |
 | **Walkthrough shape** | grouped, numbered steps in reading order | A reviewer wants to be walked through the changed code, not handed a summary of the changeset they can already see |
@@ -224,7 +225,7 @@ The CLI is the source of truth; `SKILL.md` just teaches Claude Code to use it.
 peel comment list [--json] [--file F]        # read your review notes
 peel comment add --file F --line N --summary "..."   # agent leaves its own
 peel comment rm <id>
-peel comment clear
+peel comment clear [--author agent]                 # its own review, not the user's
 peel hunks list [--json]                     # read-only: what's staged / not
 peel walkthrough [--regen]                   # cached markdown narrative
 peel --rev <ref> <any of the above>          # measured from an older base
@@ -239,6 +240,33 @@ you (TUI):  c → "this leaks the tx"      s → stage the good files
 you (CC):   "address my review comments"
 agent:      peel comment list --json  →  fixes  →  peel comment rm <id>
 ```
+
+### The paste path
+
+An agent in the repository reads the store. An agent in a browser tab, or on
+another machine, has no store to read — so `C` renders the same notes as text and
+puts them on the system clipboard:
+
+```
+Review comments copied from peel.
+
+Address each one. The path and line say where the note was left: …
+
+internal/tui/model.go:412
+  this leaks the tx
+```
+
+Written to be pasted into a conversation, not parsed: one block per note, the
+anchor in the `file:line` form every tool prints, the side named only when it is
+the old one, and no IDs or timestamps — they mean nothing to a reader that cannot
+look them up. It copies the notes *on screen*, so `A` narrows the handoff to the
+reviewer's own, and it leaves the resolved ones out with a count in the footer:
+sending an agent after work already done is worse than sending it after less.
+
+Reaching the clipboard means shelling out, the way `o` does — `pbcopy`, `wl-copy`,
+`xclip`, `xsel` or `clip.exe`, whichever is on `PATH` first. Not OSC 52: the
+terminal is bubbletea's while peel is running, and writing an escape sequence
+around its renderer to save a subprocess is not a trade worth making.
 
 ### Why not hunk's daemon model
 
@@ -329,6 +357,9 @@ that report one; `h`/`l` are the path that always works.
 | `enter` / `alt+enter` | in the editor: save the comment / write another line |
 | `x` | resolve or reopen the comment at the cursor |
 | `D` | delete the comment at the cursor |
+| `C` | copy the comments on screen as text, to paste into an agent |
+| `A` | hide or show the comments an agent left, leaving the reviewer's own |
+| `X` | delete every agent comment, after asking |
 | `\` | toggle unified ↔ side-by-side |
 | `w` | walkthrough on / off |
 | `W` | regenerate the walkthrough |
@@ -348,12 +379,13 @@ the header says `stale` and `W` writes new ones.
 Staging folds and moves on. `s` stages the file the cursor is in, collapses it and
 opens the next file still to review at the top of the window — so what is left
 open is what is left to review, the diff shrinks as the pass goes on, and one key
-both ends a file and starts the next. Already-staged files are skipped on the way,
-since they are folded away and there is nothing to decide about them. A file that
-is folded but not staged stops the move rather than being skipped or landed on: it
-has been read, and the file just dealt with is a better place to be than a header
-with nothing under it. The last file has nowhere to advance to and keeps the
-cursor. The fold is display only:
+both ends a file and starts the next. Files already staged and files already
+folded are both skipped on the way: each has been dealt with, and a header with
+nothing under it is nothing to carry the pass on with. Only when nothing below
+is still open does the cursor stay where it is, on the file just dealt with
+rather than on an arbitrary one — a file left open above does not pull it back,
+since the pass runs down the diff and what is behind the cursor was left open on
+purpose. The fold is display only:
 `space` reads a staged file back, and `u` opens it again on its way out of the
 index. A stage that fails leaves the file open and the cursor on it, because it
 still has to be dealt with.

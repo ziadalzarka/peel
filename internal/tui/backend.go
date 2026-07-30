@@ -27,6 +27,8 @@ type Backend interface {
 
 	// OpenFile hands a file to the desktop, for reading it outside the diff.
 	OpenFile(ctx context.Context, path string) error
+	// Copy puts text on the system clipboard.
+	Copy(ctx context.Context, text string) error
 
 	// Folded returns the files folded away when this review was last read.
 	Folded() ([]string, error)
@@ -120,6 +122,10 @@ func (b *appBackend) UnstageAll(ctx context.Context) error {
 
 func (b *appBackend) OpenFile(ctx context.Context, path string) error {
 	return b.app.OpenFile(ctx, path)
+}
+
+func (b *appBackend) Copy(ctx context.Context, text string) error {
+	return b.app.Copy(ctx, text)
 }
 
 func (b *appBackend) Folded() ([]string, error) {

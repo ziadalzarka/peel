@@ -74,6 +74,8 @@ repository changes.
 | `c` | comment at the cursor, changed line or not |
 | `enter` / `alt+enter` | in the editor: save the comment / write another line |
 | `x` / `D` | resolve / delete the comment at the cursor |
+| `C` | copy the comments as text, to paste into an agent |
+| `A` / `X` | hide the comments an agent left / delete every one of them |
 | `\` | toggle unified and side-by-side |
 | `w` / `W` | walkthrough on-off / regenerate it |
 | `f` | follow: re-read the repository as it changes |
@@ -88,6 +90,13 @@ including on the untouched code a change breaks.
 `c` opens the editor inline, in the diff, exactly where the comment will sit once
 it is saved — the code stays on screen while you write about it, and the cursor
 is still on it afterwards. `enter` saves it; `alt+enter` writes another line.
+
+A comment says who wrote it: `user:` for yours, `agent:` for one Claude Code left
+through the skill. The two are kept apart because only one of them is yours to
+lose — `A` takes the agent's notes out of the diff and puts them back, a display
+change that writes nothing, and `X` deletes every one of them at once, after
+asking. Neither can reach a note you wrote, and nothing an agent writes replaces
+one: comments are only ever appended.
 
 A line too long for the pane is read by scrolling to it rather than by wrapping
 it: `h` and `l` slide the code sideways under the line numbers, which stay put
@@ -112,9 +121,10 @@ wrong lines into your index. If you want to split a file, `git add -p` already
 does that well.
 
 Staging collapses the file and moves the cursor to the next file still to review,
-so a pass is `s` after `s` and never a jump back to find where you were. A file
-you have already folded stops the move: it has been read, so the cursor stays on
-what you just staged instead of landing on a fold. The fold
+so a pass is `s` after `s` and never a jump back to find where you were. Files
+you have already staged or folded are passed over on the way, since they have
+been dealt with; only when nothing below is still open does the cursor stay on
+what you just staged. The fold
 is display only: `space` reads a staged file back without touching the index, and a
 stage that fails leaves the file open, and the cursor on it, because it still has
 to be dealt with.
@@ -159,6 +169,7 @@ peel hunks list --json                  # what changed, and what is staged
 peel --rev HEAD~2 hunks list --json     # the same, measured from an older base
 peel comment list --json                # what the user wrote while reading
 peel comment add --file F --line N --body "..."
+peel comment clear --author agent       # its own review, never the user's
 peel walkthrough                        # the cached narrative, as markdown
 ```
 
@@ -173,6 +184,14 @@ Two things it deliberately will not do:
 
 Comments are written straight through to `.git/peel/comments.json`, so there is no
 daemon and no session to attach to: review, quit, *then* ask Claude.
+
+For an agent that cannot read that file — a browser tab, or one on another
+machine — `C` puts the review on the clipboard as text to paste into it: one
+block per note, saying which file and line it was left on and what it says.
+Resolved notes are left out, since those have been dealt with, and the footer says
+how many. `A` narrows it further: what `C` copies is the review on screen, so the
+agent's own notes go with them when they are hidden. Copying needs a clipboard
+tool on `PATH` — `pbcopy`, `wl-copy`, `xclip`, `xsel` or `clip.exe`.
 
 ## Layout
 

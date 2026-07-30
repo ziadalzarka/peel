@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -859,6 +860,66 @@ func TestOpenFileReportsTheFailure(t *testing.T) {
 	}
 	if err := a.OpenFile(context.Background(), "main.go"); err == nil {
 		t.Fatal("OpenFile succeeded despite the opener failing")
+	}
+}
+
+// Copy pipes the text into the first clipboard tool this machine has, so peel
+// reaches the clipboard on a desktop, under Wayland, under X11 and under WSL
+// without being told which it is on.
+func TestCopyPipesTheTextIntoTheFirstClipboardToolOnPath(t *testing.T) {
+	for _, want := range app.ClipboardCommands {
+		t.Run(want[0], func(t *testing.T) {
+			repo := gittest.New(t)
+			runner := exec.NewFakeRunner().
+				Respond("rev-parse --show-toplevel", repo.Dir+"\n").
+				Respond("rev-parse --absolute-git-dir", filepath.Join(repo.Dir, ".git")+"\n").
+				Respond(strings.Join(want, " "), "")
+
+			a, err := app.Open(context.Background(), repo.Dir,
+				app.WithRunner(runner),
+				app.WithLookPath(func(name string) bool { return name == want[0] }),
+			)
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			if err := a.Copy(context.Background(), "the review"); err != nil {
+				t.Fatalf("Copy: %v", err)
+			}
+
+			calls := runner.Calls()
+			last := calls[len(calls)-1]
+			if got := append([]string{last.Cmd.Name}, last.Cmd.Args...); !slices.Equal(got, want) {
+				t.Errorf("ran %v, want %v", got, want)
+			}
+			if last.Stdin != "the review" {
+				t.Errorf("stdin = %q, want the text to copy", last.Stdin)
+			}
+		})
+	}
+}
+
+// A machine with no clipboard tool says so, and names the ones peel would use,
+// rather than reporting a copy that never happened.
+func TestCopyWithoutAClipboardToolNamesTheOnesItWanted(t *testing.T) {
+	repo := gittest.New(t)
+	runner := exec.NewFakeRunner().
+		Respond("rev-parse --show-toplevel", repo.Dir+"\n").
+		Respond("rev-parse --absolute-git-dir", filepath.Join(repo.Dir, ".git")+"\n")
+
+	a, err := app.Open(context.Background(), repo.Dir,
+		app.WithRunner(runner),
+		app.WithLookPath(func(string) bool { return false }),
+	)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+
+	err = a.Copy(context.Background(), "the review")
+	if err == nil {
+		t.Fatal("Copy succeeded with nothing to copy with")
+	}
+	if !strings.Contains(err.Error(), app.ClipboardCommands[0][0]) {
+		t.Errorf("error = %q, want it to name a tool to install", err)
 	}
 }
 

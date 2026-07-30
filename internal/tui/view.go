@@ -89,7 +89,12 @@ func (m *Model) headerView() string {
 	if m.follow {
 		right = append([]string{m.theme.Status.Render("following")}, right...)
 	}
-	if n := len(m.comments); n > 0 {
+	// Hidden notes are said to be hidden, so a diff the agent has commented on
+	// does not read as one it has not.
+	if m.agentCommentsOff {
+		right = append([]string{m.theme.Partial.Render("agent hidden")}, right...)
+	}
+	if n := len(m.visibleComments()); n > 0 {
 		right = append([]string{m.theme.Comment.Render(plural(n, "comment"))}, right...)
 	}
 	if !m.session.Stageable {
@@ -104,6 +109,8 @@ func (m *Model) headerView() string {
 func (m *Model) footerView() string {
 	var status string
 	switch {
+	case m.ask != nil:
+		status = m.theme.Status.Render(m.ask.question)
 	case m.err != nil:
 		status = m.theme.Error.Render(m.err.Error())
 	case m.status != "":
@@ -119,6 +126,8 @@ func (m *Model) hints() string {
 		return "enter save · alt+enter new line · esc cancel"
 	case modeHelp:
 		return "any key to close"
+	case modeConfirm:
+		return "y confirm · any other key cancels"
 	default:
 		return `j/k hunk · ↓/↑ line · [/] file · s stage file · u unstage · space fold · c comment · b files · \ layout · w walkthrough · ? help · q quit`
 	}
@@ -244,6 +253,9 @@ var helpBindings = []struct{ keys, action string }{
 	{"enter / alt+enter", "in the editor: save the comment / write another line"},
 	{"x", "resolve or reopen the comment at the cursor"},
 	{"D", "delete the comment at the cursor"},
+	{"C", "copy the comments as text, to paste into an agent"},
+	{"A", "hide or show the comments an agent left, leaving your own"},
+	{"X", "delete every agent comment — it asks first"},
 	{`\`, "toggle unified and side-by-side"},
 	{"w", "walkthrough: group the diff into steps, with a note before each"},
 	{"W", "regenerate the walkthrough"},

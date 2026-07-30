@@ -531,6 +531,34 @@ func TestCommentClearResolvedOnly(t *testing.T) {
 	}
 }
 
+func TestCommentClearByAuthorLeavesTheUsersNotes(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+	h.mustRun("comment", "add", "--file", "a.txt", "--line", "1", "--body", "mine", "--author", "user")
+	h.mustRun("comment", "add", "--file", "a.txt", "--line", "2", "--body", "theirs")
+
+	if got := h.mustRun("comment", "clear", "--author", "agent"); !strings.Contains(got, "1 comment") {
+		t.Errorf("clear output = %q", got)
+	}
+
+	var left []map[string]any
+	mustJSON(t, h.mustRun("comment", "list", "--json"), &left)
+	if len(left) != 1 || left[0]["body"] != "mine" {
+		t.Errorf("remaining = %v, want only the user's comment", left)
+	}
+}
+
+func TestCommentClearRejectsAnUnknownAuthor(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+	if code := h.run("comment", "clear", "--author", "robot"); code != 2 {
+		t.Errorf("exit code = %d, want 2 — %s", code, h.err())
+	}
+	if !strings.Contains(h.err(), "want user or agent") {
+		t.Errorf("stderr = %q", h.err())
+	}
+}
+
 func TestCommentAddValidation(t *testing.T) {
 	tests := []struct {
 		name string

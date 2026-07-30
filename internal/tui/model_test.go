@@ -586,11 +586,9 @@ func TestStagingSkipsFilesThatAreAlreadyStaged(t *testing.T) {
 	}
 }
 
-// A folded file has been read already, so it is not somewhere to move to
-// either: staging stops on the file it just dealt with rather than jumping to a
-// header with nothing under it, and rather than reaching past it for a file
-// further down.
-func TestStagingStaysPutWhenTheNextFileIsFolded(t *testing.T) {
+// A folded file has been read already, so staging passes over it the way it
+// passes over a staged one and carries on to the next file still open.
+func TestStagingSkipsFilesThatAreFolded(t *testing.T) {
 	backend := newFakeBackend(newSession(t, threeFileDiff))
 	backend.folded = []string{"beta.txt"}
 
@@ -601,8 +599,27 @@ func TestStagingStaysPutWhenTheNextFileIsFolded(t *testing.T) {
 	m := newModel(t, backend)
 	press(t, m, "s")
 
-	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "alpha.go" {
-		t.Errorf("cursor is on %q, want it to stay on alpha.go — beta.txt below it is folded away", got)
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "gamma.md" {
+		t.Errorf("cursor is on %q, want gamma.md — beta.txt is folded away, but gamma.md below it is still open", got)
+	}
+}
+
+// With nothing open below, there is nowhere to carry the pass on to: the cursor
+// stays on the file just dealt with rather than landing on a header with
+// nothing under it. A file left open above does not pull the cursor back.
+func TestStagingStaysPutWhenEverythingBelowIsFolded(t *testing.T) {
+	backend := newFakeBackend(newSession(t, threeFileDiff))
+	backend.folded = []string{"gamma.md"}
+
+	staged := parseFiles(t, threeFileDiff)
+	staged[1].Staged, staged[1].Unstaged = staged[1].Unstaged, nil
+	backend.nextSession = sessionOf(staged)
+
+	m := newModel(t, backend)
+	press(t, m, "]", "s")
+
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
+		t.Errorf("cursor is on %q, want it to stay on beta.txt — gamma.md is folded and alpha.go is behind the cursor", got)
 	}
 }
 
@@ -815,9 +832,9 @@ func TestFoldingTheLastFileStaysOnIt(t *testing.T) {
 	}
 }
 
-// Folding stops where staging does, for the same reason: the file below has
-// been read already, so there is nothing there to carry the pass on with.
-func TestFoldingStaysPutWhenTheNextFileIsFolded(t *testing.T) {
+// Folding moves on the way staging does, over what has been read already and on
+// to the next file still open.
+func TestFoldingSkipsFilesThatAreFolded(t *testing.T) {
 	backend := newFakeBackend(newSession(t, threeFileDiff))
 	backend.folded = []string{"beta.txt"}
 	m := newModel(t, backend)
@@ -827,8 +844,8 @@ func TestFoldingStaysPutWhenTheNextFileIsFolded(t *testing.T) {
 	if !m.doc.Files[0].Collapsed {
 		t.Fatal("space did not collapse alpha.go")
 	}
-	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "alpha.go" {
-		t.Errorf("cursor is on %q, want it to stay on alpha.go — beta.txt below it is folded away", got)
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "gamma.md" {
+		t.Errorf("cursor is on %q, want gamma.md — beta.txt is folded away, but gamma.md below it is still open", got)
 	}
 }
 
@@ -1078,6 +1095,201 @@ func TestResolveAndDeleteActOnTheCommentAtTheCursor(t *testing.T) {
 	press(t, m, "D")
 	if got := backend.removed; len(got) != 1 || got[0] != "c1" {
 		t.Errorf("RemoveComment calls = %v, want [c1]", got)
+	}
+}
+
+// reviewedByBoth is a diff commented on by an agent and by the reviewer, which
+// is what `A` and `X` have to tell apart.
+func reviewedByBoth(t *testing.T) *fakeBackend {
+	t.Helper()
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "a1", File: "alpha.go", Line: 3, Body: "this drops the error", Author: store.AuthorAgent},
+		{ID: "u1", File: "alpha.go", Line: 4, Body: "mine, keep it", Author: store.AuthorUser},
+		{ID: "a2", File: "beta.txt", Line: 2, Body: "and this one moved", Author: store.AuthorAgent},
+	}
+	return backend
+}
+
+func TestAHidesTheAgentsCommentsAndLeavesTheReviewersOwn(t *testing.T) {
+	backend := reviewedByBoth(t)
+	m := newModel(t, backend)
+
+	press(t, m, "A")
+	for _, id := range []string{"a1", "a2"} {
+		if row := m.doc.RowOfComment(id); row >= 0 {
+			t.Errorf("agent comment %s is still on row %d", id, row)
+		}
+	}
+	if m.doc.RowOfComment("u1") < 0 {
+		t.Error("the reviewer's own comment went with them")
+	}
+	if !strings.Contains(m.headerView(), "agent hidden") {
+		t.Errorf("header = %q, want it to say the notes are hidden", m.headerView())
+	}
+	if len(backend.removed) != 0 {
+		t.Errorf("hiding removed %v — it must not write anything", backend.removed)
+	}
+
+	press(t, m, "A")
+	for _, id := range []string{"a1", "u1", "a2"} {
+		if m.doc.RowOfComment(id) < 0 {
+			t.Errorf("comment %s did not come back", id)
+		}
+	}
+}
+
+func TestXDeletesEveryAgentCommentOnlyAfterYes(t *testing.T) {
+	backend := reviewedByBoth(t)
+	m := newModel(t, backend)
+
+	press(t, m, "X")
+	if m.mode != modeConfirm {
+		t.Fatalf("mode = %v, want the question to be up", m.mode)
+	}
+	if !strings.Contains(m.footerView(), "delete 2 agent comments?") {
+		t.Errorf("footer = %q, want it to ask", m.footerView())
+	}
+
+	press(t, m, "n")
+	if len(backend.removed) != 0 {
+		t.Fatalf("a no deleted %v", backend.removed)
+	}
+	if m.mode != modeBrowse || !strings.Contains(m.status, "cancelled") {
+		t.Errorf("mode = %v, status = %q", m.mode, m.status)
+	}
+
+	press(t, m, "X", "y")
+	if got := append([]string(nil), backend.removed...); len(got) != 2 || got[0] != "a1" || got[1] != "a2" {
+		t.Errorf("RemoveComment calls = %v, want [a1 a2]", got)
+	}
+	if m.doc.RowOfComment("u1") < 0 {
+		t.Error("the reviewer's own comment was deleted with the agent's")
+	}
+	if !strings.Contains(m.status, "deleted 2 agent comments") {
+		t.Errorf("status = %q", m.status)
+	}
+}
+
+func TestTheAgentCommentKeysSayWhenThereAreNone(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "u1", File: "alpha.go", Line: 3, Body: "mine", Author: store.AuthorUser},
+	}
+	m := newModel(t, backend)
+
+	press(t, m, "A")
+	if m.agentCommentsOff || !strings.Contains(m.status, "no agent comments") {
+		t.Errorf("hidden = %v, status = %q", m.agentCommentsOff, m.status)
+	}
+
+	press(t, m, "X")
+	if m.mode != modeBrowse {
+		t.Errorf("mode = %v, want no question over an empty deletion", m.mode)
+	}
+	if m.doc.RowOfComment("u1") < 0 {
+		t.Error("the reviewer's own comment left the diff")
+	}
+}
+
+// `C` hands the review to an agent that cannot read peel's store: the notes go
+// on the clipboard as text, the resolved ones stay behind, and the review itself
+// does not move.
+func TestCCopiesTheReviewAsTextToPaste(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 3, Side: store.SideNew, Body: "this leaks the tx", Author: store.AuthorUser},
+		{ID: "c2", File: "alpha.go", Line: 4, Side: store.SideNew, Body: "dealt with", Author: store.AuthorUser, Resolved: true},
+		{ID: "c3", File: "beta.txt", Line: 2, Side: store.SideNew, Body: "wrong fixture", Author: store.AuthorUser},
+	}
+	m := newModel(t, backend)
+	before := m.cursor
+
+	press(t, m, "C")
+
+	if len(backend.copied) != 1 {
+		t.Fatalf("Copy called %d times, want 1", len(backend.copied))
+	}
+	text := backend.copied[0]
+	for _, want := range []string{"alpha.go:3", "this leaks the tx", "beta.txt:2", "wrong fixture"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the copied review is missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "dealt with") {
+		t.Errorf("a resolved note was handed over:\n%s", text)
+	}
+	if !strings.Contains(m.status, "copied 2 comments") || !strings.Contains(m.status, "1 resolved one left out") {
+		t.Errorf("status = %q, want the copy and the omission both reported", m.status)
+	}
+	if m.cursor != before {
+		t.Errorf("cursor moved from row %d to %d — copying is not progress through the diff", before, m.cursor)
+	}
+}
+
+// Hiding the agent's notes with `A` takes them out of the handoff too: what `C`
+// copies is the review on screen.
+func TestCCopiesOnlyTheNotesOnScreen(t *testing.T) {
+	backend := reviewedByBoth(t)
+	m := newModel(t, backend)
+
+	press(t, m, "A", "C")
+
+	if len(backend.copied) != 1 {
+		t.Fatalf("Copy called %d times, want 1", len(backend.copied))
+	}
+	text := backend.copied[0]
+	if !strings.Contains(text, "mine, keep it") {
+		t.Errorf("the reviewer's own note was left out:\n%s", text)
+	}
+	for _, agent := range []string{"this drops the error", "and this one moved"} {
+		if strings.Contains(text, agent) {
+			t.Errorf("a hidden agent note was copied:\n%s", text)
+		}
+	}
+}
+
+func TestCSaysWhenThereIsNothingToHandOver(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	m := newModel(t, backend)
+
+	press(t, m, "C")
+	if len(backend.copied) != 0 {
+		t.Fatalf("an empty review was copied: %q", backend.copied)
+	}
+	if !strings.Contains(m.status, "no comments to copy") {
+		t.Errorf("status = %q", m.status)
+	}
+
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 3, Body: "dealt with", Author: store.AuthorUser, Resolved: true},
+	}
+	m = newModel(t, backend)
+
+	press(t, m, "C")
+	if len(backend.copied) != 0 {
+		t.Fatalf("a resolved review was copied: %q", backend.copied)
+	}
+	if !strings.Contains(m.status, "every comment is resolved") {
+		t.Errorf("status = %q, want the resolved review distinguished from an empty one", m.status)
+	}
+}
+
+func TestCReportsHavingNothingToCopyWith(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 3, Body: "this leaks the tx", Author: store.AuthorUser},
+	}
+	backend.opErr = errors.New("nothing on PATH to copy with")
+	m := newModel(t, backend)
+
+	press(t, m, "C")
+
+	if m.err == nil {
+		t.Fatal("a failed copy reported nothing")
+	}
+	if strings.Contains(m.status, "copied") {
+		t.Errorf("status = %q, want the copy taken back off", m.status)
 	}
 }
 

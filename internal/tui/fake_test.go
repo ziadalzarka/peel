@@ -111,6 +111,8 @@ type fakeBackend struct {
 	stageAll      int
 	unstageAll    int
 	opened        []string
+	// copied is every text handed to the clipboard, in order.
+	copied []string
 
 	// folded is what the review folded away, kept the way the store would.
 	folded      []string
@@ -254,6 +256,14 @@ func (f *fakeBackend) OpenFile(_ context.Context, path string) error {
 		return err
 	}
 	f.opened = append(f.opened, path)
+	return nil
+}
+
+func (f *fakeBackend) Copy(_ context.Context, text string) error {
+	if err := f.take(); err != nil {
+		return err
+	}
+	f.copied = append(f.copied, text)
 	return nil
 }
 

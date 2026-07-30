@@ -54,11 +54,8 @@ func commentList(ctx context.Context, c *CLI, args []string) error {
 	}
 	filter.File = *file
 	filter.Unresolved = *unresolved
-	if *author != "" {
-		filter.Author = store.Author(*author)
-		if !filter.Author.Valid() {
-			return usageErrorf("unknown author %q; want user or agent", *author)
-		}
+	if err := narrowToAuthor(&filter, *author); err != nil {
+		return err
 	}
 
 	comments, err := a.Comments.List(filter)
@@ -179,6 +176,7 @@ func commentClear(ctx context.Context, c *CLI, args []string) error {
 	fs := newFlagSet("comment clear")
 	file := fs.String("file", "", "only clear comments on this path")
 	resolved := fs.Bool("resolved", false, "only clear comments already resolved")
+	author := fs.String("author", "", "only clear comments by this author (user or agent)")
 	allTargets := fs.Bool("all", false, "clear comments from every review target")
 	if err := parse(fs, args); err != nil {
 		return err
@@ -194,6 +192,9 @@ func commentClear(ctx context.Context, c *CLI, args []string) error {
 		filter = store.Filter{}
 	}
 	filter.File = *file
+	if err := narrowToAuthor(&filter, *author); err != nil {
+		return err
+	}
 
 	// Clear has no "resolved only" filter of its own, so select the ids first.
 	if *resolved {
@@ -205,6 +206,20 @@ func commentClear(ctx context.Context, c *CLI, args []string) error {
 		return err
 	}
 	fmt.Fprintf(c.Stdout, "cleared %s\n", plural(n, "comment"))
+	return nil
+}
+
+// narrowToAuthor restricts a filter to one author, so `--author agent` clears
+// the review an agent left without touching the notes the user wrote. An empty
+// name leaves the filter alone.
+func narrowToAuthor(filter *store.Filter, name string) error {
+	if name == "" {
+		return nil
+	}
+	filter.Author = store.Author(name)
+	if !filter.Author.Valid() {
+		return usageErrorf("unknown author %q; want user or agent", name)
+	}
 	return nil
 }
 

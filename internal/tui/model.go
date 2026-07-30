@@ -22,6 +22,7 @@ const (
 	modeBrowse mode = iota
 	modeComment
 	modeHelp
+	modeConfirm
 )
 
 // Model is the review UI's state.
@@ -32,10 +33,14 @@ type Model struct {
 	ctx     context.Context
 	backend Backend
 
-	session   *app.Session
-	comments  []store.Comment
-	doc       Document
-	collapsed map[string]bool
+	session  *app.Session
+	comments []store.Comment
+	// agentCommentsOff keeps the agent's notes out of the diff, leaving the
+	// reviewer's own. It is a display change and nothing else: what is hidden is
+	// still in the store, and `A` puts it back.
+	agentCommentsOff bool
+	doc              Document
+	collapsed        map[string]bool
 
 	cursor int
 	top    int
@@ -60,6 +65,9 @@ type Model struct {
 
 	input   textarea.Model
 	pending anchor
+	// ask is the question the footer is putting to the reviewer, and what to do
+	// if they say yes. It is set only in modeConfirm.
+	ask *confirm
 
 	// walkSteps is the narrative parsed into the groups it comments on, kept so
 	// the diff can be laid out again when the terminal resizes or a step folds.
@@ -289,7 +297,7 @@ const wheelColumns = 4
 
 // mouse routes a wheel notch to whatever it should move.
 func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
-	if m.mode == modeComment || m.mode == modeHelp {
+	if m.mode != modeBrowse {
 		return nil
 	}
 
@@ -326,6 +334,8 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 		return m.helpKey(msg)
 	case modeComment:
 		return m.commentKey(msg)
+	case modeConfirm:
+		return m.confirmKey(msg)
 	default:
 		return m.browseKey(msg)
 	}
@@ -391,6 +401,12 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 		return m.toggleResolved()
 	case "D":
 		return m.deleteComment()
+	case "C":
+		return m.copyComments()
+	case "A":
+		m.toggleAgentComments()
+	case "X":
+		m.askClearAgentComments()
 	case `\`:
 		m.setLayout(m.layout.Toggle())
 	case "w":
@@ -403,6 +419,28 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 		return m.toggleFollow()
 	}
 	return nil
+}
+
+// confirm is a question the footer is putting to the reviewer, and what to do
+// if they say yes.
+type confirm struct {
+	question string
+	yes      func() tea.Cmd
+}
+
+// confirmKey answers the question in the footer. Only `y` is a yes, so a key
+// pressed out of habit while it is up cancels rather than deletes.
+func (m *Model) confirmKey(msg tea.KeyMsg) tea.Cmd {
+	if msg.String() == "ctrl+c" {
+		return m.quit()
+	}
+	ask := m.ask
+	m.mode, m.ask = modeBrowse, nil
+	if ask == nil || msg.String() != "y" {
+		m.status = "cancelled"
+		return nil
+	}
+	return ask.yes()
 }
 
 func (m *Model) commentKey(msg tea.KeyMsg) tea.Cmd {
@@ -754,10 +792,10 @@ func (m *Model) foldNow(path string) {
 	m.advanceFrom(path)
 }
 
-// advanceFrom moves the cursor on to the next file with something left to
-// review, which is where the pass carries on once path has been dealt with. It
-// stays on path when nothing below it is left, since a file that has just been
-// folded is a better place to be than an arbitrary one.
+// advanceFrom moves the cursor on to the next file left open below, which is
+// where the pass carries on once path has been dealt with. It stays on path
+// when nothing below it is open, since a file that has just been folded is a
+// better place to be than an arbitrary one.
 func (m *Model) advanceFrom(path string) {
 	if next := m.nextToReview(path); next >= 0 {
 		m.showFile(m.doc.topOf(m.doc.RowOfFile(next)))
@@ -766,12 +804,14 @@ func (m *Model) advanceFrom(path string) {
 	m.restoreCursor(path)
 }
 
-// nextToReview finds the first file below path that is not already staged, or
-// -1 when there is none — including when path itself has gone.
+// nextToReview finds the first file below path that is still open to read — not
+// staged, and not folded away — or -1 when there is none, including when path
+// itself has gone.
 //
-// A folded file stops the search rather than being jumped to or passed over: it
-// has been read already, and its header on its own is nothing to carry the pass
-// on with. The reviewer stays on the file they just dealt with instead.
+// Staged and folded files are both passed over: each has been dealt with, and a
+// header with nothing under it is nothing to carry the pass on with. What is
+// above path does not come into it — the pass runs down the diff, and a file
+// left open behind the cursor was left that way on purpose.
 func (m *Model) nextToReview(path string) int {
 	file := m.fileIndex(path)
 	if file < 0 {
@@ -782,7 +822,7 @@ func (m *Model) nextToReview(path string) int {
 			continue
 		}
 		if m.collapsed[m.doc.Files[i].Entry.Path] {
-			return -1
+			continue
 		}
 		return i
 	}
@@ -1014,6 +1054,135 @@ func (m *Model) deleteComment() tea.Cmd {
 	})
 }
 
+// copyComments puts the review on the clipboard as text to paste into an agent.
+//
+// An agent working in this repository reads the store instead, so what this is
+// for is the one that cannot: a browser tab, or another machine. It copies the
+// notes on screen, so hiding the agent's with `A` leaves the reviewer's own to
+// hand over, and it leaves the resolved ones out — those have been dealt with,
+// and an agent asked to address them would only redo work already done.
+//
+// Nothing about the review changes, so there is nothing to queue: the copy is
+// reported as done straight away, and only comes back if there was nothing on
+// PATH to copy with.
+func (m *Model) copyComments() tea.Cmd {
+	open, resolved := stillOpen(m.visibleComments())
+	if len(open) == 0 {
+		m.status = "no comments to copy"
+		if resolved > 0 {
+			m.status = "every comment is resolved — nothing to copy"
+		}
+		return nil
+	}
+
+	text := commentHandoff(open)
+	before := m.snapshot()
+	m.status = "copied " + plural(len(open), "comment")
+	if resolved > 0 {
+		m.status += " — " + plural(resolved, "resolved one") + " left out"
+	}
+	backend, ctx := m.backend, m.ctx
+	return func() tea.Msg {
+		if err := backend.Copy(ctx, text); err != nil {
+			return revertMsg{err: err, before: before}
+		}
+		return nil
+	}
+}
+
+// toggleAgentComments takes the agent's notes out of the diff, or puts them
+// back — for reading the code without a review that has already been read
+// sitting in it. Nothing is written: `X` is the one that deletes.
+func (m *Model) toggleAgentComments() {
+	n := len(agentComments(m.comments))
+	if n == 0 {
+		m.status = "no agent comments"
+		return
+	}
+	m.agentCommentsOff = !m.agentCommentsOff
+	m.relayout()
+	if m.agentCommentsOff {
+		m.status = plural(n, "agent comment") + " hidden"
+		return
+	}
+	m.status = plural(n, "agent comment") + " shown"
+}
+
+// askClearAgentComments puts the deletion to the reviewer before doing it. One
+// comment deleted by mistake is a comment to write again; a whole review is
+// not, so `X` asks and `D` does not.
+func (m *Model) askClearAgentComments() {
+	ids := savedIDs(agentComments(m.comments))
+	if len(ids) == 0 {
+		m.status = "no agent comments to delete"
+		return
+	}
+	m.mode = modeConfirm
+	m.ask = &confirm{
+		question: "delete " + plural(len(ids), "agent comment") + "?",
+		yes:      func() tea.Cmd { return m.clearAgentComments(ids) },
+	}
+}
+
+// clearAgentComments removes the agent's notes, a store call each behind a
+// single change on screen. Hiding them again would say nothing once they are
+// gone, so the filter comes off with them.
+func (m *Model) clearAgentComments(ids []string) tea.Cmd {
+	backend := m.backend
+	return m.apply(func() {
+		m.comments = withoutComments(m.comments, ids)
+		m.agentCommentsOff = false
+		m.status = "deleted " + plural(len(ids), "agent comment")
+		m.relayout()
+	}, func(context.Context) error {
+		for _, id := range ids {
+			if err := backend.RemoveComment(id); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// agentComments picks out the notes an agent left. A comment written here is
+// the reviewer's own, so `A` and `X` never reach one.
+func agentComments(comments []store.Comment) []store.Comment {
+	out := make([]store.Comment, 0, len(comments))
+	for _, c := range comments {
+		if c.Author == store.AuthorAgent {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// visibleComments is the list the document is built from: all of them, until
+// the agent's are hidden.
+func (m *Model) visibleComments() []store.Comment {
+	if !m.agentCommentsOff {
+		return m.comments
+	}
+	out := make([]store.Comment, 0, len(m.comments))
+	for _, c := range m.comments {
+		if c.Author != store.AuthorAgent {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// savedIDs collects the ids of comments the store knows about, leaving out any
+// drawn ahead of their own write — those have no id to remove yet.
+func savedIDs(comments []store.Comment) []string {
+	out := make([]string, 0, len(comments))
+	for _, c := range comments {
+		if !unsaved(c) {
+			out = append(out, c.ID)
+		}
+	}
+	return out
+}
+
 // commentAtCursor resolves the comment a key is about to act on.
 //
 // A comment written a moment ago is on screen before the store has it, and the
@@ -1143,8 +1312,10 @@ func (m *Model) applyLoaded(msg loadedMsg) {
 		m.err = nil
 		// A reload that lands under an open editor takes the keyboard back, so the
 		// editor has to be put away with it rather than left focused and invisible.
+		// A question waiting for an answer goes the same way: what it was about to
+		// delete was read before the reload.
 		m.input.Blur()
-		m.mode = modeBrowse
+		m.mode, m.ask = modeBrowse, nil
 	}
 	// The narrative is kept: it is the notes the reviewer is reading, and
 	// dropping it would reorder the diff underneath them every time they staged
@@ -1170,10 +1341,10 @@ func (m *Model) applyLoaded(msg loadedMsg) {
 }
 
 // acceptPoll decides whether an unrequested reload is worth applying. Redrawing
-// while someone is mid-comment, or when nothing actually changed, is worse than
-// waiting for the next tick.
+// while someone is mid-comment or mid-answer, or when nothing actually changed,
+// is worse than waiting for the next tick.
 func (m *Model) acceptPoll(msg loadedMsg) bool {
-	if m.mode == modeComment {
+	if m.mode == modeComment || m.mode == modeConfirm {
 		return false
 	}
 	// A change of the reviewer's own is on screen and still being written: this
@@ -1261,7 +1432,7 @@ func (m *Model) currentPath() string {
 }
 
 func (m *Model) rebuild() {
-	m.doc = Build(m.session, m.comments, m.collapsed, m.layout, WithGroups(m.groups()), WithDraft(m.draft()))
+	m.doc = Build(m.session, m.visibleComments(), m.collapsed, m.layout, WithGroups(m.groups()), WithDraft(m.draft()))
 	if m.cursor >= m.doc.Len() {
 		m.cursor = m.doc.LastStop()
 	}

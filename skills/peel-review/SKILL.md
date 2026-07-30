@@ -100,7 +100,7 @@ peel comment add --file <path> --line <n> --body "..." [--side new|old] [--hunk 
 peel comment add --file <path> --body "..."                       # file-level note
 peel comment resolve <id>... [--undo]
 peel comment rm <id>...
-peel comment clear [--file <path>] [--resolved] [--all]
+peel comment clear [--file <path>] [--resolved] [--author user|agent] [--all]
 ```
 
 - `--file` is required. `--line` is 1-based on `--side`; omit it for a note about
@@ -118,6 +118,30 @@ peel comment clear [--file <path>] [--resolved] [--all]
 printf 'This drops the error.\n\nWorth returning it instead.\n' \
   | peel comment add --file internal/git/status.go --line 42
 ```
+
+## The user's comments are not yours to delete
+
+One store holds both reviews. Yours are `"author": "agent"` and the user's are
+`"author": "user"`, and `rm` and `clear` do not know the difference unless you
+tell them — `peel comment clear` with no flags wipes the user's notes along with
+your own, which is a review they cannot get back.
+
+So: **only ever remove your own.**
+
+```bash
+peel comment clear --author agent          # your review, and nothing else
+peel comment list --json --author agent    # check before rm-ing an id
+```
+
+Nothing you write can overwrite a user comment — `add` always appends a new one
+— so deleting is the only way to lose one. When the user asks you to clear
+comments and does not say whose, clear yours and say so; if they meant all of
+them, that is `--author user` as a second, deliberate command.
+
+The user has the same distinction in the TUI: `A` hides your comments and shows
+theirs, and `X` deletes every one of yours after asking. A review of yours that
+is in their way is one keypress from being gone, so leaving fewer, better notes
+is worth more than covering everything.
 
 ## Walkthrough
 
