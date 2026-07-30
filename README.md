@@ -22,6 +22,11 @@ make install          # builds and installs to /opt/homebrew/bin
 go build -o peel .    # or just build it here
 ```
 
+`make install` also symlinks the Claude Code skill into `~/.claude/skills/peel-review`,
+so edits to `skills/peel-review` are live without reinstalling. `make install-skill`
+does only that half, and `make uninstall` removes both. `PREFIX` and `SKILLS` move
+either destination.
+
 Go 1.26+, one static binary, no runtime. `gh` is required for PR mode; either
 `claude` or `codex` can write walkthroughs. `peel providers` shows what is
 available.
