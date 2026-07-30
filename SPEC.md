@@ -95,6 +95,9 @@ it doesn't get relitigated.
 | **Walkthrough is the diff, not a pane** | the steps reorder the files and each explanation sits above the files it covers | A separate pane is a map you read and then leave; the same notes inside the diff are read *with* the code they describe, and there is one thing to navigate instead of two |
 | **Every changed file lands in a group** | leftovers collected under "Not grouped" | The order is the reviewer's map of the change. A file the model forgot to mention would otherwise be a file the reviewer never learns to read |
 | **Follow mode** | on by default; `f` toggles, `--no-watch` opts out | The common case is reviewing while an agent or editor is still changing the working tree |
+| **Review base** | `--rev <ref>` moves the base, never the far side | Added 2026-07-30. "Everything since HEAD~2" is one diff of the last two commits plus the uncommitted work on top, not a commit range: the side being reviewed is the working tree in every mode peel has. The base is resolved to a hash once, so a commit landing mid-session cannot move it |
+| **`--rev` is read-only** | `Stageable: false` for any base behind HEAD | HEAD is the only base staging means anything against. A file whose change is part committed cannot be `git add`ed into the shape on screen, so `s` would either lie or do nothing. `--rev HEAD` resolves to the working-tree session rather than a read-only copy of it |
+| **`--rev` comments target the working tree** | same scope as a plain `peel` | Moving the base changes how far back the diff reaches, not which code the notes are about. Scoping them to the base would hide them from `peel comment list` and from the agent that has to address them |
 | **PR mode** | shell out to `gh` | No auth code to own |
 | **PR comments** | Local store + explicit `peel pr submit` | Reviewing a PR never writes to GitHub. Posting is a separate, confirmed command |
 | **Scope** | All 6 phases (§7) | Line-level staging shipped in phase 6 and was then removed — see the granularity decision above |
@@ -141,6 +144,11 @@ Git has three states, and two diffs between them:
 
 peel reads both, per file, and merges them into one entry — which is what lets a
 file report `●` partial when git has it in both places at once.
+
+`--rev` reads one diff rather than two: `git diff <base>` spans the index in a
+single step, and a change committed since the base is neither staged nor
+unstaged. Every file there carries one side, so the tri-state indicator has
+nothing to report — which is consistent, since that session cannot stage anyway.
 
 ### Core operation
 
@@ -210,6 +218,7 @@ peel comment rm <id>
 peel comment clear
 peel hunks list [--json]                     # read-only: what's staged / not
 peel walkthrough [--regen]                   # cached markdown narrative
+peel --rev <ref> <any of the above>          # measured from an older base
 ```
 
 **No `peel hunks add`.** Read-only by design — see §3.

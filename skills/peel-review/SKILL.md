@@ -6,9 +6,9 @@ description: Reads and annotates a peel diff review — lists hunks and their st
 # Peel Review
 
 peel is an interactive terminal diff reviewer. The TUI is for the user — never
-run bare `peel` or `peel --pr`, which would take over their terminal. Use the
-subcommands below; they read and write the same store the TUI does, and work
-whether or not the TUI is open.
+run bare `peel`, `peel --rev` or `peel --pr` with no subcommand, which would take
+over their terminal. Use the subcommands below; they read and write the same
+store the TUI does, and work whether or not the TUI is open.
 
 There is no daemon and no session to attach to. State lives in `.git/peel/`, so
 every command just needs to run inside the repository.
@@ -67,6 +67,31 @@ peel providers
 
 By default both commands are scoped to what is being reviewed: the working tree,
 or the pull request named by `--pr`. `comment list --all` ignores that scope.
+
+## Reviewing further back than HEAD
+
+`--rev <ref>` moves the base of the diff back. It is a global flag, so it goes
+before the subcommand and works with all of them:
+
+```bash
+peel --rev HEAD~2 hunks list --json          # the last two commits *and* the uncommitted work
+peel --rev origin/main hunks list --json     # everything on this branch
+peel --rev HEAD~2 walkthrough
+```
+
+Use it when the user asks about work that is already committed — `peel hunks
+list` alone only sees what is uncommitted, so a review of "the changes I made
+today" will silently miss most of them.
+
+`<ref>` is anything git resolves to a commit: `HEAD~2`, a hash, a branch. Two
+things behave differently in these sessions:
+
+- **`"staged"` is meaningless.** Everything reports `false`, because a change
+  committed since the base is neither staged nor unstaged. Don't report staged
+  state from a `--rev` run, and don't pass `--staged`/`--unstaged`.
+- **Comments are shared with the working tree**, not scoped to the base — the
+  side being reviewed is the working tree either way. A note left under `--rev`
+  is the same note `peel comment list` shows without it.
 
 ## Comment
 

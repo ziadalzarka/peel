@@ -148,7 +148,12 @@ func TestBackendRefusesToStageAReadOnlySession(t *testing.T) {
 func TestBackendReloadOfAPullRequestIsAPassthrough(t *testing.T) {
 	a, _, _ := openBackend(t)
 
-	session := &app.Session{Target: "github:cli/cli#412", Title: "pr", Stageable: false}
+	session := &app.Session{
+		Target:    "github:cli/cli#412",
+		Title:     "pr",
+		Stageable: false,
+		PR:        &forge.PullRequest{Ref: forge.Ref{Owner: "cli", Repo: "cli", Number: 412}},
+	}
 	backend := tui.NewBackend(a, session)
 
 	got, err := backend.Reload(context.Background())
@@ -157,6 +162,52 @@ func TestBackendReloadOfAPullRequestIsAPassthrough(t *testing.T) {
 	}
 	if got != session {
 		t.Error("reloading a pull request returned a different session")
+	}
+}
+
+// A revision session's far side is the working tree, so it goes on changing and
+// follow mode must keep re-reading it — the passthrough is for pull requests
+// only.
+func TestBackendReloadOfARevisionFollowsTheWorkingTree(t *testing.T) {
+	ctx := context.Background()
+	repo := gittest.New(t)
+	repo.Write("main.go", "package main\n")
+	repo.Commit("initial")
+	repo.Write("committed.go", "package main\n")
+	repo.Commit("second")
+
+	a, err := app.Open(ctx, repo.Dir,
+		app.WithAIRegistry(ai.NewRegistry()),
+		app.WithForgeRegistry(forge.NewRegistry()),
+	)
+	if err != nil {
+		t.Fatalf("app.Open: %v", err)
+	}
+	session, err := a.LoadRevision(ctx, "HEAD~1")
+	if err != nil {
+		t.Fatalf("LoadRevision: %v", err)
+	}
+	backend := tui.NewBackend(a, session)
+
+	repo.Write("later.go", "package main\n")
+	reloaded, err := backend.Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+
+	if _, ok := reloaded.Entry("later.go"); !ok {
+		t.Errorf("reload missed a new file: %v", reloaded.Paths())
+	}
+	// Still measured from the pinned base, not from HEAD.
+	if _, ok := reloaded.Entry("committed.go"); !ok {
+		t.Errorf("reload lost the committed change: %v", reloaded.Paths())
+	}
+	if reloaded.Base != session.Base || reloaded.Title != session.Title {
+		t.Errorf("reload = base %q title %q, want %q and %q",
+			reloaded.Base, reloaded.Title, session.Base, session.Title)
+	}
+	if reloaded.Stageable {
+		t.Error("Stageable = true after reloading a revision session")
 	}
 }
 

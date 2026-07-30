@@ -30,10 +30,24 @@ available.
 
 ```sh
 peel                      # review the working tree
+peel --rev HEAD~2         # review everything since a commit (read-only)
 peel --pr 412             # review a GitHub PR (read-only)
 peel --no-watch           # don't re-read the repository while open
 peel --provider codex     # use Codex for the walkthrough instead of Claude
 ```
+
+`--rev` moves the base of the diff back without changing what is on the other
+side of it: `peel --rev HEAD~2` is the last two commits *and* whatever is still
+uncommitted, as one diff. Anything git resolves to a commit works — `HEAD~2`, a
+hash, a branch, `origin/main` to read your whole branch back. The base is pinned
+when the session opens, so a commit landing while you read cannot slide the diff
+out from under you.
+
+Those sessions are read-only, because HEAD is the only base staging means
+anything against: a file whose change is half committed cannot be `git add`ed
+into the shape on screen. Commenting, walkthroughs and follow mode all work as
+usual — the far side is still the live working tree, so it keeps up as the
+repository changes.
 
 ### Keys
 
@@ -99,6 +113,7 @@ Code in [`skills/peel-review`](skills/peel-review/SKILL.md).
 
 ```sh
 peel hunks list --json                  # what changed, and what is staged
+peel --rev HEAD~2 hunks list --json     # the same, measured from an older base
 peel comment list --json                # what the user wrote while reading
 peel comment add --file F --line N --body "..."
 peel walkthrough                        # the cached narrative, as markdown

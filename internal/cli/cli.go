@@ -48,6 +48,8 @@ type CLI struct {
 
 	// pr is the global --pr flag, shared by the TUI and the pr subcommands.
 	pr string
+	// rev is the global --rev flag: the commit the diff is measured from.
+	rev string
 	// forgeName is the global --forge flag.
 	forgeName string
 	// ui holds the global flags that only affect the review UI.
@@ -92,6 +94,7 @@ func (c *CLI) Run(ctx context.Context, args []string) int {
 	fs := flag.NewFlagSet("peel", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&c.pr, "pr", "", "review a pull request instead of the working tree")
+	fs.StringVar(&c.rev, "rev", "", "review everything since this commit, uncommitted work included")
 	fs.StringVar(&c.forgeName, "forge", "", "forge provider to use (default: first available)")
 	fs.StringVar(&c.ui.Provider, "provider", "", "AI provider to use for walkthroughs (default: first available)")
 	fs.BoolVar(&c.ui.Follow, "watch", true, "re-read the repository as it changes (default)")
@@ -173,13 +176,17 @@ func (c *CLI) open(ctx context.Context) (*app.App, error) {
 	return c.OpenApp(ctx, c.Dir)
 }
 
-// session loads whatever is being reviewed: the pull request named by --pr, or
-// the working tree.
+// session loads whatever is being reviewed: the pull request named by --pr, the
+// work since the commit named by --rev, or the working tree.
 func (c *CLI) session(ctx context.Context, a *app.App) (*app.Session, error) {
+	if c.pr != "" && c.rev != "" {
+		return nil, usageErrorf("--pr and --rev are mutually exclusive: a pull request " +
+			"carries its own base")
+	}
 	if c.pr != "" {
 		return a.LoadPullRequest(ctx, c.forgeName, c.pr)
 	}
-	return a.LoadWorkingTree(ctx)
+	return a.LoadRevision(ctx, c.rev)
 }
 
 // openSession is the common preamble: build the App and load the session.
@@ -212,6 +219,7 @@ func (c *CLI) printUsage(w io.Writer) {
 
 Usage:
   peel [flags]                 open the review UI on the working tree
+  peel --rev <ref> [flags]     open the review UI on everything since a commit
   peel --pr <ref> [flags]      open the review UI on a pull request
   peel <command> [args]
 
@@ -222,6 +230,9 @@ Commands:
 	}
 	fmt.Fprint(w, `
 Flags:
+  --rev <ref>      review everything since a commit — HEAD~2, a hash, a branch.
+                   Commits made since it and uncommitted work alike. Read-only:
+                   staging only means something against HEAD
   --pr <ref>       review a pull request: a number, owner/repo#number, or a URL
   --forge <name>   forge provider to use (default: first available)
   --provider <name>

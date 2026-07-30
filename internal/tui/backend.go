@@ -46,17 +46,21 @@ func NewBackend(a *app.App, s *app.Session, provider ...string) Backend {
 	return &appBackend{app: a, session: s, provider: name}
 }
 
-// Reload re-reads the working tree. A pull request is not in this working tree,
-// so reloading one would only re-fetch a diff that cannot have changed.
+// Reload re-reads what is being reviewed. A pull request is not in this working
+// tree, so reloading one would only re-fetch a diff that cannot have changed.
+// A revision session is re-read like the working tree is: its far side is the
+// working tree, so it goes on changing as the repository does.
 func (b *appBackend) Reload(ctx context.Context) (*app.Session, error) {
-	if !b.session.Stageable {
+	if b.session.PR != nil {
 		return b.session, nil
 	}
-	s, err := b.app.LoadWorkingTree(ctx)
+	s, err := b.app.LoadRevision(ctx, b.session.Base)
 	if err != nil {
 		return nil, err
 	}
+	// Target and Title identify the session; only its contents are re-read.
 	s.Target = b.session.Target
+	s.Title = b.session.Title
 	b.session = s
 	return s, nil
 }

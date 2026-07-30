@@ -88,6 +88,43 @@ func (r *Repo) Staged(ctx context.Context) (Diff, error) {
 	return ParseDiff(out)
 }
 
+// ResolveCommit turns a revision — a hash, a branch, HEAD~2 — into the commit
+// it names. Callers resolve once and work with the hash afterwards, so a
+// session stays on the commit it opened on even when the ref moves underneath
+// it.
+func (r *Repo) ResolveCommit(ctx context.Context, ref string) (string, error) {
+	out, err := r.git(ctx, "rev-parse", "--verify", "--quiet", ref+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("unknown revision %q", ref)
+	}
+	sha := strings.TrimSpace(out)
+	if sha == "" {
+		return "", fmt.Errorf("unknown revision %q", ref)
+	}
+	return sha, nil
+}
+
+// ChangesSince returns everything that changed between a commit and the working
+// tree: commits made since then and uncommitted work alike.
+func (r *Repo) ChangesSince(ctx context.Context, commit string) (Diff, error) {
+	out, err := r.ChangesSinceText(ctx, commit)
+	if err != nil {
+		return Diff{}, err
+	}
+	return ParseDiff(out)
+}
+
+// ChangesSinceText is ChangesSince as raw text, for a walkthrough.
+func (r *Repo) ChangesSinceText(ctx context.Context, commit string) (string, error) {
+	args := append([]string{"diff"}, diffFlags...)
+	args = append(args, commit)
+	out, err := r.git(ctx, args...)
+	if err != nil {
+		return "", fmt.Errorf("git diff %s: %w", commit, err)
+	}
+	return out, nil
+}
+
 // AllChangesText returns the raw diff between HEAD and the working tree —
 // everything uncommitted, staged or not. It is the input to a walkthrough,
 // where the split between index and working tree is not interesting.

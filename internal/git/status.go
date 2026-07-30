@@ -119,6 +119,34 @@ func (s Status) Entry(path string) (FileEntry, bool) {
 // IsEmpty reports whether there is nothing to review.
 func (s Status) IsEmpty() bool { return len(s.Files) == 0 }
 
+// entrySet collects per-file state as the sides of a status are read.
+type entrySet map[string]*FileEntry
+
+// at returns the entry for path, creating it on first mention.
+func (s entrySet) at(path string) *FileEntry {
+	if e, ok := s[path]; ok {
+		return e
+	}
+	e := &FileEntry{Path: path}
+	s[path] = e
+	return e
+}
+
+// status returns the collected entries in path order.
+func (s entrySet) status() Status {
+	paths := make([]string, 0, len(s))
+	for path := range s {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+
+	out := Status{Files: make([]FileEntry, 0, len(paths))}
+	for _, path := range paths {
+		out.Files = append(out.Files, *s[path])
+	}
+	return out
+}
+
 // LoadStatus reads the working tree and index and merges them into one
 // per-file view.
 func (r *Repo) LoadStatus(ctx context.Context) (Status, error) {
@@ -130,56 +158,68 @@ func (r *Repo) LoadStatus(ctx context.Context) (Status, error) {
 	if err != nil {
 		return Status{}, err
 	}
-	untracked, err := r.Untracked(ctx)
+
+	entries := entrySet{}
+	for i := range unstaged.Files {
+		f := unstaged.Files[i]
+		entries.at(f.Path()).Unstaged = &f
+	}
+	for i := range staged.Files {
+		f := staged.Files[i]
+		entries.at(f.Path()).Staged = &f
+	}
+	if err := r.addUntracked(ctx, entries); err != nil {
+		return Status{}, err
+	}
+	return entries.status(), nil
+}
+
+// LoadStatusSince reads everything that changed between a commit and the
+// working tree.
+//
+// The index split LoadStatus reports does not apply here: a change committed
+// since the base is neither staged nor unstaged, it is simply part of the diff.
+// Every file therefore carries one side, and Session.Stageable is what stops
+// the UI offering to stage what it cannot.
+func (r *Repo) LoadStatusSince(ctx context.Context, commit string) (Status, error) {
+	diff, err := r.ChangesSince(ctx, commit)
 	if err != nil {
 		return Status{}, err
 	}
 
-	entries := map[string]*FileEntry{}
-	entryFor := func(path string) *FileEntry {
-		if e, ok := entries[path]; ok {
-			return e
-		}
-		e := &FileEntry{Path: path}
-		entries[path] = e
-		return e
+	entries := entrySet{}
+	for i := range diff.Files {
+		f := diff.Files[i]
+		entries.at(f.Path()).Unstaged = &f
 	}
+	if err := r.addUntracked(ctx, entries); err != nil {
+		return Status{}, err
+	}
+	return entries.status(), nil
+}
 
-	for i := range unstaged.Files {
-		f := unstaged.Files[i]
-		entryFor(f.Path()).Unstaged = &f
-	}
-	for i := range staged.Files {
-		f := staged.Files[i]
-		entryFor(f.Path()).Staged = &f
+// addUntracked marks the untracked paths and synthesizes a diff for any that
+// has none yet, so a new file is reviewable before the index is touched.
+func (r *Repo) addUntracked(ctx context.Context, entries entrySet) error {
+	untracked, err := r.Untracked(ctx)
+	if err != nil {
+		return err
 	}
 
 	// An intent-to-add file appears in both `ls-files --others` and the index,
 	// so only synthesize a diff for paths with no real diff yet.
 	var needsSynthetic []string
 	for _, path := range untracked {
-		e := entryFor(path)
+		e := entries.at(path)
 		e.Untracked = true
 		if e.Unstaged == nil {
 			needsSynthetic = append(needsSynthetic, path)
 		}
 	}
-	synthetic := r.untrackedDiffs(ctx, needsSynthetic)
-	for path, diff := range synthetic {
-		entryFor(path).Unstaged = diff
+	for path, diff := range r.untrackedDiffs(ctx, needsSynthetic) {
+		entries.at(path).Unstaged = diff
 	}
-
-	paths := make([]string, 0, len(entries))
-	for path := range entries {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
-	status := Status{Files: make([]FileEntry, 0, len(paths))}
-	for _, path := range paths {
-		status.Files = append(status.Files, *entries[path])
-	}
-	return status, nil
+	return nil
 }
 
 // stagedAgainstBase reads the index diff, falling back to the empty tree when

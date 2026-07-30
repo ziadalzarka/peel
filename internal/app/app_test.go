@@ -220,6 +220,135 @@ func TestSessionStats(t *testing.T) {
 	}
 }
 
+// revisionFixture leaves one committed change and one uncommitted change on top
+// of it, so a revision session and the working-tree session disagree.
+func revisionFixture(t *testing.T) *fixture {
+	t.Helper()
+	f := newFixture(t)
+	f.repo.Write("a.txt", "one\n")
+	f.repo.Commit("base")
+	f.repo.Write("a.txt", "two\n")
+	f.repo.Write("committed.txt", "landed\n")
+	f.repo.Commit("second")
+	f.repo.Write("a.txt", "three\n")
+	return f
+}
+
+func TestLoadRevisionReachesPastTheLastCommit(t *testing.T) {
+	f := revisionFixture(t)
+
+	s, err := f.app.LoadRevision(f.ctx, "HEAD~1")
+	if err != nil {
+		t.Fatalf("LoadRevision: %v", err)
+	}
+
+	// The point of a base behind HEAD: work already committed is in the diff.
+	want := []string{"a.txt", "committed.txt"}
+	if got := s.Paths(); len(got) != 2 || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("Paths() = %v, want %v", got, want)
+	}
+	// Both the committed change and the one on top of it, in one diff.
+	if !strings.Contains(s.DiffText, "landed") || !strings.Contains(s.DiffText, "three") {
+		t.Errorf("DiffText missing the full range:\n%s", s.DiffText)
+	}
+	if s.Stageable {
+		t.Error("Stageable = true against a base behind HEAD")
+	}
+	if s.Target != "" {
+		t.Errorf("Target = %q, want the working tree's, so comments stay in one place", s.Target)
+	}
+	if s.Title != "HEAD~1..working tree" {
+		t.Errorf("Title = %q", s.Title)
+	}
+}
+
+// The base is resolved once, so a commit landing mid-session cannot slide the
+// diff out from under the reviewer.
+func TestLoadRevisionPinsTheBase(t *testing.T) {
+	f := revisionFixture(t)
+
+	s, err := f.app.LoadRevision(f.ctx, "HEAD~1")
+	if err != nil {
+		t.Fatalf("LoadRevision: %v", err)
+	}
+	pinned := f.repo.Git("rev-parse", "HEAD~1")
+	if s.Base != pinned {
+		t.Errorf("Base = %q, want the resolved hash %q", s.Base, pinned)
+	}
+
+	f.repo.Commit("third")
+	again, err := f.app.LoadRevision(f.ctx, s.Base)
+	if err != nil {
+		t.Fatalf("LoadRevision by hash: %v", err)
+	}
+	if again.Base != pinned {
+		t.Errorf("Base = %q after a commit landed, want %q", again.Base, pinned)
+	}
+	if got := again.Paths(); len(got) != 2 {
+		t.Errorf("Paths() = %v, want the same two files", got)
+	}
+}
+
+// HEAD is the working tree's own base, and the only one staging can mean
+// anything against.
+func TestLoadRevisionOfHeadIsTheWorkingTree(t *testing.T) {
+	f := revisionFixture(t)
+
+	for _, ref := range []string{"HEAD", f.repo.Git("rev-parse", "HEAD")} {
+		s, err := f.app.LoadRevision(f.ctx, ref)
+		if err != nil {
+			t.Fatalf("LoadRevision(%q): %v", ref, err)
+		}
+		if !s.Stageable {
+			t.Errorf("LoadRevision(%q) is not stageable, want the working tree session", ref)
+		}
+		if s.Base != "" || s.Title != "working tree" {
+			t.Errorf("LoadRevision(%q) = base %q title %q, want the working tree session", ref, s.Base, s.Title)
+		}
+	}
+}
+
+func TestLoadRevisionEmptyRefIsTheWorkingTree(t *testing.T) {
+	f := revisionFixture(t)
+
+	s, err := f.app.LoadRevision(f.ctx, "")
+	if err != nil {
+		t.Fatalf("LoadRevision: %v", err)
+	}
+	if !s.Stageable || s.Title != "working tree" {
+		t.Errorf("LoadRevision(\"\") = %q, want the working tree session", s.Title)
+	}
+}
+
+func TestLoadRevisionIncludesUntrackedFiles(t *testing.T) {
+	f := revisionFixture(t)
+	f.repo.Write("brand-new.txt", "hello\n")
+
+	s, err := f.app.LoadRevision(f.ctx, "HEAD~1")
+	if err != nil {
+		t.Fatalf("LoadRevision: %v", err)
+	}
+	entry, ok := s.Entry("brand-new.txt")
+	if !ok {
+		t.Fatalf("untracked file missing from %v", s.Paths())
+	}
+	if !entry.Untracked || entry.Primary() == nil {
+		t.Error("untracked file has no diff to review")
+	}
+}
+
+func TestLoadRevisionUnknownRef(t *testing.T) {
+	f := revisionFixture(t)
+
+	_, err := f.app.LoadRevision(f.ctx, "no-such-ref")
+	if err == nil {
+		t.Fatal("LoadRevision succeeded on an unknown revision")
+	}
+	if !strings.Contains(err.Error(), "no-such-ref") {
+		t.Errorf("error = %v, want it to name the revision", err)
+	}
+}
+
 func TestLoadPullRequest(t *testing.T) {
 	f := newFixture(t)
 	f.repo.Write("f.txt", "x\n")

@@ -10,13 +10,16 @@ import (
 	"github.com/ziadalzarka/peel/internal/store"
 )
 
-// Session is one thing being reviewed: either the working tree or a pull
-// request.
+// Session is one thing being reviewed: the working tree, the work since some
+// commit, or a pull request.
 type Session struct {
 	// Target scopes comments to this review. Empty means the working tree.
 	Target string
 	// Title describes the session for display.
 	Title string
+	// Base is the commit the changes are measured from, as a resolved hash.
+	// Empty means HEAD, which is the working tree session.
+	Base string
 	// Files is what changed, in path order.
 	Files []git.FileEntry
 	// DiffText is the raw unified diff, used to generate a walkthrough.
@@ -82,6 +85,50 @@ func (a *App) LoadWorkingTree(ctx context.Context) (*Session, error) {
 		Files:     status.Files,
 		DiffText:  diffText,
 		Stageable: true,
+	}, nil
+}
+
+// LoadRevision reviews everything that changed since ref: the commits made
+// since then and the uncommitted work on top of them. An empty ref means the
+// working tree.
+//
+// The base is resolved once and held as a hash, so a session opened on HEAD~1
+// keeps the commit it started from when another one lands underneath it.
+//
+// Comments are scoped to the working tree rather than to the base, because the
+// side being reviewed is the working tree either way — moving the base changes
+// how far back the diff reaches, not which code the notes are about.
+func (a *App) LoadRevision(ctx context.Context, ref string) (*Session, error) {
+	if ref == "" {
+		return a.LoadWorkingTree(ctx)
+	}
+	base, err := a.Repo.ResolveCommit(ctx, ref)
+	if err != nil {
+		return nil, err
+	}
+	// HEAD is the working-tree session's base already, and HEAD is the only
+	// base staging can mean anything against, so keep the richer session
+	// rather than hand back a read-only copy of it.
+	if head, err := a.Repo.ResolveCommit(ctx, "HEAD"); err == nil && head == base {
+		return a.LoadWorkingTree(ctx)
+	}
+
+	status, err := a.Repo.LoadStatusSince(ctx, base)
+	if err != nil {
+		return nil, err
+	}
+	diffText, err := a.Repo.ChangesSinceText(ctx, base)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Session{
+		Target:    "",
+		Title:     ref + "..working tree",
+		Base:      base,
+		Files:     status.Files,
+		DiffText:  diffText,
+		Stageable: false,
 	}, nil
 }
 

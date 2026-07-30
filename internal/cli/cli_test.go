@@ -82,6 +82,7 @@ type harness struct {
 	forge      *fakeForge
 	tuiRan     bool
 	tuiOptions cli.UIOptions
+	tuiSession *app.Session
 }
 
 func newHarness(t *testing.T) *harness {
@@ -112,9 +113,10 @@ func newHarness(t *testing.T) *harness {
 				app.WithForgeRegistry(forge.NewRegistry(forgeProvider)),
 			)
 		},
-		RunTUI: func(_ context.Context, _ *app.App, _ *app.Session, ui cli.UIOptions) error {
+		RunTUI: func(_ context.Context, _ *app.App, s *app.Session, ui cli.UIOptions) error {
 			h.tuiRan = true
 			h.tuiOptions = ui
+			h.tuiSession = s
 			return nil
 		},
 	}
@@ -210,6 +212,74 @@ func TestDisplayFlagsReachTheTUI(t *testing.T) {
 	want := cli.UIOptions{Follow: false, Split: true, Provider: "codex"}
 	if h.tuiOptions != want {
 		t.Errorf("UI options = %+v, want %+v", h.tuiOptions, want)
+	}
+}
+
+// committed leaves one change behind HEAD and one uncommitted on top, so a
+// --rev session and the working-tree session disagree about what changed.
+func (h *harness) committed() {
+	h.t.Helper()
+	h.repo.Write("a.txt", "one\n")
+	h.repo.Commit("base")
+	h.repo.Write("committed.txt", "landed\n")
+	h.repo.Commit("second")
+	h.repo.Write("a.txt", "uncommitted\n")
+}
+
+func TestRevOpensTheTUIOnEverythingSinceACommit(t *testing.T) {
+	h := newHarness(t)
+	h.committed()
+
+	if code := h.run("--rev", "HEAD~1"); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, h.err())
+	}
+	if !h.tuiRan {
+		t.Fatal("the TUI was not launched")
+	}
+	if got := h.tuiSession.Paths(); len(got) != 2 {
+		t.Errorf("Paths() = %v, want the committed and the uncommitted change", got)
+	}
+	// Staging only means something against HEAD, so this session is read-only.
+	if h.tuiSession.Stageable {
+		t.Error("Stageable = true against a base behind HEAD")
+	}
+}
+
+func TestRevReachesSubcommands(t *testing.T) {
+	h := newHarness(t)
+	h.committed()
+
+	out := h.mustRun("--rev", "HEAD~1", "hunks", "list")
+	if !strings.Contains(out, "committed.txt") {
+		t.Errorf("hunks list did not reach past HEAD:\n%s", out)
+	}
+	// Without the flag the same command sees only the uncommitted change.
+	if out := h.mustRun("hunks", "list"); strings.Contains(out, "committed.txt") {
+		t.Errorf("hunks list reached past HEAD without --rev:\n%s", out)
+	}
+}
+
+func TestRevAndPRAreMutuallyExclusive(t *testing.T) {
+	h := newHarness(t)
+	h.committed()
+
+	if code := h.run("--rev", "HEAD~1", "--pr", "412"); code != 2 {
+		t.Fatalf("exit code = %d, want 2 for a usage error", code)
+	}
+	if !strings.Contains(h.err(), "mutually exclusive") {
+		t.Errorf("stderr = %q, want it to explain the conflict", h.err())
+	}
+}
+
+func TestRevWithAnUnknownRevisionFails(t *testing.T) {
+	h := newHarness(t)
+	h.committed()
+
+	if code := h.run("--rev", "no-such-ref"); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(h.err(), "no-such-ref") {
+		t.Errorf("stderr = %q, want it to name the revision", h.err())
 	}
 }
 
