@@ -74,6 +74,46 @@ func TestStageFromInsideTheDiffStagesTheFile(t *testing.T) {
 	}
 }
 
+// Against real git: `s` walks the review queue. Each press stages the file the
+// cursor is in and lands on the next one with something left to decide, so a
+// three-file pass is three presses.
+func TestStagingWalksTheQueueOneFileAtATime(t *testing.T) {
+	repo := gittest.New(t)
+	for _, path := range []string{"one.txt", "two.txt", "three.txt"} {
+		repo.Write(path, "old\n")
+	}
+	repo.Commit("base")
+	for _, path := range []string{"one.txt", "two.txt", "three.txt"} {
+		repo.Write(path, "new\n")
+	}
+	// two.txt is staged already — an agent, or an earlier pass — so it is folded
+	// away and not somewhere the walk should stop.
+	repo.Git("add", "two.txt")
+
+	m := realModel(t, repo)
+	if got := m.currentPath(); got != "one.txt" {
+		t.Fatalf("the pass starts on %q, want one.txt", got)
+	}
+
+	press(t, m, "s")
+	if got := m.currentPath(); got != "three.txt" {
+		t.Fatalf("after staging one.txt the cursor is on %q, want three.txt", got)
+	}
+
+	press(t, m, "s")
+	if got := m.currentPath(); got != "three.txt" {
+		t.Errorf("staging the last file moved the cursor to %q, want it left on three.txt", got)
+	}
+	if got := repo.StatusLines(); len(got) != 3 {
+		t.Fatalf("status = %v, want three files", got)
+	}
+	for _, line := range repo.StatusLines() {
+		if line[1] != ' ' {
+			t.Errorf("%q is not fully staged after the pass", line)
+		}
+	}
+}
+
 func TestUnstageReturnsTheIndexToHeadAndOpensTheFile(t *testing.T) {
 	repo := gittest.New(t)
 	repo.Write("list.txt", "one\ntwo\nthree\n")

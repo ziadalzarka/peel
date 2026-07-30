@@ -34,6 +34,18 @@ index 3333333..4444444 100644
 +new
 `
 
+// threeFileDiff is twoFileDiff with a third file after it, for the moves that
+// need somewhere to land past the file in the middle.
+const threeFileDiff = twoFileDiff + `diff --git a/gamma.md b/gamma.md
+index 5555555..6666666 100644
+--- a/gamma.md
++++ b/gamma.md
+@@ -1,2 +1,2 @@
+ # notes
+-first
++second
+`
+
 // parseFiles turns a diff into file entries on the working-tree side.
 func parseFiles(t *testing.T, diff string) []git.FileEntry {
 	t.Helper()

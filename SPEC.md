@@ -85,7 +85,7 @@ it doesn't get relitigated.
 | **Diff layout** | Unified default, `\` toggles side-by-side | Unified matches `git diff` and fits a narrow terminal; side-by-side for spotting edits inside a long line |
 | **Staging granularity** | **whole files only** | Revised 2026-07-30, after building hunk and line staging. A file is the unit a review decision is actually made in, and reviewing one then pressing `s` reads the same either way. Hunk and line staging bought a patch engine whose failure mode is writing the wrong lines into the index, to split a file the way `git add -p` already splits it |
 | **Staging mechanism** | `git add` / `git restore --staged` per path | The whole-file decision removes the need to generate patches at all: no `git apply --cached`, no `@@` arithmetic, no intent-to-add dance for untracked files |
-| **Staged files fold away** | `s` collapses the file; `tab` reopens it | The list left open is the list still to review, so the diff shrinks as the pass goes on. Collapsing is display only — `tab` reads a staged file back without touching the index |
+| **Staged files fold away** | `s` collapses the file, moves to the next one to review; `tab` reopens it | The list left open is the list still to review, so the diff shrinks as the pass goes on, and the one key that ends a file also starts the next. Collapsing is display only — `tab` reads a staged file back without touching the index |
 | **Agent → index** | **Read-only. No flag, no escape hatch** | Claude Code can already run `git add` directly, so `peel hunks add` adds no capability — only a way for things to enter the index unreviewed |
 | **Comment store** | JSON at `.git/peel/comments.json` | Per-repo, survives restarts, invisible to `git status`, readable with no daemon running |
 | **Agent hookup** | CLI + `SKILL.md` | Agent pulls on demand. Deliberately *not* hunk's live-daemon model — see §6 |
@@ -296,7 +296,7 @@ rather than as whatever arrow keys the terminal would emulate.
 | `g` / `G` | first / last row |
 | `ctrl+d` / `ctrl+u` | half a page down / up |
 | `tab` | collapse or expand the file |
-| `s` | stage the file the cursor is in, folding it away |
+| `s` | stage the file the cursor is in, folding it away and moving to the next |
 | `u` | unstage that file, opening it again |
 | `a` / `U` | stage everything, folding it all away / unstage everything, opening it all |
 | `c` | comment at the cursor |
@@ -319,10 +319,14 @@ land on the note that introduces the next file rather than skipping past it,
 in git's order. Staging keeps the notes; when the code itself moves on under them
 the header says `stale` and `W` writes new ones.
 
-Staging folds. `s` stages the file the cursor is in and collapses it, so what is
-left open is what is left to review and the diff shrinks as the pass goes on. The
-fold is display only: `tab` reads a staged file back, and `u` opens it again on
-its way out of the index. A stage that fails leaves the file open, because it
+Staging folds and moves on. `s` stages the file the cursor is in, collapses it and
+opens the next file still to review at the top of the window — so what is left
+open is what is left to review, the diff shrinks as the pass goes on, and one key
+both ends a file and starts the next. Already-staged files are skipped on the way,
+since they are folded away and there is nothing to decide about them. The last
+file has nowhere to advance to and keeps the cursor. The fold is display only:
+`tab` reads a staged file back, and `u` opens it again on its way out of the
+index. A stage that fails leaves the file open and the cursor on it, because it
 still has to be dealt with.
 
 A hunk header and a diff line are still cursor stops and still addressable — they

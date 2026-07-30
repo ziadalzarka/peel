@@ -504,8 +504,9 @@ func (m *Model) helpKey(msg tea.KeyMsg) tea.Cmd {
 // stageAt stages the file the cursor is in.
 //
 // A file is the smallest thing that can be staged, so a hunk header or a diff
-// line stages the file it belongs to. The file folds away once it is staged,
-// since it has been dealt with — `tab` opens it again.
+// line stages the file it belongs to. The file folds away once it is staged and
+// the cursor moves on to the next one still to review, since this one has been
+// dealt with — `tab` opens it again.
 func (m *Model) stageAt() tea.Cmd {
 	file, ok := m.doc.FileTargetAt(m.cursor)
 	if !ok {
@@ -515,12 +516,13 @@ func (m *Model) stageAt() tea.Cmd {
 	path := file.Entry.Path
 	if file.Entry.State() == git.StateStaged {
 		// Nothing to write, but `s` still means "done with this one" — a file
-		// reopened with `tab` folds again without a pointless git call.
+		// reopened with `tab` folds again, and moves on, without a pointless git
+		// call.
 		m.status = path + " is already staged"
-		m.foldNow(fold(path))
+		m.foldNow(path)
 		return nil
 	}
-	return m.runCollapsing("staging "+path, "staged "+path, fold(path), func(ctx context.Context) error {
+	return m.runAdvancing("staging "+path, "staged "+path, path, func(ctx context.Context) error {
 		return m.backend.StageFile(ctx, path)
 	})
 }
@@ -558,15 +560,39 @@ func (m *Model) setCollapsed(collapse map[string]bool) {
 	}
 }
 
-// foldNow applies a collapse change immediately, for the cases that never reach
-// git, leaving the cursor on the file it was in.
-func (m *Model) foldNow(collapse map[string]bool) {
-	file := m.doc.FileAt(m.cursor)
-	m.setCollapsed(collapse)
+// foldNow folds a file away immediately, for the case that never reaches git,
+// and moves on the way staging does.
+func (m *Model) foldNow(path string) {
+	m.setCollapsed(fold(path))
 	m.rebuild()
-	if row := m.doc.RowOfFile(file); row >= 0 {
-		m.moveTo(row)
+	m.advanceFrom(path)
+}
+
+// advanceFrom moves the cursor on to the next file with something left to
+// review, which is where the pass carries on once path has been dealt with. It
+// stays on path when nothing below it is left, since a file that has just been
+// folded is a better place to be than an arbitrary one.
+func (m *Model) advanceFrom(path string) {
+	if next := m.nextToReview(path); next >= 0 {
+		m.showFile(m.doc.topOf(m.doc.RowOfFile(next)))
+		return
 	}
+	m.restoreCursor(path)
+}
+
+// nextToReview finds the first file below path that is not already staged, or
+// -1 when there is none — including when path itself has gone.
+func (m *Model) nextToReview(path string) int {
+	file := m.fileIndex(path)
+	if file < 0 {
+		return -1
+	}
+	for i := file + 1; i < len(m.doc.Files); i++ {
+		if m.doc.Files[i].Entry.State() != git.StateStaged {
+			return i
+		}
+	}
+	return -1
 }
 
 // foldEvery collapses or opens every file on screen, for the whole-tree
@@ -864,6 +890,24 @@ func (m *Model) runHere(busy, done string, op func(context.Context) error) tea.C
 	}
 }
 
+// runAdvancing is runCollapsing for a file the reviewer is done with: it folds
+// the file away and leaves the cursor on the next one still to review.
+//
+// Like the fold, the move travels with the reload rather than happening on the
+// keypress, so a stage that fails leaves the cursor on the file it failed on.
+func (m *Model) runAdvancing(busy, done, path string, op func(context.Context) error) tea.Cmd {
+	cmd := m.runCollapsing(busy, done, fold(path), op)
+	return func() tea.Msg {
+		msg := cmd()
+		loaded, ok := msg.(loadedMsg)
+		if !ok {
+			return msg
+		}
+		loaded.after = path
+		return loaded
+	}
+}
+
 // runCollapsing is run, folding or opening files once the reload lands.
 //
 // The fold travels with the reload rather than being applied on the keypress so
@@ -911,6 +955,9 @@ type loadedMsg struct {
 	// at puts the cursor back on what it was on, instead of on whatever is left
 	// to review in the file. Nil leaves the usual restore alone.
 	at *spot
+	// after names a file that has just been dealt with, moving the cursor on to
+	// the next one to review instead of leaving it on what it staged.
+	after string
 }
 
 type walkthroughMsg struct{ body string }
@@ -944,9 +991,12 @@ func (m *Model) applyLoaded(msg loadedMsg) {
 
 	m.fingerprint = fingerprintOf(msg.session)
 	m.rebuild()
-	if msg.at != nil {
+	switch {
+	case msg.at != nil:
 		m.moveToSpot(*msg.at)
-	} else {
+	case msg.after != "":
+		m.advanceFrom(msg.after)
+	default:
 		m.restoreCursor(path)
 	}
 	if msg.note != "" {

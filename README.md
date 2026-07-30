@@ -6,9 +6,10 @@ Every local diff-review tool is read-only, so reviewing and `git add` end up as
 two separate passes over the same diff: you read it in a viewer, then walk the
 whole thing again in the terminal, re-deciding what you decided five minutes ago.
 
-`peel` is one pass. Read a file, press `s`, and it is staged and folded away —
-what is left open is what is left to review. Comments you leave land in a store
-Claude Code can read, so "address my review comments" needs no copy-paste.
+`peel` is one pass. Read a file, press `s`, and it is staged, folded away, and the
+next file is in front of you — what is left open is what is left to review.
+Comments you leave land in a store Claude Code can read, so "address my review
+comments" needs no copy-paste.
 
 ![peel reviewing its own working tree](docs/screenshots/review.png)
 
@@ -63,7 +64,7 @@ repository changes.
 | `J` / `K` | next / previous file |
 | `]` / `[` | scroll the file list on its own |
 | `tab` | collapse or expand the file, or fold a walkthrough note away |
-| `s` | stage the file the cursor is in, folding it away |
+| `s` | stage the file the cursor is in, folding it away and moving to the next |
 | `u` | unstage that file, opening it again |
 | `a` / `U` | stage everything / unstage everything |
 | `c` | comment at the cursor, changed line or not |
@@ -95,9 +96,11 @@ generation, so none of `git add -p`'s failure modes — nothing here can write t
 wrong lines into your index. If you want to split a file, `git add -p` already
 does that well.
 
-Staging collapses the file, and the fold is display only: `tab` reads a staged
-file back without touching the index, and a stage that fails leaves the file open,
-because it still has to be dealt with.
+Staging collapses the file and moves the cursor to the next file still to review,
+so a pass is `s` after `s` and never a jump back to find where you were. The fold
+is display only: `tab` reads a staged file back without touching the index, and a
+stage that fails leaves the file open, and the cursor on it, because it still has
+to be dealt with.
 
 ### Walkthrough
 

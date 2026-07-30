@@ -228,7 +228,7 @@ var helpBindings = []struct{ keys, action string }{
 	{"g / G", "first / last row"},
 	{"ctrl+d / ctrl+u", "half a page down / up"},
 	{"tab", "collapse the file, or fold a walkthrough note away"},
-	{"s", "stage the file the cursor is in — it folds away once staged"},
+	{"s", "stage the file the cursor is in — it folds away and the next one opens"},
 	{"u", "unstage that file, opening it again"},
 	{"a / U", "stage everything / unstage everything"},
 	{"c", "comment at the cursor, changed line or not"},

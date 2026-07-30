@@ -368,7 +368,7 @@ func TestStagingAFileFoldsItAndTabOpensItAgain(t *testing.T) {
 		t.Error("staging alpha.go folded beta.txt too")
 	}
 
-	press(t, m, "tab")
+	press(t, m, "K", "tab")
 	if m.doc.Files[0].Collapsed {
 		t.Error("tab did not open the staged file again")
 	}
@@ -485,7 +485,9 @@ func TestBackendFailureIsShownAndNothingIsReloaded(t *testing.T) {
 	}
 }
 
-func TestReloadAdvancesToWhatIsStillUnstaged(t *testing.T) {
+// Staging is how the reviewer moves through the diff: the file folds away and
+// the cursor lands on the next one to read, so a pass is `s` after `s`.
+func TestStagingAdvancesToTheNextFile(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 
 	// After staging, alpha.go is fully staged and only beta.txt is left.
@@ -496,11 +498,67 @@ func TestReloadAdvancesToWhatIsStillUnstaged(t *testing.T) {
 	m := newModel(t, backend)
 	press(t, m, "j", "s")
 
-	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "alpha.go" {
-		t.Fatalf("cursor moved to %q, want to stay on alpha.go", got)
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
+		t.Fatalf("cursor is on %q, want the next file to review, beta.txt", got)
 	}
 	if got := m.doc.Rows[m.cursor].Kind; got != RowFile {
-		t.Errorf("cursor is on a %v; alpha.go has nothing unstaged left, so the header is right", got)
+		t.Errorf("cursor is on a %v, want the next file read from its header", got)
+	}
+}
+
+// The file left behind is left the way `J` leaves one: the next file opens at the
+// top of the window, so it is read from its first line instead of from the bottom
+// of a window the file before it still fills.
+func TestStagingOpensTheWindowOnTheNextFile(t *testing.T) {
+	backend := newFakeBackend(manyFileSession(t, 20))
+	staged := manyFileSession(t, 20)
+	staged.Files[0].Staged, staged.Files[0].Unstaged = staged.Files[0].Unstaged, nil
+	backend.nextSession = staged
+
+	m := newModel(t, backend, WithSize(100, 12))
+	press(t, m, "s")
+
+	if want := m.doc.RowOfFile(1); m.cursor != want || m.top != want {
+		t.Errorf("after staging the window starts at row %d and the cursor is at %d, want both at the next file's header (%d)",
+			m.top, m.cursor, want)
+	}
+}
+
+// The next file is the next one still to review: a file staged earlier — by an
+// agent, or by an unstage-and-restage — is folded away already and is not
+// somewhere to stop.
+func TestStagingSkipsFilesThatAreAlreadyStaged(t *testing.T) {
+	entries := parseFiles(t, threeFileDiff)
+	entries[1].Staged, entries[1].Unstaged = entries[1].Unstaged, nil
+	backend := newFakeBackend(sessionOf(entries))
+
+	staged := parseFiles(t, threeFileDiff)
+	staged[0].Staged, staged[0].Unstaged = staged[0].Unstaged, nil
+	staged[1].Staged, staged[1].Unstaged = staged[1].Unstaged, nil
+	backend.nextSession = sessionOf(staged)
+
+	m := newModel(t, backend)
+	press(t, m, "s")
+
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "gamma.md" {
+		t.Errorf("cursor is on %q, want gamma.md — beta.txt was already staged", got)
+	}
+}
+
+// Staging the last file has nowhere to advance to, and the file just folded is a
+// better place to stay than the top of a diff already reviewed.
+func TestStagingTheLastFileStaysOnIt(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+
+	staged := parseFiles(t, twoFileDiff)
+	staged[1].Staged, staged[1].Unstaged = staged[1].Unstaged, nil
+	backend.nextSession = sessionOf(staged)
+
+	m := newModel(t, backend)
+	press(t, m, "J", "s")
+
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
+		t.Errorf("cursor is on %q, want it to stay on beta.txt", got)
 	}
 }
 
