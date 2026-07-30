@@ -417,3 +417,83 @@ func keys(m map[string]string) []string {
 	}
 	return out
 }
+
+// lineRow finds the row displaying the hunk line with the given origin.
+func lineRow(t *testing.T, d Document, origin byte) int {
+	t.Helper()
+	for i, row := range d.Rows {
+		if row.Kind != RowLine {
+			continue
+		}
+		for _, side := range []int{row.Left, row.Right} {
+			lines := d.Hunks[row.Hunk].Hunk.Lines
+			if side >= 0 && side < len(lines) && lines[side].Kind.Origin() == origin {
+				return i
+			}
+		}
+	}
+	t.Fatalf("no %q line in the document", origin)
+	return -1
+}
+
+func TestRenderScrolledCodeSlidesUnderAPinnedGutter(t *testing.T) {
+	doc := Build(newSession(t, longLineDiff), nil, nil, LayoutUnified)
+	r := plainRenderer(60)
+	row := lineRow(t, doc, '+')
+
+	at0 := r.Row(doc, row, RowState{})
+	r.SetOffset(20)
+
+	// One marker column, both line-number columns, the space before the code and
+	// the origin character. None of it moves, so the row still says which line it
+	// is and whether the line was added.
+	head := 1 + 2*lineNumWidth + 1 + 1
+	want := at0[:head] + fit(wideLine[20:], 60-head)
+	if got := r.Row(doc, row, RowState{}); got != want {
+		t.Errorf("scrolled row\n got %q\nwant %q", got, want)
+	}
+}
+
+func TestRenderScrolledCodeSlidesBothSidesOfASplitRow(t *testing.T) {
+	doc := Build(newSession(t, longLineDiff), nil, nil, LayoutSplit)
+	r := plainRenderer(80)
+	row := lineRow(t, doc, '+')
+	r.SetOffset(20)
+
+	got := r.Row(doc, row, RowState{})
+	if !strings.Contains(got, splitDivider) {
+		t.Fatalf("split row lost its divider: %q", got)
+	}
+	if strings.Contains(got, wideLine[:20]) {
+		t.Errorf("split row still shows the columns scrolled past: %q", got)
+	}
+	if !strings.Contains(got, wideLine[20:40]) {
+		t.Errorf("split row does not show the code scrolled to: %q", got)
+	}
+	// The old side is far shorter than the offset, so it scrolls away entirely
+	// rather than staying put beside the new side.
+	if strings.Contains(got, "var short") {
+		t.Errorf("the old side did not scroll with the new one: %q", got)
+	}
+}
+
+// TestShiftKeepsTheColourOpenedLeftOfTheCut covers what makes it safe to
+// highlight a whole line and then cut it: a cut landing inside a token would
+// otherwise drop the escape that coloured it and leave the tail bare.
+func TestShiftKeepsTheColourOpenedLeftOfTheCut(t *testing.T) {
+	const want = "\x1b[31mtext\x1b[0m"
+	if got := shift("\x1b[31mred text\x1b[0m", 4); got != want {
+		t.Errorf("shift = %q, want %q", got, want)
+	}
+}
+
+func TestCodeColumnsLeavesLessRoomSideBySide(t *testing.T) {
+	r := plainRenderer(80)
+	unified, split := r.CodeColumns(LayoutUnified), r.CodeColumns(LayoutSplit)
+	if split >= unified {
+		t.Errorf("split fits %d columns of code and unified %d, want split to fit fewer", split, unified)
+	}
+	if split < 1 {
+		t.Errorf("split fits %d columns, want at least one", split)
+	}
+}

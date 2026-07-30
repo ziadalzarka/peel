@@ -9,6 +9,7 @@ package tui
 import (
 	"strings"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ziadalzarka/peel/internal/app"
 	"github.com/ziadalzarka/peel/internal/git"
 	"github.com/ziadalzarka/peel/internal/store"
@@ -155,6 +156,10 @@ type Document struct {
 	Steps    []StepRef
 	Comments []store.Comment
 	Layout   Layout
+	// CodeWidth is the widest line of code the document holds, in screen
+	// columns and with tabs already expanded. It bounds how far the diff can be
+	// scrolled sideways, so scrolling right cannot empty the pane.
+	CodeWidth int
 	// Draft is the comment being written, if one is.
 	Draft Draft
 	// DraftRow is the first row of the editor, and -1 when nothing is being
@@ -317,6 +322,7 @@ func (d *Document) addBody(fi int, entry git.FileEntry, idx *commentIndex) {
 			d.Files[fi].Hunks = append(d.Files[fi].Hunks, hi)
 			d.add(Row{Kind: RowHunk, File: fi, Hunk: hi, Left: -1, Right: -1, Step: -1})
 			d.addDraft(fi, hi, d.draftOnHunk(d.Hunks[hi]))
+			d.measure(h.Lines)
 
 			for _, pair := range pairLines(h.Lines, d.Layout) {
 				d.add(Row{Kind: RowLine, File: fi, Hunk: hi, Left: pair.left, Right: pair.right, Step: -1})
@@ -328,6 +334,15 @@ func (d *Document) addBody(fi int, entry git.FileEntry, idx *commentIndex) {
 
 	if len(d.Files[fi].Hunks) == 0 {
 		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Text: emptyNote(entry)})
+	}
+}
+
+// measure widens CodeWidth to hold a hunk's longest line. Tabs are expanded
+// first, since the offset the width bounds is counted in screen columns and a
+// tab is eight of them.
+func (d *Document) measure(lines []git.Line) {
+	for _, l := range lines {
+		d.CodeWidth = max(d.CodeWidth, ansi.StringWidth(expandTabs(l.Text)))
 	}
 }
 

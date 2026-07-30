@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -41,7 +42,12 @@ type Model struct {
 	// fileTop is the first file drawn in the side pane. It scrolls
 	// independently of the diff, and only follows the diff when the marked file
 	// has left the pane.
-	fileTop int
+	fileTop     int
+	filePaneOff bool
+	// xoff is how far the code has been slid sideways under a pinned gutter, for
+	// reading a line too long for the pane. It is a property of the window
+	// rather than of the cursor, so moving between files keeps it.
+	xoff int
 
 	mode   mode
 	layout Layout
@@ -86,6 +92,16 @@ type Model struct {
 	busy   string
 	status string
 	err    error
+
+	// writes counts the changes on screen whose write has not been read back
+	// yet. The goroutines doing the writing count themselves out of it, so it is
+	// atomic; what it is for is in optimistic.go.
+	writes atomic.Int32
+	// writing gates the next write on the one before it, keeping peel's git
+	// calls in the order the keys were pressed.
+	writing chan struct{}
+	// unsavedIDs numbers the comments drawn before their write landed.
+	unsavedIDs int
 
 	quitting bool
 }
@@ -161,10 +177,27 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 		m.pollEvery = defaultPollEvery
 	}
 	m.fingerprint = fingerprintOf(session)
+	m.restoreFolds()
 	m.resize(cfg.width, cfg.height)
 	m.rebuild()
 	m.cursor = m.doc.FirstStop()
 	return m
+}
+
+// restoreFolds opens the review with the files folded away that were folded
+// when it was last read, so a pass carried over from yesterday still shows what
+// is left rather than starting again from the top.
+func (m *Model) restoreFolds() {
+	folded, err := m.backend.Folded()
+	if err != nil {
+		m.err = err
+		return
+	}
+	for _, path := range folded {
+		if _, ok := m.session.Entry(path); ok {
+			m.collapsed[path] = true
+		}
+	}
 }
 
 // draftMinHeight and draftMaxHeight bound the inline editor. It opens small, so
@@ -228,6 +261,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = ""
 		m.err = msg.err
 		return m, nil
+	case revertMsg:
+		m.restore(msg.before)
+		m.busy = ""
+		m.err = msg.err
+		return m, nil
 	case tickMsg:
 		if !m.follow {
 			return m, nil
@@ -244,28 +282,41 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // wheelLines is how far one notch of the wheel scrolls.
 const wheelLines = 3
 
-// mouse routes a wheel notch to whichever pane the pointer is over, so the file
-// list and the diff scroll separately.
+// wheelColumns is how far one notch of a horizontal wheel slides the code.
+// Shorter than a key press, since a terminal reports a trackpad swipe as a
+// stream of notches rather than as one.
+const wheelColumns = 4
+
+// mouse routes a wheel notch to whatever it should move.
 func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
 	if m.mode == modeComment || m.mode == modeHelp {
 		return nil
 	}
 
-	var delta int
 	switch msg.Button {
 	case tea.MouseButtonWheelDown:
-		delta = wheelLines
+		m.wheel(msg, wheelLines)
 	case tea.MouseButtonWheelUp:
-		delta = -wheelLines
-	default:
-		return nil
+		m.wheel(msg, -wheelLines)
+	case tea.MouseButtonWheelLeft:
+		m.scrollCode(-wheelColumns)
+	case tea.MouseButtonWheelRight:
+		m.scrollCode(wheelColumns)
 	}
+	return nil
+}
+
+// wheel sends a vertical notch to whichever pane the pointer is over, so the
+// file list and the diff scroll separately.
+//
+// A horizontal notch skips this and always reaches the diff: the file pane
+// shortens paths from the left already and has nothing to slide.
+func (m *Model) wheel(msg tea.MouseMsg, delta int) {
 	if pane := m.filePaneWidth(); pane > 0 && msg.X < pane {
 		m.scrollFiles(delta)
-		return nil
+		return
 	}
 	m.scrollDiff(delta)
-	return nil
 }
 
 // key routes a press to whichever screen has the keyboard.
@@ -285,8 +336,7 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 
 	switch msg.String() {
 	case "q", "ctrl+c":
-		m.quitting = true
-		return tea.Quit
+		return m.quit()
 	case "?":
 		m.mode = modeHelp
 	case "j":
@@ -298,13 +348,23 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 	case "up":
 		m.moveTo(m.doc.PrevStop(m.cursor))
 	case "]":
-		m.scrollFiles(1)
-	case "[":
-		m.scrollFiles(-1)
-	case "J", "}":
 		m.showFile(m.doc.NextFile(m.cursor))
-	case "K", "{":
+	case "[":
 		m.showFile(m.doc.PrevFile(m.cursor))
+	case "}":
+		m.scrollFiles(1)
+	case "{":
+		m.scrollFiles(-1)
+	case "l", "right":
+		m.scrollCode(codeStep)
+	case "h", "left":
+		m.scrollCode(-codeStep)
+	case "0":
+		m.scrollCode(-m.xoff)
+	case "$":
+		m.scrollCode(m.maxCodeOffset())
+	case "b":
+		m.toggleFilePane()
 	case "g", "home":
 		m.moveTo(m.doc.FirstStop())
 	case "G", "end":
@@ -313,16 +373,18 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 		m.moveTo(m.doc.Nearest(m.cursor + m.bodyHeight()/2))
 	case "ctrl+u", "pgup":
 		m.moveTo(m.doc.Nearest(m.cursor - m.bodyHeight()/2))
-	case "tab":
+	case " ":
 		m.toggleCollapse()
 	case "s":
 		return m.stageAt()
 	case "u":
 		return m.unstageAt()
+	case "o":
+		return m.openAt()
 	case "a":
-		return m.runCollapsing("staging everything", "staged everything", m.foldEvery(true), m.backend.StageAll)
+		return m.stageEverything()
 	case "U":
-		return m.runCollapsing("unstaging everything", "unstaged everything", m.foldEvery(false), m.backend.UnstageAll)
+		return m.unstageEverything()
 	case "c":
 		m.openComment()
 	case "x":
@@ -494,11 +556,28 @@ func (m *Model) foldStep(step int) {
 
 func (m *Model) helpKey(msg tea.KeyMsg) tea.Cmd {
 	if msg.String() == "ctrl+c" {
-		m.quitting = true
-		return tea.Quit
+		return m.quit()
 	}
 	m.mode = modeBrowse
 	return nil
+}
+
+// quit leaves, once the changes already pressed have been written.
+//
+// A change is on screen the moment it is pressed, which makes quitting straight
+// after one the natural thing to do — so the last writes are waited for rather
+// than killed with the process. Waiting on the tail of the queue waits for all
+// of them, since each write opens the gate for the next only once it is done.
+func (m *Model) quit() tea.Cmd {
+	m.quitting = true
+	writing := m.writing
+	if writing == nil || m.writes.Load() == 0 {
+		return tea.Quit
+	}
+	return func() tea.Msg {
+		<-writing
+		return tea.Quit()
+	}
 }
 
 // stageAt stages the file the cursor is in.
@@ -506,7 +585,7 @@ func (m *Model) helpKey(msg tea.KeyMsg) tea.Cmd {
 // A file is the smallest thing that can be staged, so a hunk header or a diff
 // line stages the file it belongs to. The file folds away once it is staged and
 // the cursor moves on to the next one still to review, since this one has been
-// dealt with — `tab` opens it again.
+// dealt with — `space` opens it again.
 func (m *Model) stageAt() tea.Cmd {
 	file, ok := m.doc.FileTargetAt(m.cursor)
 	if !ok {
@@ -516,13 +595,20 @@ func (m *Model) stageAt() tea.Cmd {
 	path := file.Entry.Path
 	if file.Entry.State() == git.StateStaged {
 		// Nothing to write, but `s` still means "done with this one" — a file
-		// reopened with `tab` folds again, and moves on, without a pointless git
+		// reopened with `space` folds again, and moves on, without a pointless git
 		// call.
 		m.status = path + " is already staged"
 		m.foldNow(path)
 		return nil
 	}
-	return m.runAdvancing("staging "+path, "staged "+path, path, func(ctx context.Context) error {
+	if !m.canStage() {
+		return nil
+	}
+	return m.apply(func() {
+		m.session = restaged(m.session, true, only(path))
+		m.status = "staged " + path
+		m.foldNow(path)
+	}, func(ctx context.Context) error {
 		return m.backend.StageFile(ctx, path)
 	})
 }
@@ -540,28 +626,128 @@ func (m *Model) unstageAt() tea.Cmd {
 		m.status = path + " has nothing staged"
 		return nil
 	}
-	return m.runCollapsing("unstaging "+path, "unstaged "+path, unfold(path), func(ctx context.Context) error {
+	if !m.canStage() {
+		return nil
+	}
+	return m.apply(func() {
+		m.session = restaged(m.session, false, only(path))
+		m.setCollapsed(unfold(path))
+		m.status = "unstaged " + path
+		m.relayout()
+	}, func(ctx context.Context) error {
 		return m.backend.UnstageFile(ctx, path)
 	})
+}
+
+// stageEverything and unstageEverything are `a` and `U`: the whole tree in one
+// press, leaving the screen a pass of single files would have left.
+func (m *Model) stageEverything() tea.Cmd {
+	if !m.canStage() {
+		return nil
+	}
+	return m.apply(func() {
+		m.session = restaged(m.session, true, every)
+		m.setCollapsed(m.foldEvery(true))
+		m.status = "staged everything"
+		m.relayout()
+	}, m.backend.StageAll)
+}
+
+func (m *Model) unstageEverything() tea.Cmd {
+	if !m.canStage() {
+		return nil
+	}
+	return m.apply(func() {
+		m.session = restaged(m.session, false, every)
+		m.setCollapsed(m.foldEvery(false))
+		m.status = "unstaged everything"
+		m.relayout()
+	}, m.backend.UnstageAll)
+}
+
+// canStage reports whether staging applies here, saying why on the spot when it
+// does not. A read-only session is refused on the keypress rather than shown a
+// change that would have to be taken back.
+func (m *Model) canStage() bool {
+	if err := m.session.NotStageable(); err != nil {
+		m.err = err
+		return false
+	}
+	return true
+}
+
+// openAt hands the file the cursor is in to the desktop, for the times the diff
+// is not enough and the whole file has to be read — or edited — outside peel.
+//
+// Nothing about the diff changes, so there is nothing to reload and nothing to
+// queue: the open is reported as done straight away, and only comes back if the
+// desktop had nothing to open it with.
+func (m *Model) openAt() tea.Cmd {
+	file, ok := m.doc.FileTargetAt(m.cursor)
+	if !ok {
+		m.status = "nothing to open here"
+		return nil
+	}
+	path := file.Entry.Path
+	before := m.snapshot()
+	m.status = "opened " + path
+	backend, ctx := m.backend, m.ctx
+	return func() tea.Msg {
+		if err := backend.OpenFile(ctx, path); err != nil {
+			return revertMsg{err: err, before: before}
+		}
+		return nil
+	}
 }
 
 // fold and unfold name the two one-file collapse changes staging makes.
 func fold(path string) map[string]bool   { return map[string]bool{path: true} }
 func unfold(path string) map[string]bool { return map[string]bool{path: false} }
 
-// setCollapsed folds the named files away, or opens the ones marked false.
+// setCollapsed folds the named files away, or opens the ones marked false. It is
+// the only place folds change, so it is also where they are written down.
 func (m *Model) setCollapsed(collapse map[string]bool) {
+	changed := false
 	for path, hide := range collapse {
+		if m.collapsed[path] == hide {
+			continue
+		}
 		if hide {
 			m.collapsed[path] = true
 		} else {
 			delete(m.collapsed, path)
 		}
+		changed = true
+	}
+	// Every reload comes through here, most of them with nothing to change —
+	// follow mode would otherwise write the same folds every few seconds.
+	if changed {
+		m.saveFolds()
 	}
 }
 
-// foldNow folds a file away immediately, for the case that never reaches git,
-// and moves on the way staging does.
+// saveFolds records what is folded away for the next time this review is opened.
+//
+// A fold that fails to persist is worth saying but not worth undoing: the file
+// is still folded on screen, and the reviewer's place in the pass is intact for
+// as long as peel is running.
+func (m *Model) saveFolds() {
+	paths := make([]string, 0, len(m.collapsed))
+	for path := range m.collapsed {
+		// Only what is in the diff now: a file whose change has been committed
+		// away is done with, and the next change to it is a new thing to read,
+		// not something to hide.
+		if _, ok := m.session.Entry(path); ok {
+			paths = append(paths, path)
+		}
+	}
+	if err := m.backend.SetFolded(paths); err != nil {
+		m.err = err
+	}
+}
+
+// foldNow folds a file away immediately, without waiting on git, and moves on
+// the way staging does.
 func (m *Model) foldNow(path string) {
 	m.setCollapsed(fold(path))
 	m.rebuild()
@@ -582,15 +768,23 @@ func (m *Model) advanceFrom(path string) {
 
 // nextToReview finds the first file below path that is not already staged, or
 // -1 when there is none — including when path itself has gone.
+//
+// A folded file stops the search rather than being jumped to or passed over: it
+// has been read already, and its header on its own is nothing to carry the pass
+// on with. The reviewer stays on the file they just dealt with instead.
 func (m *Model) nextToReview(path string) int {
 	file := m.fileIndex(path)
 	if file < 0 {
 		return -1
 	}
 	for i := file + 1; i < len(m.doc.Files); i++ {
-		if m.doc.Files[i].Entry.State() != git.StateStaged {
-			return i
+		if m.doc.Files[i].Entry.State() == git.StateStaged {
+			continue
 		}
+		if m.collapsed[m.doc.Files[i].Entry.Path] {
+			return -1
+		}
+		return i
 	}
 	return -1
 }
@@ -771,19 +965,25 @@ func (m *Model) submitComment() tea.Cmd {
 		Hunk:   got.hunk,
 		Author: store.AuthorUser,
 	}
-	// Saving reloads, and a reload normally moves the reviewer on to what is
-	// left to review. Writing a note is not progress through the diff, so this
-	// one puts the cursor back where it was written.
-	return m.runHere("saving comment", "commented on "+got.location(), func(context.Context) error {
+	// The note takes its place in the diff on the keypress, under the code it was
+	// written about, with the cursor left on that code: writing a note is not
+	// progress through the diff.
+	return m.apply(func() {
+		shown := comment
+		shown.ID = m.unsavedID()
+		shown.CreatedAt = time.Now()
+		m.comments = withComment(m.comments, shown)
+		m.status = "commented on " + got.location()
+		m.relayout()
+	}, func(context.Context) error {
 		_, err := m.backend.AddComment(comment)
 		return err
 	})
 }
 
 func (m *Model) toggleResolved() tea.Cmd {
-	c, ok := m.doc.CommentAt(m.cursor)
+	c, ok := m.commentAtCursor("resolve")
 	if !ok {
-		m.status = "move to a comment to resolve it"
 		return nil
 	}
 	want := !c.Resolved
@@ -791,20 +991,45 @@ func (m *Model) toggleResolved() tea.Cmd {
 	if !want {
 		done = "reopened " + c.Location()
 	}
-	return m.runHere("updating comment", done, func(context.Context) error {
+	return m.apply(func() {
+		m.comments = withResolved(m.comments, c.ID, want)
+		m.status = done
+		m.relayout()
+	}, func(context.Context) error {
 		return m.backend.SetResolved(c.ID, want)
 	})
 }
 
 func (m *Model) deleteComment() tea.Cmd {
-	c, ok := m.doc.CommentAt(m.cursor)
+	c, ok := m.commentAtCursor("delete")
 	if !ok {
-		m.status = "move to a comment to delete it"
 		return nil
 	}
-	return m.run("deleting comment", "deleted comment on "+c.Location(), func(context.Context) error {
+	return m.apply(func() {
+		m.comments = withoutComment(m.comments, c.ID)
+		m.status = "deleted comment on " + c.Location()
+		m.relayout()
+	}, func(context.Context) error {
 		return m.backend.RemoveComment(c.ID)
 	})
+}
+
+// commentAtCursor resolves the comment a key is about to act on.
+//
+// A comment written a moment ago is on screen before the store has it, and the
+// store is what the keys address a comment through — so that one is left alone
+// until its write lands, which is the next thing to happen either way.
+func (m *Model) commentAtCursor(verb string) (store.Comment, bool) {
+	c, ok := m.doc.CommentAt(m.cursor)
+	if !ok {
+		m.status = "move to a comment to " + verb + " it"
+		return store.Comment{}, false
+	}
+	if unsaved(c) {
+		m.status = "that comment is still being saved"
+		return store.Comment{}, false
+	}
+	return c, true
 }
 
 // walkBusyNote is the banner shown while a provider writes a narrative. It
@@ -867,68 +1092,6 @@ func (m *Model) pollCmd() tea.Cmd {
 	}
 }
 
-// run performs a mutation off the UI goroutine and reloads afterwards, so the
-// document never shows a state the repository has already moved past.
-func (m *Model) run(busy, done string, op func(context.Context) error) tea.Cmd {
-	return m.runCollapsing(busy, done, nil, op)
-}
-
-// runHere is run for the changes that are not progress through the diff — a
-// note written, a comment resolved. A reload normally moves the reviewer on to
-// what is left to review; these put the cursor back where it was instead.
-func (m *Model) runHere(busy, done string, op func(context.Context) error) tea.Cmd {
-	at := m.spot()
-	cmd := m.runCollapsing(busy, done, nil, op)
-	return func() tea.Msg {
-		msg := cmd()
-		loaded, ok := msg.(loadedMsg)
-		if !ok {
-			return msg
-		}
-		loaded.at = &at
-		return loaded
-	}
-}
-
-// runAdvancing is runCollapsing for a file the reviewer is done with: it folds
-// the file away and leaves the cursor on the next one still to review.
-//
-// Like the fold, the move travels with the reload rather than happening on the
-// keypress, so a stage that fails leaves the cursor on the file it failed on.
-func (m *Model) runAdvancing(busy, done, path string, op func(context.Context) error) tea.Cmd {
-	cmd := m.runCollapsing(busy, done, fold(path), op)
-	return func() tea.Msg {
-		msg := cmd()
-		loaded, ok := msg.(loadedMsg)
-		if !ok {
-			return msg
-		}
-		loaded.after = path
-		return loaded
-	}
-}
-
-// runCollapsing is run, folding or opening files once the reload lands.
-//
-// The fold travels with the reload rather than being applied on the keypress so
-// that a stage which fails leaves the file open — it still has to be reviewed.
-func (m *Model) runCollapsing(busy, done string, collapse map[string]bool, op func(context.Context) error) tea.Cmd {
-	m.busy = busy
-	backend, ctx := m.backend, m.ctx
-	return func() tea.Msg {
-		if err := op(ctx); err != nil {
-			return errMsg{err}
-		}
-		msg := load(ctx, backend, done)
-		loaded, ok := msg.(loadedMsg)
-		if !ok {
-			return msg
-		}
-		loaded.collapse = collapse
-		return loaded
-	}
-}
-
 // load re-reads the session and its comments.
 func load(ctx context.Context, backend Backend, note string) tea.Msg {
 	session, err := backend.Reload(ctx)
@@ -948,16 +1111,10 @@ type loadedMsg struct {
 	note     string
 	// poll marks a load nobody asked for, which may be dropped.
 	poll bool
-	// collapse folds the named files away, or opens them where false, as the
-	// reload is applied: staging a file gets it out of the way of what is left
-	// to review, unstaging brings it back.
-	collapse map[string]bool
-	// at puts the cursor back on what it was on, instead of on whatever is left
-	// to review in the file. Nil leaves the usual restore alone.
-	at *spot
-	// after names a file that has just been dealt with, moving the cursor on to
-	// the next one to review instead of leaving it on what it staged.
-	after string
+	// reconcile marks the read-back behind a change already on screen. It
+	// confirms what the reviewer is looking at rather than telling them
+	// something, so it moves nothing and says nothing.
+	reconcile bool
 }
 
 type walkthroughMsg struct{ body string }
@@ -969,34 +1126,39 @@ type tickMsg struct{}
 // applyLoaded swaps in a freshly read session, keeping the reviewer roughly
 // where they were rather than jumping back to the top.
 func (m *Model) applyLoaded(msg loadedMsg) {
+	if msg.reconcile && m.writes.Load() > 0 {
+		// A change pressed while this was being read is on screen already: this
+		// session was read before it, so applying it would take that change back
+		// off. The write behind it brings its own read-back.
+		return
+	}
 	if msg.poll && !m.acceptPoll(msg) {
 		return
 	}
-	path := m.currentPath()
-	m.busy = ""
-	m.err = nil
+	at, path := m.spot(), m.currentPath()
 	m.session = msg.session
 	m.comments = msg.comments
-	// A reload that lands under an open editor takes the keyboard back, so the
-	// editor has to be put away with it rather than left focused and invisible.
-	m.input.Blur()
-	m.mode = modeBrowse
+	if !msg.reconcile {
+		m.busy = ""
+		m.err = nil
+		// A reload that lands under an open editor takes the keyboard back, so the
+		// editor has to be put away with it rather than left focused and invisible.
+		m.input.Blur()
+		m.mode = modeBrowse
+	}
 	// The narrative is kept: it is the notes the reviewer is reading, and
 	// dropping it would reorder the diff underneath them every time they staged
 	// a hunk. When the code itself moved on it is marked instead, since only the
 	// reviewer knows whether waiting for a new one is worth it.
 	m.walkStale = m.walkStale || (m.walkLoaded && codeFingerprintOf(msg.session) != m.walkCode)
 
-	m.setCollapsed(msg.collapse)
-
 	m.fingerprint = fingerprintOf(msg.session)
 	m.rebuild()
-	switch {
-	case msg.at != nil:
-		m.moveToSpot(*msg.at)
-	case msg.after != "":
-		m.advanceFrom(msg.after)
-	default:
+	// A reconciling read-back is behind a change the reviewer has already seen
+	// and already moved on from, so the cursor stays exactly where they left it.
+	if msg.reconcile {
+		m.moveToSpot(at)
+	} else {
 		m.restoreCursor(path)
 	}
 	if msg.note != "" {
@@ -1012,6 +1174,11 @@ func (m *Model) applyLoaded(msg loadedMsg) {
 // waiting for the next tick.
 func (m *Model) acceptPoll(msg loadedMsg) bool {
 	if m.mode == modeComment {
+		return false
+	}
+	// A change of the reviewer's own is on screen and still being written: this
+	// poll may have read git before it landed, and would undraw it.
+	if m.writes.Load() > 0 {
 		return false
 	}
 	return fingerprintOf(msg.session) != m.fingerprint
@@ -1103,6 +1270,7 @@ func (m *Model) rebuild() {
 	m.renderer.SetWidth(m.diffWidth())
 	m.clampTop()
 	m.clampFileTop()
+	m.clampCode()
 }
 
 // setLayout changes how hunk bodies are laid out.
@@ -1114,6 +1282,17 @@ func (m *Model) setLayout(l Layout) {
 	m.layout = l
 	m.relayout()
 	m.status = l.String() + " layout"
+}
+
+func (m *Model) toggleFilePane() {
+	m.filePaneOff = !m.filePaneOff
+	m.relayout()
+	if m.filePaneOff {
+		m.status = "file list hidden"
+		return
+	}
+	m.ensureFileVisible()
+	m.status = "file list shown"
 }
 
 // fileIndex looks a file up by path, since rebuilding can renumber files too.
@@ -1128,6 +1307,10 @@ func (m *Model) fileIndex(path string) int {
 
 // toggleCollapse folds whatever the cursor is on out of the way: a walkthrough
 // step's explanation, or a file's body.
+//
+// Folding a file means the same thing staging one does — done with it — so the
+// cursor moves on to the next file still to review. Opening one again leaves the
+// cursor on it, since that is the file being read.
 func (m *Model) toggleCollapse() {
 	if step := m.doc.StepAt(m.cursor); step >= 0 {
 		m.foldStep(step)
@@ -1138,11 +1321,11 @@ func (m *Model) toggleCollapse() {
 		return
 	}
 	path := m.doc.Files[file].Entry.Path
-	if m.collapsed[path] {
-		delete(m.collapsed, path)
-	} else {
-		m.collapsed[path] = true
+	if !m.collapsed[path] {
+		m.foldNow(path)
+		return
 	}
+	m.setCollapsed(unfold(path))
 	m.rebuild()
 	m.moveTo(m.doc.RowOfFile(file))
 }
@@ -1207,6 +1390,31 @@ func (m *Model) keepCursorInView() {
 func (m *Model) scrollFiles(delta int) {
 	m.fileTop += delta
 	m.clampFileTop()
+}
+
+// codeStep is how far one press of h or l slides the code: one tab stop, so a
+// press moves the code by an indent level rather than by an arbitrary distance.
+const codeStep = tabWidth
+
+// scrollCode slides the code sideways under a pinned gutter, for a line too long
+// for the pane.
+//
+// Unlike the vertical window this does not touch the cursor: the same rows are
+// on screen either way, so there is nothing to drag it back to.
+func (m *Model) scrollCode(delta int) {
+	m.xoff += delta
+	m.clampCode()
+}
+
+func (m *Model) clampCode() {
+	m.xoff = min(max(m.xoff, 0), m.maxCodeOffset())
+	m.renderer.SetOffset(m.xoff)
+}
+
+// maxCodeOffset stops the code sliding past its own longest line, so scrolling
+// right can never leave the pane blank with nothing to scroll back to.
+func (m *Model) maxCodeOffset() int {
+	return max(0, m.doc.CodeWidth-m.renderer.CodeColumns(m.layout))
 }
 
 // markedFile is the file the pane marks: the one the diff window opens on, so
@@ -1274,6 +1482,7 @@ func (m *Model) resize(width, height int) {
 		m.relayout()
 	}
 	m.clampTop()
+	m.clampCode()
 	m.ensureVisible(m.cursor)
 	m.ensureFileVisible()
 	m.revealDraft()

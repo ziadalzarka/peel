@@ -34,6 +34,16 @@ type Session struct {
 // IsEmpty reports whether there is nothing to review.
 func (s *Session) IsEmpty() bool { return len(s.Files) == 0 }
 
+// NotStageable explains why staging does not apply to this session, or is nil
+// when it does. The UI asks before it stages anything, so a read-only session
+// says so on the keypress rather than showing a stage and taking it back.
+func (s *Session) NotStageable() error {
+	if s.Stageable {
+		return nil
+	}
+	return fmt.Errorf("%s is not in this working tree — nothing to stage", s.Title)
+}
+
 // Entry returns the file entry for path.
 func (s *Session) Entry(path string) (git.FileEntry, bool) {
 	for _, f := range s.Files {

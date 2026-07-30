@@ -22,6 +22,9 @@ const (
 	fillProbe     = "x"
 )
 
+// splitDivider separates the two sides of a split row.
+const splitDivider = " │ "
+
 // RowState is what a row needs from outside the document to be drawn.
 type RowState struct {
 	// Cursor marks the row the cursor rests on.
@@ -37,6 +40,9 @@ type Renderer struct {
 	theme  Theme
 	syntax *Highlighter
 	width  int
+	// xoff is how many columns of code have been slid off the left edge, for
+	// reading a line too long for the pane.
+	xoff int
 
 	addedFill   string
 	removedFill string
@@ -57,6 +63,26 @@ func NewRenderer(theme Theme, syntax *Highlighter) *Renderer {
 // SetWidth sets the width rows are fitted to.
 func (r *Renderer) SetWidth(w int) {
 	r.width = max(w, 20)
+}
+
+// SetOffset slides the code sideways by off columns. Only the code moves: the
+// line numbers and the +/- origin are pinned, since they are what says which
+// line is being read and a row whose identity has scrolled away is worse than
+// one whose tail has.
+func (r *Renderer) SetOffset(off int) {
+	r.xoff = max(off, 0)
+}
+
+// CodeColumns is how much of a line of code fits on screen, after the gutter and
+// the origin character have taken their columns. It is what an offset is
+// measured against, so scrolling right cannot run past the longest line.
+func (r *Renderer) CodeColumns(l Layout) int {
+	body := r.width - 1
+	if l == LayoutSplit {
+		half := (body - ansi.StringWidth(splitDivider)) / 2
+		return max(half-lineNumWidth-2, 1)
+	}
+	return max(body-2*lineNumWidth-2, 1)
 }
 
 // Row renders one row of the document to a single line.
@@ -158,7 +184,7 @@ func (r *Renderer) unifiedBody(ref HunkRef, row Row, width int) string {
 // splitBody puts the old side left of the new side. Either index may be -1,
 // where the change has no counterpart on that side.
 func (r *Renderer) splitBody(ref HunkRef, row Row, width int) string {
-	divider := r.theme.Dim.Render(" │ ")
+	divider := r.theme.Dim.Render(splitDivider)
 	sides := width - ansi.StringWidth(divider)
 	half := sides / 2
 	left := r.halfLine(ref, row.Left, true, half)
@@ -192,16 +218,32 @@ func (r *Renderer) fillFor(l git.Line) string {
 // content renders a line's origin character and text. The origin keeps the diff
 // colour while the text keeps the language's, so syntax highlighting and the
 // add/remove signal do not fight over the same characters.
+//
+// The horizontal offset slides the text and leaves the origin behind, so a diff
+// scrolled sideways still reads as a diff.
 func (r *Renderer) content(path string, l git.Line) string {
 	origin := string(l.Kind.Origin())
 	text := expandTabs(l.Text)
 	if l.Kind == git.LineNoNewline {
-		return r.theme.Dim.Render(origin + text)
+		return r.theme.Dim.Render(origin + shift(text, r.xoff))
 	}
 	if r.syntax.Active() {
-		return r.styleFor(l).Render(origin) + r.syntax.Line(path, text)
+		return r.styleFor(l).Render(origin) + shift(r.syntax.Line(path, text), r.xoff)
 	}
-	return r.styleFor(l).Render(origin + text)
+	return r.styleFor(l).Render(origin + shift(text, r.xoff))
+}
+
+// shift drops the first off columns of a line.
+//
+// It runs after highlighting rather than before, so chroma still lexes the whole
+// line and a cut landing inside a token keeps the token's colour: escapes opened
+// to the left of the cut are carried through even though the text they styled is
+// gone.
+func shift(s string, off int) string {
+	if off <= 0 {
+		return s
+	}
+	return ansi.TruncateLeft(s, off, "")
 }
 
 // expandTabs replaces tabs with spaces up to the next tab stop.

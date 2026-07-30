@@ -28,15 +28,34 @@ type App struct {
 	Comments store.CommentStore
 	// Walkthroughs caches the most recent AI narrative.
 	Walkthroughs store.WalkthroughCache
+	// Folds remembers which files have been folded away.
+	Folds store.FoldStore
 	// AI holds the walkthrough providers, in preference order.
 	AI *ai.Registry
 	// Forges holds the pull request providers, in preference order.
 	Forges *forge.Registry
 
+	// Runner runs the external commands peel shells out to.
+	Runner exec.Runner
+
 	// Root is the working tree root.
 	Root string
 	// StateDir is where peel keeps its files, inside the git directory.
 	StateDir string
+}
+
+// OpenCommand hands a file to whatever the desktop opens it with.
+const OpenCommand = "open"
+
+// OpenFile opens a file of the working tree the way double clicking it would.
+// The path is the one the diff carries, relative to the root.
+func (a *App) OpenFile(ctx context.Context, path string) error {
+	_, err := a.Runner.Run(ctx, exec.Command{
+		Name: OpenCommand,
+		Args: []string{filepath.Join(a.Root, path)},
+		Dir:  a.Root,
+	})
+	return err
 }
 
 // Option customises how an App is opened. Tests use these to substitute fakes;
@@ -132,8 +151,10 @@ func Open(ctx context.Context, dir string, opts ...Option) (*App, error) {
 		Stager:       git.NewStager(repo),
 		Comments:     store.NewJSONStore(filepath.Join(stateDir, "comments.json"), cfg.storeOp...),
 		Walkthroughs: store.NewJSONWalkthroughCache(filepath.Join(stateDir, "walkthrough.json")),
+		Folds:        store.NewJSONFoldStore(filepath.Join(stateDir, "folds.json")),
 		AI:           aiRegistry,
 		Forges:       forgeRegistry,
+		Runner:       cfg.runner,
 		Root:         root,
 		StateDir:     stateDir,
 	}, nil

@@ -3,6 +3,9 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,6 +48,19 @@ index 5555555..6666666 100644
 -first
 +second
 `
+
+// wideLine is far wider than any pane the tests open, so reading its tail means
+// scrolling sideways.
+var wideLine = "var long = " + strconv.Quote(strings.Repeat("0123456789", 12))
+
+// longLineDiff replaces a short line with a very long one, which puts both on
+// the same row in the split layout.
+var longLineDiff = "diff --git a/wide.go b/wide.go\n" +
+	"index 1111111..2222222 100644\n--- a/wide.go\n+++ b/wide.go\n" +
+	"@@ -1,2 +1,2 @@\n" +
+	" package wide\n" +
+	"-var short = 1\n" +
+	"+" + wideLine + "\n"
 
 // parseFiles turns a diff into file entries on the working-tree side.
 func parseFiles(t *testing.T, diff string) []git.FileEntry {
@@ -94,6 +110,13 @@ type fakeBackend struct {
 	unstagedFiles []string
 	stageAll      int
 	unstageAll    int
+	opened        []string
+
+	// folded is what the review folded away, kept the way the store would.
+	folded      []string
+	foldSaves   int
+	foldErr     error
+	foldSaveErr error
 
 	added    []store.Comment
 	removed  []string
@@ -209,6 +232,28 @@ func (f *fakeBackend) UnstageAll(context.Context) error {
 		return err
 	}
 	f.unstageAll++
+	return nil
+}
+
+func (f *fakeBackend) Folded() ([]string, error) {
+	if f.foldErr != nil {
+		return nil, f.foldErr
+	}
+	return f.folded, nil
+}
+
+func (f *fakeBackend) SetFolded(paths []string) error {
+	sort.Strings(paths)
+	f.folded = paths
+	f.foldSaves++
+	return f.foldSaveErr
+}
+
+func (f *fakeBackend) OpenFile(_ context.Context, path string) error {
+	if err := f.take(); err != nil {
+		return err
+	}
+	f.opened = append(f.opened, path)
 	return nil
 }
 

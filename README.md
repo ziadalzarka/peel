@@ -61,12 +61,16 @@ repository changes.
 |---|---|
 | `↓` / `↑` | move the cursor one line, diff body included |
 | `j` / `k` | next / previous hunk, file or comment |
-| `J` / `K` | next / previous file |
-| `]` / `[` | scroll the file list on its own |
-| `tab` | collapse or expand the file, or fold a walkthrough note away |
+| `]` / `[` | next / previous file |
+| `}` / `{` | scroll the file list on its own |
+| `h` / `l` | scroll the code sideways, for a line too long for the pane |
+| `0` / `$` | back to the first column / out to the longest line's end |
+| `b` | hide or show the file list, giving the diff the whole width |
+| `space` | fold the file away and move on, or expand it again — and folds a walkthrough note away |
 | `s` | stage the file the cursor is in, folding it away and moving to the next |
 | `u` | unstage that file, opening it again |
 | `a` / `U` | stage everything / unstage everything |
+| `o` | open the file the cursor is in, outside peel |
 | `c` | comment at the cursor, changed line or not |
 | `enter` / `alt+enter` | in the editor: save the comment / write another line |
 | `x` / `D` | resolve / delete the comment at the cursor |
@@ -85,8 +89,19 @@ including on the untouched code a change breaks.
 it is saved — the code stays on screen while you write about it, and the cursor
 is still on it afterwards. `enter` saves it; `alt+enter` writes another line.
 
+A line too long for the pane is read by scrolling to it rather than by wrapping
+it: `h` and `l` slide the code sideways under the line numbers, which stay put
+along with the `+` and `-`, so a row scrolled out to column 90 still says which
+line it is and whether it was added. `$` goes out to the end of the longest line
+in the diff and `0` comes back. The header names the column while you are away
+from the first one.
+
 The mouse works too. The wheel scrolls whichever pane it is over and drags the
-cursor along, so the cursor never addresses a row that has left the screen.
+cursor along, so the cursor never addresses a row that has left the screen. A
+horizontal wheel — a two-finger swipe, or shift and the wheel — slides the code,
+in terminals that report one: Ghostty, kitty, iTerm2, WezTerm and Alacritty all
+do. Where yours does not, or swallows the swipe for its own scrollback, `h` and
+`l` do the same thing.
 
 ### Staging is whole-file
 
@@ -97,10 +112,30 @@ wrong lines into your index. If you want to split a file, `git add -p` already
 does that well.
 
 Staging collapses the file and moves the cursor to the next file still to review,
-so a pass is `s` after `s` and never a jump back to find where you were. The fold
-is display only: `tab` reads a staged file back without touching the index, and a
+so a pass is `s` after `s` and never a jump back to find where you were. A file
+you have already folded stops the move: it has been read, so the cursor stays on
+what you just staged instead of landing on a fold. The fold
+is display only: `space` reads a staged file back without touching the index, and a
 stage that fails leaves the file open, and the cursor on it, because it still has
 to be dealt with.
+
+The fold and the move happen on the keypress, before git has been asked anything —
+as does a note appearing in the diff, and a comment resolving. None of it is in
+doubt, only slow: `git add` and the re-read behind it are a few hundred
+milliseconds in a large repository, and waiting for them before redrawing makes a
+decision you have already made look like peel thinking about it. The write goes on
+behind the screen and the re-read confirms it; if it fails, the change comes back
+off and the footer says why. `q` straight after `s` waits for that stage to land.
+
+`space` does the same thing without the index. Not every file you read is a file
+to stage — a `--rev` or pull request session cannot stage at all, and a working
+tree has files you look at and leave alone — so folding one away moves you on to
+the next exactly as staging does. What is left open is what is left to read.
+
+Folds are remembered between runs, in `.git/peel/folds.json` and per review, so a
+pass through a large diff picks up where you left it instead of starting again
+from the top. A file whose change has been committed away loses its fold: the
+next change to it is a new thing to read, not something to hide.
 
 ### Walkthrough
 
@@ -108,7 +143,7 @@ to be dealt with.
 not a separate pane — the diff itself is reordered into the steps the narrative
 reads it in, with each step's explanation above the files it covers. So you read
 the notes and the code together. `j`/`k` stop on a note like they stop on a hunk,
-`tab` folds one away once you have read it, `w` again puts the diff back in git's
+`space` folds one away once you have read it, `w` again puts the diff back in git's
 order, and `W` writes a new one. Staging keeps the notes; when the code moves on
 underneath them the header says `stale`.
 
@@ -143,7 +178,7 @@ daemon and no session to attach to: review, quit, *then* ask Claude.
 
 ```
 internal/git       diff parsing, status, and whole-file staging
-internal/store     comments and the walkthrough cache, under .git/peel/
+internal/store     comments, folds, and the walkthrough cache, under .git/peel/
 internal/ai        walkthrough providers (claude-code, codex)
 internal/forge     pull request providers (github, via gh)
 internal/registry  provider lookup, shared by both

@@ -47,7 +47,7 @@ func (m *Model) bodyHeight() int {
 }
 
 func (m *Model) filePaneWidth() int {
-	if len(m.doc.Files) == 0 {
+	if m.filePaneOff || len(m.doc.Files) == 0 {
 		return 0
 	}
 	w := min(max(m.width/4, filePaneMin), filePaneMax)
@@ -74,6 +74,11 @@ func (m *Model) headerView() string {
 	}, "  ")
 
 	right := []string{m.theme.Dim.Render(m.layout.String())}
+	// Scrolled sideways, a run of short lines looks like a diff that has lost
+	// its code. Saying which column the pane starts at is what explains it.
+	if m.xoff > 0 {
+		right = append(right, m.theme.Dim.Render(fmt.Sprintf("col %d", m.xoff+1)))
+	}
 	if len(m.doc.Steps) > 0 {
 		walk := []string{m.theme.Title.Render("walkthrough"), m.theme.Dim.Render(m.doc.StepSummary())}
 		if m.walkStale {
@@ -115,7 +120,7 @@ func (m *Model) hints() string {
 	case modeHelp:
 		return "any key to close"
 	default:
-		return `j/k hunk · ↓/↑ line · J/K file · s stage file · u unstage · tab fold · c comment · \ layout · w walkthrough · ? help · q quit`
+		return `j/k hunk · ↓/↑ line · [/] file · s stage file · u unstage · space fold · c comment · b files · \ layout · w walkthrough · ? help · q quit`
 	}
 }
 
@@ -223,14 +228,18 @@ func nthLine(lines []string, n int) string {
 var helpBindings = []struct{ keys, action string }{
 	{"j / k", "next / previous hunk, file or comment"},
 	{"↓ / ↑", "move the cursor one line (the wheel scrolls the diff)"},
-	{"J / K", "next / previous file"},
-	{"] / [", "scroll the file list on its own"},
+	{"] / [", "next / previous file"},
+	{"} / {", "scroll the file list on its own"},
+	{"h / l", "scroll the code sideways, for a line too long for the pane"},
+	{"0 / $", "back to the first column / out to the longest line's end"},
+	{"b", "hide or show the file list, giving the diff the whole width"},
 	{"g / G", "first / last row"},
 	{"ctrl+d / ctrl+u", "half a page down / up"},
-	{"tab", "collapse the file, or fold a walkthrough note away"},
+	{"space", "fold the file away and move on, or fold a walkthrough note away"},
 	{"s", "stage the file the cursor is in — it folds away and the next one opens"},
 	{"u", "unstage that file, opening it again"},
 	{"a / U", "stage everything / unstage everything"},
+	{"o", "open the file the cursor is in, outside peel"},
 	{"c", "comment at the cursor, changed line or not"},
 	{"enter / alt+enter", "in the editor: save the comment / write another line"},
 	{"x", "resolve or reopen the comment at the cursor"},

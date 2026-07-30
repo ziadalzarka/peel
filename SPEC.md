@@ -85,7 +85,10 @@ it doesn't get relitigated.
 | **Diff layout** | Unified default, `\` toggles side-by-side | Unified matches `git diff` and fits a narrow terminal; side-by-side for spotting edits inside a long line |
 | **Staging granularity** | **whole files only** | Revised 2026-07-30, after building hunk and line staging. A file is the unit a review decision is actually made in, and reviewing one then pressing `s` reads the same either way. Hunk and line staging bought a patch engine whose failure mode is writing the wrong lines into the index, to split a file the way `git add -p` already splits it |
 | **Staging mechanism** | `git add` / `git restore --staged` per path | The whole-file decision removes the need to generate patches at all: no `git apply --cached`, no `@@` arithmetic, no intent-to-add dance for untracked files |
-| **Staged files fold away** | `s` collapses the file, moves to the next one to review; `tab` reopens it | The list left open is the list still to review, so the diff shrinks as the pass goes on, and the one key that ends a file also starts the next. Collapsing is display only — `tab` reads a staged file back without touching the index |
+| **Staged files fold away** | `s` collapses the file, moves to the next one to review; `space` reopens it | The list left open is the list still to review, so the diff shrinks as the pass goes on, and the one key that ends a file also starts the next. Collapsing is display only — `space` reads a staged file back without touching the index |
+| **Folding is the same decision without the index** | `space` folds a file away and moves on exactly as `s` does | Not every file read is a file to stage — a read-only session has none, and a working tree has files you have looked at and left alone. Folding is how a pass records what has been read, so it moves on the way staging does |
+| **Folds persist** | JSON at `.git/peel/folds.json`, per target | A pass through a large diff rarely finishes in one sitting, and reopening to a diff that has forgotten every file already read starts the pass again. Folds of files no longer in the diff are dropped, so the next change to a file is not hidden by a fold left from the last one |
+| **Changes are drawn before they are written** | optimistic, with rollback: the screen moves on the keypress, git is asked behind it | Added 2026-07-30. A stage is `git add` plus a full re-read — 50ms in a small repository, several hundred in a large one — and the answer is never in doubt, only slow. Waiting for it before redrawing makes a decision that has already been made look like peel thinking about it, and staging is a key pressed file after file. The guess is a prediction of a whole-file stage and nothing cleverer; the re-read behind it stays authoritative, and a write that fails restores the screen it was drawn over. Two rules keep the guess from being seen: writes are queued, so peel's own git calls cannot race for the index lock, and a read-back landing while another write is out is dropped rather than undrawing it. `q` waits for the writes it has already reported |
 | **Agent → index** | **Read-only. No flag, no escape hatch** | Claude Code can already run `git add` directly, so `peel hunks add` adds no capability — only a way for things to enter the index unreviewed |
 | **Comment store** | JSON at `.git/peel/comments.json` | Per-repo, survives restarts, invisible to `git status`, readable with no daemon running |
 | **Agent hookup** | CLI + `SKILL.md` | Agent pulls on demand. Deliberately *not* hunk's live-daemon model — see §6 |
@@ -94,6 +97,8 @@ it doesn't get relitigated.
 | **Walkthrough is parsed, not printed** | steps → files → explanation, parsed out of the markdown | A wall of markdown is something you read *about* the change. Parsing markdown rather than demanding JSON keeps `peel walkthrough` useful as prose |
 | **Walkthrough is the diff, not a pane** | the steps reorder the files and each explanation sits above the files it covers | A separate pane is a map you read and then leave; the same notes inside the diff are read *with* the code they describe, and there is one thing to navigate instead of two |
 | **Every changed file lands in a group** | leftovers collected under "Not grouped" | The order is the reviewer's map of the change. A file the model forgot to mention would otherwise be a file the reviewer never learns to read |
+| **Long lines** | **scroll sideways, never wrap** | Added 2026-07-30. Every row renders to exactly one terminal line, and the cursor, the window and the file pane beside it all count in rows — wrapping would make one document row several screen rows and put that arithmetic wrong everywhere. A horizontal offset leaves it untouched: the same rows are on screen, further along. `h`/`l` slide the code, `0`/`$` reach the ends |
+| **The gutter does not scroll** | line numbers and the `+`/`-` origin stay pinned; only the code slides | What a row scrolled out to column 90 still has to say is which line it is and whether it was added. A row that has lost both is unreadable long before its tail is worth reaching |
 | **Follow mode** | on by default; `f` toggles, `--no-watch` opts out | The common case is reviewing while an agent or editor is still changing the working tree |
 | **Review base** | `--rev <ref>` moves the base, never the far side | Added 2026-07-30. "Everything since HEAD~2" is one diff of the last two commits plus the uncommitted work on top, not a commit range: the side being reviewed is the working tree in every mode peel has. The base is resolved to a hash once, so a commit landing mid-session cannot move it |
 | **`--rev` is read-only** | `Stageable: false` for any base behind HEAD | HEAD is the only base staging means anything against. A file whose change is part committed cannot be `git add`ed into the shape on screen, so `s` would either lie or do nothing. `--rev HEAD` resolves to the working-tree session rather than a read-only copy of it |
@@ -114,7 +119,7 @@ peel/
   main.go              CLI entry — TUI by default, subcommands for the agent
   internal/git/        diff parse, hunk model, status, staging   ← UI-agnostic
   internal/tui/        bubbletea models and views
-  internal/store/      comments.json + walkthrough cache
+  internal/store/      comments.json, folds.json + walkthrough cache
   internal/gh/         PR fetch and review submit, via `gh`
   internal/ai/         walkthrough via `claude -p`
   skills/peel-review/SKILL.md
@@ -153,13 +158,17 @@ nothing to report — which is consistent, since that session cannot stage anywa
 ### Core operation
 
 ```
-1. git add -- <path>              (stage)
+1. move the file's side in the in-memory model, draw it   (the guess)
+2. git add -- <path>              (stage)
    git restore --staged -- <path> (unstage)
-2. re-run git diff / git diff --cached, rebuild state from scratch
+3. re-run git diff / git diff --cached, rebuild state from scratch   (the truth)
 ```
 
-Step 2 is not optional. Never mutate the in-memory model to reflect what you
-think the write did — re-read from git.
+Step 3 is not optional, and step 1 never survives it. The model is moved ahead of
+the write because a whole-file stage is predictable — that is the only reason it
+can be drawn before git has been asked — but the guess is never allowed to stand:
+what the reviewer ends up looking at came from git, and a write that fails puts
+back the screen it was drawn over. See the optimistic-updates decision in §3.
 
 No patch is generated, so none of the `git apply` hazards apply: no `@@`
 recomputation, no `--unidiff-zero` question, no intent-to-add escalation to make
@@ -275,10 +284,12 @@ and every line of a diff body, changed or not. There is no mode to enter first �
 there, including on the untouched code a change breaks. Only the blank between
 files and the continuation lines of a multi-line comment are skipped.
 
-The file list on the left is a map, not a pane you move into — but it is always
-on screen and scrolls on its own window, so a long file list can be read past
-without moving the diff. Its mark follows the diff window rather than the cursor:
-it names the file the window opens on, which is the file being read.
+The file list on the left is a map, not a pane you move into — but it is on
+screen by default and scrolls on its own window, so a long file list can be read
+past without moving the diff. Its mark follows the diff window rather than the
+cursor: it names the file the window opens on, which is the file being read. `b`
+hands its width to the diff and takes it back, for a change whose lines are
+longer than the pane leaves room for.
 
 `↓`/`↑` step the cursor a line at a time and the window follows; `j`/`k` jump it
 between whole things — the next hunk, file or comment. The wheel scrolls the
@@ -286,19 +297,34 @@ window and drags the cursor with it, so the cursor never addresses a row that ha
 left the screen. Mouse reporting is on, so the wheel arrives as a wheel event
 rather than as whatever arrow keys the terminal would emulate.
 
+A line wider than the pane is scrolled to rather than wrapped. `h`/`l` slide the
+code sideways by one indent a press, `0` and `$` reach the first column and the
+end of the longest line in the diff, and the header names the column while the
+window is away from the first one — a screen of short lines scrolled past their
+ends otherwise reads as a diff that has lost its code. The line numbers and the
+`+`/`-` do not move: they are what a row still has to say when its text has gone.
+The offset belongs to the window rather than the cursor, so it survives moving
+between files and, unlike the wheel, sliding it drags nothing — the same rows are
+on screen either way. A horizontal wheel does the same thing in the terminals
+that report one; `h`/`l` are the path that always works.
+
 | Key | Action |
 |---|---|
 | `↓` / `↑` | move the cursor one line, diff body included |
 | `j` / `k` | next / previous hunk, file or comment |
 | wheel | scroll the diff, dragging the cursor along |
-| `J` / `K` | next / previous file — from inside a file, to its header first; the window opens on the file |
-| `]` / `[`, wheel over the pane | scroll the file list |
+| `]` / `[` | next / previous file — from inside a file, to its header first; the window opens on the file |
+| `}` / `{`, wheel over the pane | scroll the file list |
+| `h` / `l`, horizontal wheel | scroll the code sideways, one indent per press |
+| `0` / `$` | back to the first column / out to the longest line's end |
+| `b` | hide or show the file list, giving the diff the whole width |
 | `g` / `G` | first / last row |
 | `ctrl+d` / `ctrl+u` | half a page down / up |
-| `tab` | collapse or expand the file |
+| `space` | fold the file away and move on to the next, or expand it again |
 | `s` | stage the file the cursor is in, folding it away and moving to the next |
 | `u` | unstage that file, opening it again |
 | `a` / `U` | stage everything, folding it all away / unstage everything, opening it all |
+| `o` | open the file the cursor is in, outside peel |
 | `c` | comment at the cursor |
 | `enter` / `alt+enter` | in the editor: save the comment / write another line |
 | `x` | resolve or reopen the comment at the cursor |
@@ -313,9 +339,9 @@ rather than as whatever arrow keys the terminal would emulate.
 The walkthrough is not a screen of its own. It is the same diff, with the files
 in the order the narrative reads them and each step's explanation sitting above
 the files it covers — so the thing the reviewer scrolls through is the code, with
-the notes in place. `j`/`k` stop on a note the way they stop on a hunk, `J`/`K`
+the notes in place. `j`/`k` stop on a note the way they stop on a hunk, `]`/`[`
 land on the note that introduces the next file rather than skipping past it,
-`tab` folds a note away once it has been read, and `w` again puts the diff back
+`space` folds a note away once it has been read, and `w` again puts the diff back
 in git's order. Staging keeps the notes; when the code itself moves on under them
 the header says `stale` and `W` writes new ones.
 
@@ -323,11 +349,23 @@ Staging folds and moves on. `s` stages the file the cursor is in, collapses it a
 opens the next file still to review at the top of the window — so what is left
 open is what is left to review, the diff shrinks as the pass goes on, and one key
 both ends a file and starts the next. Already-staged files are skipped on the way,
-since they are folded away and there is nothing to decide about them. The last
-file has nowhere to advance to and keeps the cursor. The fold is display only:
-`tab` reads a staged file back, and `u` opens it again on its way out of the
+since they are folded away and there is nothing to decide about them. A file that
+is folded but not staged stops the move rather than being skipped or landed on: it
+has been read, and the file just dealt with is a better place to be than a header
+with nothing under it. The last file has nowhere to advance to and keeps the
+cursor. The fold is display only:
+`space` reads a staged file back, and `u` opens it again on its way out of the
 index. A stage that fails leaves the file open and the cursor on it, because it
 still has to be dealt with.
+
+All of that happens on the keypress, before git has been asked anything. Staging
+a file, unstaging one, writing a note or resolving one is never in doubt — only
+slow — so the screen is moved to what the change is about to make true, the write
+goes on behind it, and the re-read that follows only confirms what is already
+there. Nothing shows a banner for it, because there is nothing to wait for. What
+fails comes back: the file opens again, the note leaves the diff, and the footer
+says why. `q` pressed straight after a change waits for that change to be
+written rather than taking the process down with it in flight.
 
 A hunk header and a diff line are still cursor stops and still addressable — they
 are what `j`/`k` step between and what a comment anchors to. They are just not

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ziadalzarka/peel/internal/app"
 	"github.com/ziadalzarka/peel/internal/git"
 	"github.com/ziadalzarka/peel/internal/store"
@@ -635,5 +636,19 @@ func hunkLines() []git.Line {
 		{Kind: git.LineRemoved, Text: "b", OldLine: 2},
 		{Kind: git.LineAdded, Text: "B", NewLine: 2},
 		{Kind: git.LineContext, Text: "c", OldLine: 3, NewLine: 3},
+	}
+}
+
+func TestDocumentMeasuresTheWidestLineWithTabsExpanded(t *testing.T) {
+	doc := Build(newSession(t, longLineDiff), nil, nil, LayoutUnified)
+	if want := ansi.StringWidth(wideLine); doc.CodeWidth != want {
+		t.Errorf("CodeWidth = %d, want %d", doc.CodeWidth, want)
+	}
+
+	// A tab is one byte and eight columns, and it is columns the offset it
+	// bounds is counted in.
+	tabbed := Build(newSession(t, tabDiff), nil, nil, LayoutUnified)
+	if want := ansi.StringWidth(expandTabs("\t\t\tdeeper(i)")); tabbed.CodeWidth != want {
+		t.Errorf("CodeWidth over tab-indented code = %d, want %d", tabbed.CodeWidth, want)
 	}
 }

@@ -31,8 +31,8 @@ func keyMsg(name string) tea.KeyMsg {
 	switch name {
 	case "esc":
 		return tea.KeyMsg{Type: tea.KeyEsc}
-	case "tab":
-		return tea.KeyMsg{Type: tea.KeyTab}
+	case "space":
+		return tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
 	case "enter":
 		return tea.KeyMsg{Type: tea.KeyEnter}
 	case "alt+enter":
@@ -47,6 +47,10 @@ func keyMsg(name string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyUp}
 	case "down":
 		return tea.KeyMsg{Type: tea.KeyDown}
+	case "left":
+		return tea.KeyMsg{Type: tea.KeyLeft}
+	case "right":
+		return tea.KeyMsg{Type: tea.KeyRight}
 	default:
 		return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(name)}
 	}
@@ -127,13 +131,13 @@ func TestNavigationKeysMoveTheCursor(t *testing.T) {
 		t.Fatalf("after k the cursor is on a %v, want a file", got)
 	}
 
-	press(t, m, "J")
+	press(t, m, "]")
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
-		t.Fatalf("after J the cursor is on %q, want beta.txt", got)
+		t.Fatalf("after ] the cursor is on %q, want beta.txt", got)
 	}
-	press(t, m, "K")
+	press(t, m, "[")
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "alpha.go" {
-		t.Fatalf("after K the cursor is on %q, want alpha.go", got)
+		t.Fatalf("after [ the cursor is on %q, want alpha.go", got)
 	}
 
 	press(t, m, "G")
@@ -223,17 +227,54 @@ func TestFilePaneScrollsWithoutMovingTheDiff(t *testing.T) {
 	}
 
 	top := m.top
-	press(t, m, "]", "]")
+	press(t, m, "}", "}")
 	if m.fileTop != 2 {
-		t.Errorf("] left the file pane at %d, want 2", m.fileTop)
+		t.Errorf("} left the file pane at %d, want 2", m.fileTop)
 	}
 	if m.top != top {
-		t.Errorf("] moved the diff window to %d, want it left at %d", m.top, top)
+		t.Errorf("} moved the diff window to %d, want it left at %d", m.top, top)
 	}
 
-	press(t, m, "[")
+	press(t, m, "{")
 	if m.fileTop != 1 {
-		t.Errorf("[ left the file pane at %d, want 1", m.fileTop)
+		t.Errorf("{ left the file pane at %d, want 1", m.fileTop)
+	}
+}
+
+// b hands the file list's width to the diff and takes it back, without moving
+// the reviewer off the row they were reading.
+func TestBHidesAndShowsTheFilePane(t *testing.T) {
+	m := newModel(t, newFakeBackend(manyFileSession(t, 20)), WithSize(100, 12))
+	if m.filePaneWidth() == 0 {
+		t.Fatal("the file pane is not showing")
+	}
+
+	press(t, m, "j", "j")
+	at := m.doc.Rows[m.cursor]
+
+	press(t, m, "b")
+	if m.filePaneWidth() != 0 {
+		t.Errorf("b left the file pane %d wide, want it hidden", m.filePaneWidth())
+	}
+	if m.diffWidth() != m.width {
+		t.Errorf("with the pane hidden the diff is %d wide, want the full %d", m.diffWidth(), m.width)
+	}
+	if got := m.doc.Rows[m.cursor]; got != at {
+		t.Errorf("b left the cursor on %+v, want it on %+v", got, at)
+	}
+	body := strings.Split(m.View(), "\n")[headerHeight : headerHeight+m.bodyHeight()]
+	for i, line := range body {
+		if w := ansi.StringWidth(line); w != m.width {
+			t.Fatalf("with the pane hidden body line %d is %d cells, want %d: %q", i, w, m.width, line)
+		}
+	}
+
+	press(t, m, "b")
+	if m.filePaneWidth() == 0 {
+		t.Error("b again did not bring the file pane back")
+	}
+	if got := m.doc.Rows[m.cursor]; got != at {
+		t.Errorf("showing the pane again left the cursor on %+v, want it on %+v", got, at)
 	}
 }
 
@@ -292,18 +333,18 @@ func TestThePaneMarksTheFileTheWindowOpensOn(t *testing.T) {
 func TestFileJumpsOpenTheWindowOnTheFile(t *testing.T) {
 	m := newModel(t, newFakeBackend(manyFileSession(t, 20)), WithSize(100, 12))
 
-	press(t, m, "J", "J")
+	press(t, m, "]", "]")
 	if m.cursor != m.doc.RowOfFile(2) || m.top != m.cursor {
-		t.Errorf("after two J the window starts at row %d and the cursor is at %d, want both at file 2's header (%d)",
+		t.Errorf("after two ] the window starts at row %d and the cursor is at %d, want both at file 2's header (%d)",
 			m.top, m.cursor, m.doc.RowOfFile(2))
 	}
 	if got := m.markedFile(); got != 2 {
-		t.Errorf("after two J the pane marks file %d, want 2", got)
+		t.Errorf("after two ] the pane marks file %d, want 2", got)
 	}
 
-	press(t, m, "K")
+	press(t, m, "[")
 	if got := m.markedFile(); got != 1 {
-		t.Errorf("after K the pane marks file %d, want 1", got)
+		t.Errorf("after [ the pane marks file %d, want 1", got)
 	}
 }
 
@@ -350,9 +391,9 @@ func TestStageOnADiffLineStagesTheWholeFile(t *testing.T) {
 	}
 }
 
-// A staged file folds away, since it has been dealt with — and `tab` opens it
+// A staged file folds away, since it has been dealt with — and `space` opens it
 // again, because a staged file is still worth reading.
-func TestStagingAFileFoldsItAndTabOpensItAgain(t *testing.T) {
+func TestStagingAFileFoldsItAndSpaceOpensItAgain(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	staged := parseFiles(t, twoFileDiff)
 	staged[0].Staged, staged[0].Unstaged = staged[0].Unstaged, nil
@@ -368,9 +409,9 @@ func TestStagingAFileFoldsItAndTabOpensItAgain(t *testing.T) {
 		t.Error("staging alpha.go folded beta.txt too")
 	}
 
-	press(t, m, "K", "tab")
+	press(t, m, "[", "space")
 	if m.doc.Files[0].Collapsed {
-		t.Error("tab did not open the staged file again")
+		t.Error("space did not open the staged file again")
 	}
 }
 
@@ -401,7 +442,7 @@ func TestUnstagingAFileOpensIt(t *testing.T) {
 	backend := newFakeBackend(sessionOf(entries[:1]))
 	m := newModel(t, backend)
 
-	press(t, m, "tab")
+	press(t, m, "space")
 	if !m.doc.Files[0].Collapsed {
 		t.Fatal("tab did not fold the file")
 	}
@@ -545,6 +586,26 @@ func TestStagingSkipsFilesThatAreAlreadyStaged(t *testing.T) {
 	}
 }
 
+// A folded file has been read already, so it is not somewhere to move to
+// either: staging stops on the file it just dealt with rather than jumping to a
+// header with nothing under it, and rather than reaching past it for a file
+// further down.
+func TestStagingStaysPutWhenTheNextFileIsFolded(t *testing.T) {
+	backend := newFakeBackend(newSession(t, threeFileDiff))
+	backend.folded = []string{"beta.txt"}
+
+	staged := parseFiles(t, threeFileDiff)
+	staged[0].Staged, staged[0].Unstaged = staged[0].Unstaged, nil
+	backend.nextSession = sessionOf(staged)
+
+	m := newModel(t, backend)
+	press(t, m, "s")
+
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "alpha.go" {
+		t.Errorf("cursor is on %q, want it to stay on alpha.go — beta.txt below it is folded away", got)
+	}
+}
+
 // Staging the last file has nowhere to advance to, and the file just folded is a
 // better place to stay than the top of a diff already reviewed.
 func TestStagingTheLastFileStaysOnIt(t *testing.T) {
@@ -555,10 +616,44 @@ func TestStagingTheLastFileStaysOnIt(t *testing.T) {
 	backend.nextSession = sessionOf(staged)
 
 	m := newModel(t, backend)
-	press(t, m, "J", "s")
+	press(t, m, "]", "s")
 
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
 		t.Errorf("cursor is on %q, want it to stay on beta.txt", got)
+	}
+}
+
+// `o` hands the file the cursor is in to the desktop, from anywhere inside it,
+// and leaves the review where it was.
+func TestOpenSendsTheFileToTheDesktop(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	m := newModel(t, backend)
+
+	press(t, m, "j", "o")
+
+	if want := []string{"alpha.go"}; len(backend.opened) != 1 || backend.opened[0] != want[0] {
+		t.Fatalf("opened %v, want %v", backend.opened, want)
+	}
+	if m.doc.Rows[m.cursor].Kind != RowHunk {
+		t.Errorf("opening the file moved the cursor off the hunk it was on")
+	}
+	if m.busy != "" || !strings.Contains(m.status, "alpha.go") {
+		t.Errorf("busy = %q, status = %q, want the open reported and done", m.busy, m.status)
+	}
+}
+
+func TestOpenReportsAFailureToOpen(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.opErr = errors.New("no application knows what to do with it")
+	m := newModel(t, backend)
+
+	press(t, m, "o")
+
+	if m.err == nil {
+		t.Fatal("a failed open reported no error")
+	}
+	if m.busy != "" {
+		t.Errorf("busy = %q, want it cleared", m.busy)
 	}
 }
 
@@ -606,19 +701,134 @@ func TestChangedCodeMarksTheWalkthroughStale(t *testing.T) {
 	}
 }
 
-func TestTabCollapsesAndExpandsAFile(t *testing.T) {
+// Folding a file means the same thing staging one does — done with it — so the
+// cursor moves on. Opening one again leaves the cursor on it.
+func TestSpaceFoldsAFileAndMovesOn(t *testing.T) {
 	m := newModel(t, newFakeBackend(newSession(t, twoFileDiff)))
 
-	press(t, m, "tab")
+	press(t, m, "space")
 	if !m.doc.Files[0].Collapsed {
-		t.Fatal("tab did not collapse alpha.go")
+		t.Fatal("space did not collapse alpha.go")
 	}
-	if m.doc.Rows[m.cursor].Kind != RowFile {
-		t.Errorf("cursor left the file header after collapsing")
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
+		t.Errorf("folding alpha.go left the cursor on %q, want it moved on to beta.txt", got)
 	}
-	press(t, m, "tab")
+
+	press(t, m, "[", "space")
 	if m.doc.Files[0].Collapsed {
-		t.Error("tab did not expand alpha.go again")
+		t.Error("space did not expand alpha.go again")
+	}
+	if m.doc.Rows[m.cursor].Kind != RowFile || m.doc.FileAt(m.cursor) != 0 {
+		t.Error("opening alpha.go again moved the cursor off it")
+	}
+}
+
+// A pass rarely finishes in one sitting, so what has been folded away outlives
+// the process: the review opens again with the same files out of the way.
+func TestFoldsAreRememberedAcrossSessions(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	m := newModel(t, backend)
+
+	press(t, m, "space")
+	if got := backend.folded; len(got) != 1 || got[0] != "alpha.go" {
+		t.Fatalf("saved folds %v, want alpha.go alone", got)
+	}
+
+	again := newModel(t, backend)
+	if !again.doc.Files[0].Collapsed {
+		t.Error("alpha.go opened unfolded, want the fold it was left with")
+	}
+	if again.doc.Files[1].Collapsed {
+		t.Error("beta.txt opened folded, and it was never folded")
+	}
+
+	press(t, again, "space")
+	if len(backend.folded) != 0 {
+		t.Errorf("saved folds %v after opening the file again, want none", backend.folded)
+	}
+}
+
+// Follow mode reloads on a timer, and a reload that folds nothing must not
+// rewrite the folds every few seconds.
+func TestReloadWithoutAFoldChangeWritesNothing(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	m := newModel(t, backend)
+
+	press(t, m, "space")
+	saves := backend.foldSaves
+
+	press(t, m, "r", "r")
+
+	if backend.foldSaves != saves {
+		t.Errorf("reloading wrote the folds %d more times, want none", backend.foldSaves-saves)
+	}
+}
+
+// Staging folds a file, and that fold is a record of the pass like any other.
+func TestStagingSavesTheFoldItMakes(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	staged := parseFiles(t, twoFileDiff)
+	staged[0].Staged, staged[0].Unstaged = staged[0].Unstaged, nil
+	backend.nextSession = sessionOf(staged)
+	m := newModel(t, backend)
+
+	press(t, m, "s")
+
+	if got := backend.folded; len(got) != 1 || got[0] != "alpha.go" {
+		t.Errorf("saved folds %v, want alpha.go", got)
+	}
+}
+
+// A file whose change has been committed away is done with. Remembering its fold
+// would hide the next change to it, which is a new thing to read.
+func TestFoldsOfFilesNoLongerInTheDiffAreDropped(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.folded = []string{"alpha.go", "gone.go"}
+	m := newModel(t, backend)
+
+	if _, ok := m.collapsed["gone.go"]; ok {
+		t.Error("a file that is not in the diff was restored as folded")
+	}
+	if !m.doc.Files[0].Collapsed {
+		t.Fatal("alpha.go opened unfolded, want the fold it was left with")
+	}
+
+	press(t, m, "]", "space")
+
+	want := []string{"alpha.go", "beta.txt"}
+	if got := backend.folded; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("saved folds %v, want %v — gone.go should have been dropped", got, want)
+	}
+}
+
+// The last file has nothing to move on to, so folding it stays on it.
+func TestFoldingTheLastFileStaysOnIt(t *testing.T) {
+	m := newModel(t, newFakeBackend(newSession(t, twoFileDiff)))
+
+	press(t, m, "]", "space")
+
+	if !m.doc.Files[1].Collapsed {
+		t.Fatal("space did not collapse beta.txt")
+	}
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
+		t.Errorf("cursor is on %q, want it to stay on beta.txt", got)
+	}
+}
+
+// Folding stops where staging does, for the same reason: the file below has
+// been read already, so there is nothing there to carry the pass on with.
+func TestFoldingStaysPutWhenTheNextFileIsFolded(t *testing.T) {
+	backend := newFakeBackend(newSession(t, threeFileDiff))
+	backend.folded = []string{"beta.txt"}
+	m := newModel(t, backend)
+
+	press(t, m, "space")
+
+	if !m.doc.Files[0].Collapsed {
+		t.Fatal("space did not collapse alpha.go")
+	}
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "alpha.go" {
+		t.Errorf("cursor is on %q, want it to stay on alpha.go — beta.txt below it is folded away", got)
 	}
 }
 
@@ -1104,21 +1314,29 @@ func TestNoRowLeavesATabForTheTerminalToExpand(t *testing.T) {
 		if layout != "" {
 			press(t, m, layout)
 		}
-		// Every scroll position, since only some rows carry a tab.
+		// Every scroll position, since only some rows carry a tab — and every
+		// column, since a row scrolled sideways is cut after highlighting and
+		// carries the escapes opened left of the cut along with it.
 		for top := 0; top < m.doc.Len(); top++ {
 			m.top = top
 			m.clampTop()
-			for i, line := range strings.Split(m.View(), "\n") {
-				if strings.Contains(line, "\t") {
-					t.Fatalf("%q layout, top %d: line %d reaches the terminal with a tab: %q",
-						m.layout, top, i, line)
-				}
-				if w := ansi.StringWidth(line); w > m.width {
-					t.Fatalf("%q layout, top %d: line %d is %d cells, want at most %d: %q",
-						m.layout, top, i, w, m.width, line)
+			for xoff := 0; xoff <= m.maxCodeOffset()+codeStep; xoff += codeStep {
+				m.xoff = xoff
+				m.clampCode()
+				for i, line := range strings.Split(m.View(), "\n") {
+					if strings.Contains(line, "\t") {
+						t.Fatalf("%q layout, top %d, col %d: line %d reaches the terminal with a tab: %q",
+							m.layout, top, m.xoff, i, line)
+					}
+					if w := ansi.StringWidth(line); w > m.width {
+						t.Fatalf("%q layout, top %d, col %d: line %d is %d cells, want at most %d: %q",
+							m.layout, top, m.xoff, i, w, m.width, line)
+					}
 				}
 			}
 		}
+		m.xoff = 0
+		m.clampCode()
 	}
 }
 
@@ -1130,7 +1348,7 @@ func TestViewOnACleanTreeSaysSo(t *testing.T) {
 		t.Errorf("view = %q, want it to say there is nothing to review", m.View())
 	}
 	// Every key must be safe on an empty document.
-	press(t, m, "j", "k", "down", "up", "J", "K", "g", "G", "s", "u", "c", "x", "D", "tab", `\`)
+	press(t, m, "j", "k", "down", "up", "]", "[", "}", "{", "g", "G", "s", "u", "o", "c", "x", "D", "space", `\`)
 	if m.err != nil {
 		t.Errorf("err = %v, want none", m.err)
 	}
@@ -1279,7 +1497,7 @@ func paths(m *Model) []string {
 func TestWalkthroughJumpingToAFileLandsOnItsNote(t *testing.T) {
 	m := newModel(t, newFakeBackend(newSession(t, twoFileDiff)))
 
-	press(t, m, "w", "J")
+	press(t, m, "w", "]")
 
 	if row := m.doc.Rows[m.cursor]; row.Kind != RowStep || m.doc.StepAt(m.cursor) != 1 {
 		t.Fatalf("J landed on %+v, want the note introducing beta.txt", row)
@@ -1333,7 +1551,7 @@ func TestTabFoldsAWalkthroughNote(t *testing.T) {
 	before := m.doc.Len()
 	m.moveTo(m.doc.Steps[0].Row)
 
-	press(t, m, "tab")
+	press(t, m, "space")
 
 	if !m.walkFolded[0] {
 		t.Fatal("tab did not fold the first note")
@@ -1353,7 +1571,7 @@ func TestTabFoldsAWalkthroughNote(t *testing.T) {
 		t.Errorf("folding a note changed the diff to %v", got)
 	}
 
-	press(t, m, "tab")
+	press(t, m, "space")
 	if m.doc.Len() != before {
 		t.Errorf("unfolding left %d rows, want %d back", m.doc.Len(), before)
 	}
@@ -1374,3 +1592,130 @@ func TestAWalkthroughNoteIsNotStageable(t *testing.T) {
 		t.Error("s on a walkthrough note said nothing")
 	}
 }
+
+// wideModel opens the long-line diff in a pane far too narrow to hold it.
+func wideModel(t *testing.T) *Model {
+	t.Helper()
+	return newModel(t, newFakeBackend(newSession(t, longLineDiff)), WithSize(60, 20))
+}
+
+func TestScrollingCodeSidewaysStopsAtTheLongestLine(t *testing.T) {
+	m := wideModel(t)
+
+	press(t, m, "l")
+	if m.xoff != codeStep {
+		t.Errorf("one press of l left the code at column %d, want %d", m.xoff, codeStep)
+	}
+
+	press(t, m, "$")
+	want := m.maxCodeOffset()
+	if want <= 0 {
+		t.Fatalf("the long line fits the pane, so there is nothing to scroll")
+	}
+	if m.xoff != want {
+		t.Errorf("$ left the code at column %d, want %d", m.xoff, want)
+	}
+
+	// Past the end there is nothing to read, so the pane stays where the longest
+	// line ends rather than scrolling out into blank columns.
+	press(t, m, "l", "l", "l", "right")
+	if m.xoff != want {
+		t.Errorf("scrolling past the longest line reached column %d, want it held at %d", m.xoff, want)
+	}
+}
+
+func TestScrollingCodeBackStopsAtTheFirstColumn(t *testing.T) {
+	m := wideModel(t)
+
+	press(t, m, "$", "0")
+	if m.xoff != 0 {
+		t.Errorf("0 left the code at column %d, want 0", m.xoff)
+	}
+
+	press(t, m, "h", "left")
+	if m.xoff != 0 {
+		t.Errorf("scrolling left of the first column reached %d, want 0", m.xoff)
+	}
+}
+
+// TestScrollingCodeLeavesTheCursorAlone separates the two windows: sliding the
+// code sideways shows the same rows, so unlike the wheel it has no reason to
+// drag the cursor anywhere.
+func TestScrollingCodeLeavesTheCursorAlone(t *testing.T) {
+	m := wideModel(t)
+	press(t, m, "j")
+	before := m.cursor
+
+	press(t, m, "l", "l", "$")
+	if m.cursor != before {
+		t.Errorf("cursor moved to row %d while scrolling sideways, want it left on %d", m.cursor, before)
+	}
+}
+
+func TestHorizontalWheelScrollsTheCode(t *testing.T) {
+	m := wideModel(t)
+
+	send(t, m, tea.MouseMsg{Button: tea.MouseButtonWheelRight, X: 50})
+	if m.xoff != wheelColumns {
+		t.Errorf("a wheel notch right left the code at column %d, want %d", m.xoff, wheelColumns)
+	}
+
+	// A horizontal notch over the file pane still reaches the diff: the pane
+	// shortens paths from the left already and has nothing to slide.
+	top := m.fileTop
+	send(t, m, tea.MouseMsg{Button: tea.MouseButtonWheelRight, X: 0})
+	if m.xoff != 2*wheelColumns {
+		t.Errorf("a notch over the file pane left the code at column %d, want %d", m.xoff, 2*wheelColumns)
+	}
+	if m.fileTop != top {
+		t.Errorf("a horizontal notch scrolled the file list to %d, want it left at %d", m.fileTop, top)
+	}
+
+	send(t, m, tea.MouseMsg{Button: tea.MouseButtonWheelLeft, X: 50})
+	if m.xoff != wheelColumns {
+		t.Errorf("a wheel notch left the code at column %d, want %d", m.xoff, wheelColumns)
+	}
+}
+
+// TestAWiderTerminalPullsTheCodeBack keeps the offset meaningful across a
+// resize: a wider pane shows more of the longest line, so an offset that sat at
+// its end has to come back with it.
+func TestAWiderTerminalPullsTheCodeBack(t *testing.T) {
+	m := wideModel(t)
+	press(t, m, "$")
+	narrow := m.xoff
+
+	send(t, m, tea.WindowSizeMsg{Width: 200, Height: 20})
+	if m.xoff >= narrow {
+		t.Errorf("widening the terminal left the code at column %d, want less than %d", m.xoff, narrow)
+	}
+	if want := m.maxCodeOffset(); m.xoff != want {
+		t.Errorf("after widening the code sits at column %d, want %d", m.xoff, want)
+	}
+}
+
+// TestTheSplitLayoutScrollsFurther is the same line in half the room, so there
+// is more of it off screen to reach.
+func TestTheSplitLayoutScrollsFurther(t *testing.T) {
+	m := wideModel(t)
+	unified := m.maxCodeOffset()
+
+	press(t, m, `\`)
+	if split := m.maxCodeOffset(); split <= unified {
+		t.Errorf("split scrolls to column %d and unified to %d, want split to reach further", split, unified)
+	}
+}
+
+func TestTheHeaderNamesTheColumnTheCodeStartsAt(t *testing.T) {
+	m := wideModel(t)
+	if strings.Contains(m.View(), "col ") {
+		t.Errorf("the header names a column before anything has been scrolled: %q", header(m))
+	}
+
+	press(t, m, "l")
+	if want := fmt.Sprintf("col %d", codeStep+1); !strings.Contains(header(m), want) {
+		t.Errorf("header = %q, want it to say %q", header(m), want)
+	}
+}
+
+func header(m *Model) string { return strings.SplitN(m.View(), "\n", 2)[0] }

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/ziadalzarka/peel/internal/app"
 	"github.com/ziadalzarka/peel/internal/store"
@@ -25,6 +24,14 @@ type Backend interface {
 	UnstageFile(ctx context.Context, path string) error
 	StageAll(ctx context.Context) error
 	UnstageAll(ctx context.Context) error
+
+	// OpenFile hands a file to the desktop, for reading it outside the diff.
+	OpenFile(ctx context.Context, path string) error
+
+	// Folded returns the files folded away when this review was last read.
+	Folded() ([]string, error)
+	// SetFolded records the files folded away now.
+	SetFolded(paths []string) error
 
 	// Walkthrough returns the AI narrative of the session.
 	Walkthrough(ctx context.Context, regenerate bool) (string, error)
@@ -111,6 +118,18 @@ func (b *appBackend) UnstageAll(ctx context.Context) error {
 	return b.app.Stager.UnstageAll(ctx)
 }
 
+func (b *appBackend) OpenFile(ctx context.Context, path string) error {
+	return b.app.OpenFile(ctx, path)
+}
+
+func (b *appBackend) Folded() ([]string, error) {
+	return b.app.Folds.Load(b.session.Target)
+}
+
+func (b *appBackend) SetFolded(paths []string) error {
+	return b.app.Folds.Save(b.session.Target, paths)
+}
+
 func (b *appBackend) Walkthrough(ctx context.Context, regenerate bool) (string, error) {
 	got, err := b.app.Walkthrough(ctx, b.session, app.WalkthroughRequest{
 		Provider:   b.provider,
@@ -122,9 +141,4 @@ func (b *appBackend) Walkthrough(ctx context.Context, regenerate bool) (string, 
 	return got.Body, nil
 }
 
-func (b *appBackend) stageable() error {
-	if b.session.Stageable {
-		return nil
-	}
-	return fmt.Errorf("%s is not in this working tree — nothing to stage", b.session.Title)
-}
+func (b *appBackend) stageable() error { return b.session.NotStageable() }
