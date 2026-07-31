@@ -49,18 +49,58 @@ type App struct {
 	lookPath func(string) bool
 }
 
-// OpenCommand hands a file to whatever the desktop opens it with.
+// OpenCommand hands a file to whatever the desktop opens it with, and is what
+// `o` runs when git config names nothing better.
 const OpenCommand = "open"
 
-// OpenFile opens a file of the working tree the way double clicking it would.
-// The path is the one the diff carries, relative to the root.
+// ConfigSection is the git config section peel reads its settings from, and
+// OpenKey is the setting inside it that names the command `o` runs:
+// `peel.open` for every file, `peel.open.<extension>` for one kind of file.
+const (
+	ConfigSection = "peel"
+	OpenKey       = ConfigSection + ".open"
+)
+
+// OpenFile opens a file of the working tree the way double clicking it would,
+// unless git config names a command for that kind of file. The path is the one
+// the diff carries, relative to the root.
 func (a *App) OpenFile(ctx context.Context, path string) error {
-	_, err := a.Runner.Run(ctx, exec.Command{
-		Name: OpenCommand,
-		Args: []string{filepath.Join(a.Root, path)},
+	argv, err := a.openCommand(ctx, path)
+	if err != nil {
+		return err
+	}
+	_, err = a.Runner.Run(ctx, exec.Command{
+		Name: argv[0],
+		Args: append(argv[1:], filepath.Join(a.Root, path)),
 		Dir:  a.Root,
 	})
 	return err
+}
+
+// openCommand is the command line that opens path, most specific setting first:
+// `peel.open.<extension>` for that kind of file, then `peel.open` for the rest,
+// then the desktop's own opener. A setting is split on spaces rather than run
+// through a shell, so `open -a Marked` works and `cmd && other` does not.
+//
+// Config is read on every open rather than at startup, so changing it takes
+// effect in the session already running.
+func (a *App) openCommand(ctx context.Context, path string) ([]string, error) {
+	cfg, err := a.Repo.ConfigSection(ctx, ConfigSection)
+	if err != nil {
+		return nil, err
+	}
+
+	// Lower-cased because that is the case git stores the key's last component
+	// in, whatever the extension on disk looks like.
+	if ext := strings.TrimPrefix(filepath.Ext(path), "."); ext != "" {
+		if argv := strings.Fields(cfg[OpenKey+"."+strings.ToLower(ext)]); len(argv) > 0 {
+			return argv, nil
+		}
+	}
+	if argv := strings.Fields(cfg[OpenKey]); len(argv) > 0 {
+		return argv, nil
+	}
+	return []string{OpenCommand}, nil
 }
 
 // ClipboardCommands are the ways peel knows to reach the system clipboard, most

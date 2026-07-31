@@ -469,6 +469,44 @@ func TestRootFailsOutsideRepository(t *testing.T) {
 	}
 }
 
+// ConfigSection is how peel's own settings are read, so it has to hand back the
+// section-wide key and the per-extension ones under it, values with spaces
+// included.
+func TestConfigSectionReadsEverySettingUnderIt(t *testing.T) {
+	h := newHarness(t)
+	h.fixture.Git("config", "peel.open", "zed")
+	h.fixture.Git("config", "peel.open.md", "open -a Marked")
+	h.fixture.Git("config", "user.name", "not peel")
+
+	got, err := h.repo.ConfigSection(h.ctx, "peel")
+	if err != nil {
+		t.Fatalf("ConfigSection: %v", err)
+	}
+
+	want := map[string]string{"peel.open": "zed", "peel.open.md": "open -a Marked"}
+	if len(got) != len(want) {
+		t.Fatalf("ConfigSection = %v, want %v", got, want)
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Errorf("%s = %q, want %q", key, got[key], value)
+		}
+	}
+}
+
+// A section nobody has set is the normal case, not a failure.
+func TestConfigSectionIsEmptyWhenNothingIsSet(t *testing.T) {
+	h := newHarness(t)
+
+	got, err := h.repo.ConfigSection(h.ctx, "peel")
+	if err != nil {
+		t.Fatalf("ConfigSection: %v", err)
+	}
+	if len(got) != 0 {
+		t.Errorf("ConfigSection = %v, want it empty", got)
+	}
+}
+
 func pathsOf(s git.Status) []string {
 	out := make([]string, 0, len(s.Files))
 	for _, f := range s.Files {

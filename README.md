@@ -96,7 +96,7 @@ repository changes.
 | `s` | stage the file the cursor is in, folding it away and moving to the next |
 | `u` | unstage that file, opening it again |
 | `a` / `U` | stage everything / unstage everything |
-| `o` | open the file the cursor is in, outside peel |
+| `o` | open the file the cursor is in, outside peel — in the editor you configure |
 | `c` | comment at the cursor, changed line or not |
 | `enter` / `alt+enter` | in the editor: save the comment / write another line |
 | `x` / `D` | resolve / delete the comment at the cursor |
@@ -127,6 +127,27 @@ lose — `A` takes the agent's notes out of the diff and puts them back, a displ
 change that writes nothing, and `X` deletes every one of them at once, after
 asking. Neither can reach a note you wrote, and nothing an agent writes replaces
 one: comments are only ever appended.
+
+### Opening a file
+
+`o` opens the file the cursor is in outside peel, for when the diff is not enough
+and the whole file has to be read — or edited. What it opens with is git config,
+so it is set once and every repository has it:
+
+```sh
+git config --global peel.open zed          # everything
+git config --global peel.open.md open      # except markdown, to the desktop
+git config --global peel.open.png "qlmanage -p"
+```
+
+`peel.open.<extension>` wins for that kind of file, `peel.open` covers the rest,
+and with neither set peel hands the file to `open`, the way double clicking it
+would. Setting it in a repository instead of `--global` narrows it to that one.
+
+The value is a command and its arguments, split on spaces and run directly —
+`open -a Marked` works, and nothing here reaches a shell. The file goes on the
+end as an absolute path. Config is read on each `o`, so changing it takes effect
+in the session already open.
 
 ### Long lines and the mouse
 

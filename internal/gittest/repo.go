@@ -27,6 +27,13 @@ func New(t *testing.T) *Repo {
 		t.Skip("git not installed")
 	}
 
+	// peel reads git config for some of what it does, so a developer's own
+	// settings must not reach a test through the files above the repository —
+	// what is set below is then the whole config the test runs against. The
+	// environment carries into the git commands the code under test runs too.
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
 	r := &Repo{t: t, Dir: t.TempDir()}
 	r.Git("init", "--quiet", "--initial-branch=main")
 	r.Git("config", "user.email", "peel@example.com")

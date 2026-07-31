@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -66,6 +67,32 @@ func (r *Repo) GitDir(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("not a git repository: %w", err)
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// ConfigSection returns every git config setting in one section, keyed by its
+// full key. The usual files are read in the usual order — system, then global,
+// then this repository — so a setting made once covers every repository and a
+// repository can still narrow it. A section nobody has set is not an error: it
+// comes back empty.
+func (r *Repo) ConfigSection(ctx context.Context, section string) (map[string]string, error) {
+	// --null so a value with a space or a newline in it survives the read: git
+	// writes the key, a newline, the value, then a NUL.
+	args := []string{"config", "--null", "--get-regexp", "^" + regexp.QuoteMeta(section) + "\\."}
+	res, err := r.runner.Run(ctx, exec.Command{Name: "git", Args: args, Dir: r.dir})
+	// Exit 1 is "nothing matched", which is the common case rather than a fault.
+	if err != nil && !isExitCode(err, 1) {
+		return nil, fmt.Errorf("git config %s: %w", section, err)
+	}
+
+	out := map[string]string{}
+	for _, record := range strings.Split(string(res.Stdout), "\x00") {
+		if record == "" {
+			continue
+		}
+		key, value, _ := strings.Cut(record, "\n")
+		out[key] = value
+	}
+	return out, nil
 }
 
 // Unstaged returns changes between the index and the working tree — what

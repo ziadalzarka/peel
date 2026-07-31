@@ -822,42 +822,153 @@ func TestOptionsOverrideDefaults(t *testing.T) {
 	}
 }
 
-// OpenFile hands the desktop an absolute path, since the diff's paths are
-// relative to the root and peel may have been started anywhere below it.
-func TestOpenFileHandsAnAbsolutePathToTheDesktop(t *testing.T) {
+// openFixture is an App whose git config the test writes, and whose opener is
+// recorded rather than run.
+func openFixture(t *testing.T, config map[string]string) (*app.App, *exec.FakeRunner) {
+	t.Helper()
 	repo := gittest.New(t)
+
+	var records []string
+	for key, value := range config {
+		records = append(records, key+"\n"+value+"\x00")
+	}
+	slices.Sort(records)
+
 	runner := exec.NewFakeRunner().
 		Respond("rev-parse --show-toplevel", repo.Dir+"\n").
 		Respond("rev-parse --absolute-git-dir", filepath.Join(repo.Dir, ".git")+"\n").
-		Respond(app.OpenCommand, "")
+		Respond("get-regexp", strings.Join(records, ""))
 
 	a, err := app.Open(context.Background(), repo.Dir, app.WithRunner(runner))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	return a, runner
+}
+
+// opened returns the command line the last call ran, for comparing against the
+// one the settings should have produced.
+func opened(runner *exec.FakeRunner) []string {
+	calls := runner.Calls()
+	last := calls[len(calls)-1].Cmd
+	return append([]string{last.Name}, last.Args...)
+}
+
+// OpenFile hands the opener an absolute path, since the diff's paths are
+// relative to the root and peel may have been started anywhere below it.
+func TestOpenFileHandsAnAbsolutePathToTheOpener(t *testing.T) {
+	a, runner := openFixture(t, nil)
+	runner.Respond(app.OpenCommand, "")
+
 	if err := a.OpenFile(context.Background(), filepath.Join("cmd", "main.go")); err != nil {
 		t.Fatalf("OpenFile: %v", err)
 	}
 
-	calls := runner.Calls()
-	last := calls[len(calls)-1].Cmd
-	want := filepath.Join(a.Root, "cmd", "main.go")
-	if last.Name != app.OpenCommand || len(last.Args) != 1 || last.Args[0] != want {
-		t.Errorf("ran %q %v, want %q %q", last.Name, last.Args, app.OpenCommand, want)
+	want := []string{app.OpenCommand, filepath.Join(a.Root, "cmd", "main.go")}
+	if got := opened(runner); !slices.Equal(got, want) {
+		t.Errorf("ran %v, want %v", got, want)
+	}
+}
+
+// Which command opens a file is a git config setting, and the one for the file's
+// extension beats the one for everything else.
+func TestOpenFileRunsTheCommandConfiguredForTheExtension(t *testing.T) {
+	config := map[string]string{
+		app.OpenKey:          "zed",
+		app.OpenKey + ".md":  "open -a Marked",
+		app.OpenKey + ".png": "qlmanage -p",
+	}
+
+	for _, tc := range []struct {
+		path string
+		want []string
+	}{
+		{"internal/app/app.go", []string{"zed"}},
+		{"README.md", []string{"open", "-a", "Marked"}},
+		{"docs/screenshots/review.png", []string{"qlmanage", "-p"}},
+		{"Makefile", []string{"zed"}},
+		{"skills/.gitkeep", []string{"zed"}},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			a, runner := openFixture(t, config)
+			runner.Respond("zed", "").Respond("open", "").Respond("qlmanage", "")
+
+			if err := a.OpenFile(context.Background(), tc.path); err != nil {
+				t.Fatalf("OpenFile: %v", err)
+			}
+
+			want := append(slices.Clone(tc.want), filepath.Join(a.Root, tc.path))
+			if got := opened(runner); !slices.Equal(got, want) {
+				t.Errorf("opening %s ran %v, want %v", tc.path, got, want)
+			}
+		})
+	}
+}
+
+// An extension with no setting of its own falls back to the desktop opener when
+// nothing names a command for every file either.
+func TestOpenFileFallsBackToTheDesktopOpenerPerExtension(t *testing.T) {
+	a, runner := openFixture(t, map[string]string{app.OpenKey + ".md": "zed"})
+	runner.Respond(app.OpenCommand, "").Respond("zed", "")
+
+	if err := a.OpenFile(context.Background(), "main.go"); err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	want := []string{app.OpenCommand, filepath.Join(a.Root, "main.go")}
+	if got := opened(runner); !slices.Equal(got, want) {
+		t.Errorf("ran %v, want %v", got, want)
+	}
+}
+
+// Extensions are matched however they are written, since git lower-cases the
+// key it stores them under.
+func TestOpenFileMatchesTheExtensionWhateverItsCase(t *testing.T) {
+	a, runner := openFixture(t, map[string]string{app.OpenKey + ".md": "zed"})
+	runner.Respond("zed", "")
+
+	if err := a.OpenFile(context.Background(), "README.MD"); err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	want := []string{"zed", filepath.Join(a.Root, "README.MD")}
+	if got := opened(runner); !slices.Equal(got, want) {
+		t.Errorf("ran %v, want %v", got, want)
+	}
+}
+
+// The whole path, against real git and a real command: the setting is read from
+// the repository's config, split into a command and its arguments, and handed
+// the file last.
+func TestOpenFileRunsTheCommandGitConfigNames(t *testing.T) {
+	f := newFixture(t)
+	dir := t.TempDir()
+	record := filepath.Join(dir, "opened")
+	opener := filepath.Join(dir, "opener.sh")
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + record + "\n"
+	if err := os.WriteFile(opener, []byte(script), 0o755); err != nil {
+		t.Fatalf("write opener: %v", err)
+	}
+	f.repo.Git("config", app.OpenKey+".md", opener+" --wait")
+
+	if err := f.app.OpenFile(f.ctx, "notes.md"); err != nil {
+		t.Fatalf("OpenFile: %v", err)
+	}
+
+	got, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatalf("read what the opener saw: %v", err)
+	}
+	want := "--wait\n" + filepath.Join(f.app.Root, "notes.md") + "\n"
+	if string(got) != want {
+		t.Errorf("the opener saw %q, want %q", got, want)
 	}
 }
 
 func TestOpenFileReportsTheFailure(t *testing.T) {
-	repo := gittest.New(t)
-	runner := exec.NewFakeRunner().
-		Respond("rev-parse --show-toplevel", repo.Dir+"\n").
-		Respond("rev-parse --absolute-git-dir", filepath.Join(repo.Dir, ".git")+"\n").
-		RespondErr(app.OpenCommand, "no application knows how to open it", 1)
+	a, runner := openFixture(t, nil)
+	runner.RespondErr(app.OpenCommand, "no application knows how to open it", 1)
 
-	a, err := app.Open(context.Background(), repo.Dir, app.WithRunner(runner))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
 	if err := a.OpenFile(context.Background(), "main.go"); err == nil {
 		t.Fatal("OpenFile succeeded despite the opener failing")
 	}
