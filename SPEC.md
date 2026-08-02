@@ -99,6 +99,7 @@ it doesn't get relitigated.
 | **Walkthrough is parsed, not printed** | steps → files → explanation, parsed out of the markdown | A wall of markdown is something you read *about* the change. Parsing markdown rather than demanding JSON keeps `peel walkthrough` useful as prose |
 | **Walkthrough is the diff, not a pane** | the steps reorder the files and each explanation sits above the files it covers | A separate pane is a map you read and then leave; the same notes inside the diff are read *with* the code they describe, and there is one thing to navigate instead of two |
 | **Every changed file lands in a group** | leftovers collected under "Not grouped" | The order is the reviewer's map of the change. A file the model forgot to mention would otherwise be a file the reviewer never learns to read |
+| **The file pane is a tree** | directories with their files under them, drawn only — no key enters it, folds it, or moves in it | Added 2026-08-03. A flat list of paths answers "what changed" and not "where", and it answers it badly: at 14 to 30 columns every path is shortened from the left, so a screen of `…tui/model.go` spends its width on the directories and truncates the one segment that identifies the file. The tree spends the width once per directory instead of once per file, which is what leaves room for whole file names. Rows stay in the document's order, so the pane still reads top to bottom with the diff and a walkthrough's ordering survives; a directory takes the position of the first file inside it. A directory with one way down is joined onto what is below it — `internal/tui`, not two rows and an indent — since a level that only ever leads to one place costs a row and says nothing. It stays display-only for the same reason the pane has never been enterable: the cursor lives in the diff, and a second place to be would double every navigation key. A directory carries the state of the files under it, `✓` once every one of them is staged, which is the one thing a tree can say that a list cannot |
 | **Long lines** | **scroll sideways, never wrap** | Added 2026-07-30. Every row renders to exactly one terminal line, and the cursor, the window and the file pane beside it all count in rows — wrapping would make one document row several screen rows and put that arithmetic wrong everywhere. A horizontal offset leaves it untouched: the same rows are on screen, further along. `h`/`l` slide the code, `0`/`$` reach the ends |
 | **The gutter does not scroll** | line numbers and the `+`/`-` origin stay pinned; only the code slides | What a row scrolled out to column 90 still has to say is which line it is and whether it was added. A row that has lost both is unreadable long before its tail is worth reaching |
 | **Follow mode** | on by default; `f` toggles, `--no-watch` opts out | The common case is reviewing while an agent or editor is still changing the working tree |
@@ -314,12 +315,15 @@ and every line of a diff body, changed or not. There is no mode to enter first �
 there, including on the untouched code a change breaks. Only the blank between
 files and the continuation lines of a multi-line comment are skipped.
 
-The file list on the left is a map, not a pane you move into — but it is on
-screen by default and scrolls on its own window, so a long file list can be read
-past without moving the diff. Its mark follows the diff window rather than the
-cursor: it names the file the window opens on, which is the file being read. `b`
-hands its width to the diff and takes it back, for a change whose lines are
-longer than the pane leaves room for.
+The file tree on the left is a map, not a pane you move into — but it is on
+screen by default and scrolls on its own window, so a long tree can be read past
+without moving the diff. It lays the changed files out under the directories
+they live in, so a name in it comes with where that name is. Its mark follows
+the diff window rather than the cursor: it names the file the window opens on,
+which is the file being read, and the directories above that file are undimmed
+so the mark reads as a place in the tree. `b` hands its width to the diff and
+takes it back, for a change whose lines are longer than the pane leaves room
+for.
 
 `↓`/`↑` step the cursor a line at a time and the window follows; `j`/`k` jump it
 between whole things — the next hunk, file or comment. The wheel scrolls the
@@ -344,10 +348,10 @@ that report one; `h`/`l` are the path that always works.
 | `j` / `k` | next / previous hunk, file or comment |
 | wheel | scroll the diff, dragging the cursor along |
 | `]` / `[` | next / previous file — from inside a file, to its header first; the window opens on the file |
-| `}` / `{`, wheel over the pane | scroll the file list |
+| `}` / `{`, wheel over the pane | scroll the file tree |
 | `h` / `l`, horizontal wheel | scroll the code sideways, one indent per press |
 | `0` / `$` | back to the first column / out to the longest line's end |
-| `b` | hide or show the file list, giving the diff the whole width |
+| `b` | hide or show the file tree, giving the diff the whole width |
 | `g` / `G` | first / last row |
 | `ctrl+d` / `ctrl+u` | half a page down / up |
 | `space` | fold the file away and move on to the next, or expand it again |

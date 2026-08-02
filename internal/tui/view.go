@@ -18,10 +18,16 @@ const (
 	// diffPaneMin is the narrowest diff worth keeping the pane beside. Below
 	// it the pane is dropped, since a diff squeezed past this is unreadable.
 	diffPaneMin = 30
-	// filePaneNameMin is the room a path needs before the pane is worth
+	// filePaneNameMin is the room a name needs before the pane is worth
 	// spending width on the +/- counts as well.
 	filePaneNameMin = 10
+	// filePaneGutter is what every row of the pane spends before its name: the
+	// cursor marker, the state symbol, and the space after it.
+	filePaneGutter = 3
 )
+
+// treeGuide is what one level of nesting costs a row of the file pane.
+const treeGuide = "│ "
 
 // View satisfies tea.Model.
 func (m *Model) View() string {
@@ -172,7 +178,7 @@ func (m *Model) emptyMessage() string {
 	return "nothing to review"
 }
 
-// fileLines draws the file overview, or nil when the pane does not fit.
+// fileLines draws the file tree, or nil when the pane does not fit.
 //
 // The pane scrolls on its own window, m.fileTop, so it can be moved without
 // moving the diff and vice versa.
@@ -182,41 +188,60 @@ func (m *Model) fileLines(height int) []string {
 		return nil
 	}
 
-	current := m.markedFile()
+	marked := m.markedPath()
 	out := make([]string, 0, height)
 	for i := m.fileTop; i < m.fileTop+height; i++ {
-		if i >= len(m.doc.Files) {
+		if i >= len(m.fileRows) {
 			out = append(out, strings.Repeat(" ", width))
 			continue
 		}
-		out = append(out, m.fileRow(i, i == current, width))
+		out = append(out, m.paneLine(m.fileRows[i], marked, width))
 	}
 	return out
 }
 
-func (m *Model) fileRow(index int, current bool, width int) string {
-	entry := m.doc.Files[index].Entry
-	added, removed := entry.Stats()
-	counts := fmt.Sprintf("+%d -%d", added, removed)
+// paneLine draws one row of the tree. marked is the path of the file the pane
+// is pointing at.
+func (m *Model) paneLine(row paneRow, marked string, width int) string {
+	guides := strings.Repeat(treeGuide, row.Depth)
+	indent := m.theme.Dim.Render(guides)
+	symbol := m.renderer.stateSymbol(row.State)
+	room := width - filePaneGutter - ansi.StringWidth(guides)
 
-	symbol := m.renderer.stateSymbol(entry.State())
-	// 3 for the marker and the two spaces around the symbol, 1 for the gap.
-	room := width - 4 - ansi.StringWidth(counts) - 1
-	// Now that the pane stays on screen at narrow widths, it can end up with
-	// room for the counts or for the path but not both. The path wins: the
-	// file header in the diff carries the counts anyway.
-	if room < filePaneNameMin {
-		counts, room = "", width-4
+	if row.File < 0 {
+		// A directory carries the state of the files under it, so one already
+		// worked through reads as done at a glance. The directories above the
+		// marked file are undimmed, which is what makes the mark a place in the
+		// tree rather than a file on its own.
+		style := m.theme.Dim
+		if strings.HasPrefix(marked, row.Path+"/") {
+			style = m.theme.FileHead
+		}
+		name := shorten(row.Name+"/", max(room, 2))
+		return fit(" "+symbol+" "+indent+style.Render(name), width)
 	}
-	name := shorten(entry.Path, max(room, 4))
+
+	added, removed := m.doc.Files[row.File].Entry.Stats()
+	counts := fmt.Sprintf("+%d -%d", added, removed)
+	// What the name has left once the counts and the gap in front of them are
+	// out of the way. Now that the pane stays on screen at narrow widths, and
+	// an indent takes some of what is left, a row can end up with room for the
+	// counts or for the name but not both. The name wins: the file header in
+	// the diff carries the counts anyway.
+	if named := room - ansi.StringWidth(counts) - 2; named >= filePaneNameMin {
+		room = named
+	} else {
+		counts = ""
+	}
+	name := shorten(row.Name, max(room, 4))
 
 	marker := " "
 	styled := name
-	if current {
+	if row.Path == marked {
 		marker = m.theme.Cursor.Render("▌")
 		styled = m.theme.Cursor.Render(name)
 	}
-	line := marker + symbol + " " + styled
+	line := marker + symbol + " " + indent + styled
 	if counts == "" {
 		return fit(line, width)
 	}
@@ -238,10 +263,10 @@ var helpBindings = []struct{ keys, action string }{
 	{"j / k", "next / previous hunk, file or comment"},
 	{"↓ / ↑", "move the cursor one line (the wheel scrolls the diff)"},
 	{"] / [", "next / previous file"},
-	{"} / {", "scroll the file list on its own"},
+	{"} / {", "scroll the file tree on its own"},
 	{"h / l", "scroll the code sideways, for a line too long for the pane"},
 	{"0 / $", "back to the first column / out to the longest line's end"},
-	{"b", "hide or show the file list, giving the diff the whole width"},
+	{"b", "hide or show the file tree, giving the diff the whole width"},
 	{"g / G", "first / last row"},
 	{"ctrl+d / ctrl+u", "half a page down / up"},
 	{"space", "fold the file away and move on, or fold a walkthrough note away"},

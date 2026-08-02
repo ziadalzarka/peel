@@ -11,8 +11,9 @@ next file is in front of you — what is left open is what is left to review.
 
 ![peel reviewing its own working tree](docs/screenshots/review.png)
 
-The file list on the left is the review queue and a `✓` marks a staged file. The
-footer is the whole keymap.
+The file tree on the left is the review queue and a `✓` marks a staged file — or
+a whole directory once every file in it is staged. The footer is the whole
+keymap.
 
 - **Staging is the review.** `s` stages a file and moves you to the next one still
   open, so a pass is `s` after `s`. Whole files only — no patch generation, so
@@ -88,10 +89,10 @@ repository changes.
 | `↓` / `↑` | move the cursor one line, diff body included |
 | `j` / `k` | next / previous hunk, file or comment |
 | `]` / `[` | next / previous file |
-| `}` / `{` | scroll the file list on its own |
+| `}` / `{` | scroll the file tree on its own |
 | `h` / `l` | scroll the code sideways, for a line too long for the pane |
 | `0` / `$` | back to the first column / out to the longest line's end |
-| `b` | hide or show the file list, giving the diff the whole width |
+| `b` | hide or show the file tree, giving the diff the whole width |
 | `space` | fold the file away and move on, or expand it again — and folds a walkthrough note away |
 | `s` | stage the file the cursor is in, folding it away and moving to the next |
 | `u` | unstage that file, opening it again |

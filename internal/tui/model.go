@@ -44,7 +44,11 @@ type Model struct {
 
 	cursor int
 	top    int
-	// fileTop is the first file drawn in the side pane. It scrolls
+	// fileRows is the side pane's tree: the changed files under the directories
+	// they live in, one row each. It is rebuilt with the document, since it is
+	// the same files laid out a second way.
+	fileRows []paneRow
+	// fileTop is the first row drawn in the side pane. It scrolls
 	// independently of the diff, and only follows the diff when the marked file
 	// has left the pane.
 	fileTop     int
@@ -1433,6 +1437,7 @@ func (m *Model) currentPath() string {
 
 func (m *Model) rebuild() {
 	m.doc = Build(m.session, m.visibleComments(), m.collapsed, m.layout, WithGroups(m.groups()), WithDraft(m.draft()))
+	m.fileRows = fileTree(m.doc.Files)
 	if m.cursor >= m.doc.Len() {
 		m.cursor = m.doc.LastStop()
 	}
@@ -1459,11 +1464,11 @@ func (m *Model) toggleFilePane() {
 	m.filePaneOff = !m.filePaneOff
 	m.relayout()
 	if m.filePaneOff {
-		m.status = "file list hidden"
+		m.status = "file tree hidden"
 		return
 	}
 	m.ensureFileVisible()
-	m.status = "file list shown"
+	m.status = "file tree shown"
 }
 
 // fileIndex looks a file up by path, since rebuilding can renumber files too.
@@ -1601,25 +1606,50 @@ func (m *Model) markedFile() int {
 	return m.doc.FileAt(m.top)
 }
 
+// markedPath is the path of the file the pane marks, or "" when there is none.
+// The pane addresses its rows by path, since a row of the tree is a directory
+// as often as it is a file.
+func (m *Model) markedPath() string {
+	file := m.markedFile()
+	if file < 0 || file >= len(m.doc.Files) {
+		return ""
+	}
+	return m.doc.Files[file].Entry.Path
+}
+
 // ensureFileVisible scrolls the pane only when the marked file has left it, so
 // a pane scrolled by hand stays where it was put.
 func (m *Model) ensureFileVisible() {
 	height := m.bodyHeight()
-	file := m.markedFile()
-	if file < 0 || height <= 0 {
+	row := m.paneRowOf(m.markedFile())
+	if row < 0 || height <= 0 {
 		return
 	}
-	if file < m.fileTop {
-		m.fileTop = file
+	if row < m.fileTop {
+		m.fileTop = row
 	}
-	if file >= m.fileTop+height {
-		m.fileTop = file - height + 1
+	if row >= m.fileTop+height {
+		m.fileTop = row - height + 1
 	}
 	m.clampFileTop()
 }
 
+// paneRowOf is where a file sits in the pane, which is past its own index once
+// the directories above it have rows of their own.
+func (m *Model) paneRowOf(file int) int {
+	if file < 0 {
+		return -1
+	}
+	for i, row := range m.fileRows {
+		if row.File == file {
+			return i
+		}
+	}
+	return -1
+}
+
 func (m *Model) clampFileTop() {
-	m.fileTop = min(max(m.fileTop, 0), max(0, len(m.doc.Files)-m.bodyHeight()))
+	m.fileTop = min(max(m.fileTop, 0), max(0, len(m.fileRows)-m.bodyHeight()))
 }
 
 func (m *Model) ensureVisible(row int) {
