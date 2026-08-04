@@ -565,10 +565,10 @@ func TestStagingOpensTheWindowOnTheNextFile(t *testing.T) {
 	}
 }
 
-// The next file is the next one still to review: a file staged earlier — by an
-// agent, or by an unstage-and-restage — is folded away already and is not
-// somewhere to stop.
-func TestStagingSkipsFilesThatAreAlreadyStaged(t *testing.T) {
+// The next file is the next one still open. A file staged elsewhere — by an
+// agent, or by a git add outside peel — has never been folded away here, so its
+// diff is still on screen to be read and the pass stops on it.
+func TestStagingStopsOnAStagedFileLeftOpen(t *testing.T) {
 	entries := parseFiles(t, threeFileDiff)
 	entries[1].Staged, entries[1].Unstaged = entries[1].Unstaged, nil
 	backend := newFakeBackend(sessionOf(entries))
@@ -581,8 +581,8 @@ func TestStagingSkipsFilesThatAreAlreadyStaged(t *testing.T) {
 	m := newModel(t, backend)
 	press(t, m, "s")
 
-	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "gamma.md" {
-		t.Errorf("cursor is on %q, want gamma.md — beta.txt was already staged", got)
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
+		t.Errorf("cursor is on %q, want beta.txt — it is staged but still open to read", got)
 	}
 }
 

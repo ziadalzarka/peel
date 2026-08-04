@@ -169,10 +169,11 @@ A file is the unit a review decision is actually made in, so that is the unit
 peel stages: `git add` and `git restore --staged`, one path at a time. If you
 want to split a file, `git add -p` already does that well.
 
-Staging collapses the file and moves the cursor to the next one still to review,
-never back to find where you were. Files already staged or folded are passed over
-on the way, since they have been dealt with; only when nothing below is still
-open does the cursor stay put. The fold is display only: `space` reads a staged
+Staging collapses the file and moves the cursor to the next one still open, never
+back to find where you were. Folded files are passed over on the way, since they
+have been read already; a file staged elsewhere but never folded here is not, its
+diff is still on screen to read. Only when nothing below is still open does the
+cursor stay put. The fold is display only: `space` reads a staged
 file back without touching the index, and a stage that fails leaves the file
 open, and the cursor on it, because it still has to be dealt with.
 

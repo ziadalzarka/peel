@@ -626,8 +626,8 @@ func (m *Model) quit() tea.Cmd {
 //
 // A file is the smallest thing that can be staged, so a hunk header or a diff
 // line stages the file it belongs to. The file folds away once it is staged and
-// the cursor moves on to the next one still to review, since this one has been
-// dealt with — `space` opens it again.
+// the cursor moves on to the next one still open, since this one has been dealt
+// with — `space` opens it again.
 func (m *Model) stageAt() tea.Cmd {
 	file, ok := m.doc.FileTargetAt(m.cursor)
 	if !ok {
@@ -808,23 +808,21 @@ func (m *Model) advanceFrom(path string) {
 	m.restoreCursor(path)
 }
 
-// nextToReview finds the first file below path that is still open to read — not
-// staged, and not folded away — or -1 when there is none, including when path
-// itself has gone.
+// nextToReview finds the first file below path that is still open — not folded
+// away — or -1 when there is none, including when path itself has gone.
 //
-// Staged and folded files are both passed over: each has been dealt with, and a
-// header with nothing under it is nothing to carry the pass on with. What is
-// above path does not come into it — the pass runs down the diff, and a file
-// left open behind the cursor was left that way on purpose.
+// A folded file is passed over: it has been dealt with, and a header with
+// nothing under it is nothing to carry the pass on with. Being staged is not
+// what makes a file done here — the fold is; a staged file still open is one
+// whose diff is on screen to be read, so the pass stops on it like any other.
+// What is above path does not come into it — the pass runs down the diff, and a
+// file left open behind the cursor was left that way on purpose.
 func (m *Model) nextToReview(path string) int {
 	file := m.fileIndex(path)
 	if file < 0 {
 		return -1
 	}
 	for i := file + 1; i < len(m.doc.Files); i++ {
-		if m.doc.Files[i].Entry.State() == git.StateStaged {
-			continue
-		}
 		if m.collapsed[m.doc.Files[i].Entry.Path] {
 			continue
 		}
@@ -1485,7 +1483,7 @@ func (m *Model) fileIndex(path string) int {
 // step's explanation, or a file's body.
 //
 // Folding a file means the same thing staging one does — done with it — so the
-// cursor moves on to the next file still to review. Opening one again leaves the
+// cursor moves on to the next file still open. Opening one again leaves the
 // cursor on it, since that is the file being read.
 func (m *Model) toggleCollapse() {
 	if step := m.doc.StepAt(m.cursor); step >= 0 {

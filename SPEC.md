@@ -85,7 +85,7 @@ it doesn't get relitigated.
 | **Diff layout** | Unified default, `\` toggles side-by-side | Unified matches `git diff` and fits a narrow terminal; side-by-side for spotting edits inside a long line |
 | **Staging granularity** | **whole files only** | Revised 2026-07-30, after building hunk and line staging. A file is the unit a review decision is actually made in, and reviewing one then pressing `s` reads the same either way. Hunk and line staging bought a patch engine whose failure mode is writing the wrong lines into the index, to split a file the way `git add -p` already splits it |
 | **Staging mechanism** | `git add` / `git restore --staged` per path | The whole-file decision removes the need to generate patches at all: no `git apply --cached`, no `@@` arithmetic, no intent-to-add dance for untracked files |
-| **Staged files fold away** | `s` collapses the file, moves to the next one to review; `space` reopens it | The list left open is the list still to review, so the diff shrinks as the pass goes on, and the one key that ends a file also starts the next. Collapsing is display only — `space` reads a staged file back without touching the index |
+| **Staged files fold away** | `s` collapses the file, moves to the next one still open; `space` reopens it | The list left open is the list still to review, so the diff shrinks as the pass goes on, and the one key that ends a file also starts the next. Collapsing is display only — `space` reads a staged file back without touching the index. Revised 2026-08-04: the move looks at the fold and not the index, so a file staged outside peel is still somewhere the pass stops — its diff has not been read here, and skipping it hid changes an agent had staged |
 | **Folding is the same decision without the index** | `space` folds a file away and moves on exactly as `s` does | Not every file read is a file to stage — a read-only session has none, and a working tree has files you have looked at and left alone. Folding is how a pass records what has been read, so it moves on the way staging does |
 | **Folds persist** | JSON at `.git/peel/folds.json`, per target | A pass through a large diff rarely finishes in one sitting, and reopening to a diff that has forgotten every file already read starts the pass again. Folds of files no longer in the diff are dropped, so the next change to a file is not hidden by a fold left from the last one |
 | **Changes are drawn before they are written** | optimistic, with rollback: the screen moves on the keypress, git is asked behind it | Added 2026-07-30. A stage is `git add` plus a full re-read — 50ms in a small repository, several hundred in a large one — and the answer is never in doubt, only slow. Waiting for it before redrawing makes a decision that has already been made look like peel thinking about it, and staging is a key pressed file after file. The guess is a prediction of a whole-file stage and nothing cleverer; the re-read behind it stays authoritative, and a write that fails restores the screen it was drawn over. Two rules keep the guess from being seen: writes are queued, so peel's own git calls cannot race for the index lock, and a read-back landing while another write is out is dropped rather than undrawing it. `q` waits for the writes it has already reported |
@@ -383,11 +383,13 @@ in git's order. Staging keeps the notes; when the code itself moves on under the
 the header says `stale` and `W` writes new ones.
 
 Staging folds and moves on. `s` stages the file the cursor is in, collapses it and
-opens the next file still to review at the top of the window — so what is left
-open is what is left to review, the diff shrinks as the pass goes on, and one key
-both ends a file and starts the next. Files already staged and files already
-folded are both skipped on the way: each has been dealt with, and a header with
-nothing under it is nothing to carry the pass on with. Only when nothing below
+opens the next file still open at the top of the window — so what is left open is
+what is left to review, the diff shrinks as the pass goes on, and one key both
+ends a file and starts the next. Folded files are skipped on the way: each has
+been read, and a header with nothing under it is nothing to carry the pass on
+with. Being staged is not what makes a file done — the fold is, so a file staged
+outside peel and never folded here is a stop like any other, since its diff has
+still to be read. Only when nothing below
 is still open does the cursor stay where it is, on the file just dealt with
 rather than on an arbitrary one — a file left open above does not pull it back,
 since the pass runs down the diff and what is behind the cursor was left open on
