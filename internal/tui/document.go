@@ -573,11 +573,16 @@ func (d Document) LastStop() int {
 	return 0
 }
 
-// NextFile returns the top of the file after the one holding from.
+// NextFile returns the top of the file after the one holding from. A file whose
+// top is the walkthrough heading the cursor is already on is passed over, so a
+// jump forward from a heading reaches the next file rather than standing still.
 func (d Document) NextFile(from int) int {
 	for i := from + 1; i < len(d.Rows); i++ {
-		if d.Rows[i].Kind == RowFile {
-			return d.topOf(i)
+		if d.Rows[i].Kind != RowFile {
+			continue
+		}
+		if top := d.topOf(i); top > from {
+			return top
 		}
 	}
 	return from

@@ -1716,6 +1716,39 @@ func TestWalkthroughJumpingToAFileLandsOnItsNote(t *testing.T) {
 	}
 }
 
+func TestWalkthroughJumpingOnFromANoteReachesTheNextFile(t *testing.T) {
+	m := newModel(t, newFakeBackend(newSession(t, twoFileDiff)))
+
+	press(t, m, "w")
+	m.moveTo(m.doc.Steps[0].Row)
+	press(t, m, "]")
+
+	if want := m.doc.Steps[1].Row; m.cursor != want {
+		t.Fatalf("] on the first note left the cursor at %d, want the note introducing beta.txt at %d", m.cursor, want)
+	}
+
+	press(t, m, "[")
+
+	if want := m.doc.Steps[0].Row; m.cursor != want {
+		t.Fatalf("[ on the second note left the cursor at %d, want the note introducing alpha.go at %d", m.cursor, want)
+	}
+}
+
+func TestWalkthroughJumpingOnFromANoteReachesTheSecondFileItCovers(t *testing.T) {
+	backend := newFakeBackend(newSession(t, threeFileDiff))
+	backend.walkBody = "## 1. The code and the fixture beside it\n`alpha.go` `beta.txt`\n\nBoth at once.\n\n" +
+		"## 2. The notes\n`gamma.md`\n\nThen these.\n"
+	m := newModel(t, backend)
+
+	press(t, m, "w")
+	m.moveTo(m.doc.Steps[0].Row)
+	press(t, m, "]")
+
+	if want := m.doc.Files[1].Row; m.cursor != want {
+		t.Fatalf("] on a note covering two files landed at %d, want beta.txt at %d", m.cursor, want)
+	}
+}
+
 func TestWalkthroughCollectsFilesNoStepNamed(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	backend.walkBody = "## 1. Only alpha\n`alpha.go`\n\nNothing was said about the fixture.\n"
