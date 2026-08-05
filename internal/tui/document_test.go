@@ -560,7 +560,7 @@ func TestBuildWrapsALongCommentLineToTheWidthItHas(t *testing.T) {
 	comments := []store.Comment{
 		{ID: "c1", File: "alpha.go", Body: body, Author: store.AuthorUser},
 	}
-	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutUnified, WithCommentWidth(40))
+	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutUnified, WithPaneWidth(46))
 
 	head := doc.RowOfComment("c1")
 	if head < 0 {
@@ -573,9 +573,10 @@ func TestBuildWrapsALongCommentLineToTheWidthItHas(t *testing.T) {
 	if len(rows) < 3 {
 		t.Fatalf("comment took %d rows, want it wrapped across several: %q", len(rows), rows)
 	}
-	// The tag naming the author comes off the width, and every row is wrapped to
-	// what is left so the ones below line up under the first.
-	width := 40 - ansi.StringWidth(commentTag(comments[0]))
+	// The marker, the indent and the bar come off the pane, then the tag naming
+	// the author comes off what is left, and every row is wrapped to that so the
+	// ones below line up under the first.
+	width := halfNone.room(46) - ansi.StringWidth(commentTag(comments[0]))
 	for i, row := range rows {
 		if got := ansi.StringWidth(row); got > width {
 			t.Errorf("row %d is %d wide, want no more than %d: %q", i, got, width, row)
@@ -595,7 +596,7 @@ func TestBuildKeepsACommentsOwnLineBreaksWhenWrapping(t *testing.T) {
 	comments := []store.Comment{
 		{ID: "c1", File: "alpha.go", Body: "short\n\n- one\n- two", Author: store.AuthorUser},
 	}
-	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutUnified, WithCommentWidth(40))
+	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutUnified, WithPaneWidth(46))
 
 	head := doc.RowOfComment("c1")
 	if head < 0 {
@@ -682,91 +683,237 @@ func TestNavigationAtTheEdgesStaysPut(t *testing.T) {
 	}
 }
 
-// A jump of ten lines is ten lines wherever it starts: the file it began in
-// ending is not a wall, and the blank between two files is passed over rather
-// than counted, so the cursor moves further down the document than ten rows.
-func TestStopsAwayCountsOnThroughTheFileBelow(t *testing.T) {
-	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+// With nothing in the way a jump of ten lines is ten presses of the arrow, and
+// the same jump back reaches the row it started on.
+func TestLeapCountsCursorPositions(t *testing.T) {
+	// One file, two hunks, and no copy of it to offer any hidden code from — so
+	// the ten lines run through a hunk header with nothing to stop them.
+	doc := Build(newSession(t, contextDiff), nil, nil, LayoutUnified)
 
 	first := doc.FirstStop()
-	got := doc.StopsAway(first, 10)
+	got := doc.Leap(first, 10)
 
 	want := first
 	for range 10 {
 		want = doc.NextStop(want)
 	}
 	if got != want {
-		t.Fatalf("StopsAway(%d, 10) = %d, want %d — the row ten presses of down reaches", first, got, want)
+		t.Fatalf("Leap(%d, 10) = %d, want %d — the row ten presses of down reaches", first, got, want)
 	}
-	if doc.FileAt(got) == doc.FileAt(first) {
-		t.Errorf("ten lines from the top of %q stayed in it, want the count carried into the next file",
-			doc.Files[doc.FileAt(first)].Entry.Path)
+	if doc.endsLeap(got) {
+		t.Fatalf("the jump landed on row %d, which would have stopped it anyway — "+
+			"this test is not measuring a run of ten lines", got)
 	}
-	if got-first <= 10 {
-		t.Errorf("the jump moved %d rows for 10 lines, want further — the blank between the files is not a line",
-			got-first)
+	if back := doc.Leap(got, -10); back != first {
+		t.Errorf("ten lines back up = %d, want the row it started on, %d", back, first)
+	}
+}
+
+// A file header is as far as one press goes. A jump that would have run past it
+// lands on it instead, in either direction, and the next press carries on — so
+// the header of the file being left and the header of the one below are both
+// somewhere the brackets stop rather than rows they cross.
+func TestLeapStopsAtAFileHeader(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+
+	// Two lines into the second file, where ten lines up would otherwise land
+	// somewhere inside the first one.
+	header := doc.RowOfFile(1)
+	inside := doc.NextStop(doc.NextStop(header))
+	if doc.FileAt(inside) != 1 {
+		t.Fatalf("row %d is in file %d, want two stops into the second file", inside, doc.FileAt(inside))
+	}
+	if got := doc.Leap(inside, -10); got != header {
+		t.Errorf("[ from row %d = %d, want its own file's header at %d", inside, got, header)
+	}
+	if got := doc.Leap(header, -10); doc.FileAt(got) != 0 {
+		t.Errorf("[ from the header of file 1 = %d, in file %d — want it carried into the file above",
+			got, doc.FileAt(got))
 	}
 
-	back := doc.StopsAway(got, -10)
-	if back != first {
-		t.Errorf("ten lines back up = %d, want the row it started on, %d", back, first)
+	// The same going down: the count runs out of the first file's body and stops
+	// on the second file's header rather than carrying on into its diff.
+	from := doc.PrevStop(doc.PrevStop(header))
+	if got := doc.Leap(from, 10); got != header {
+		t.Errorf("] from row %d = %d, want the next file's header at %d", from, got, header)
+	}
+}
+
+// A row standing where the diff left code out stops the jump too: it is the row
+// that says the code the leap would have crossed was never shown.
+func TestLeapStopsWhereTheDiffLeavesCodeOut(t *testing.T) {
+	doc := Build(newSession(t, contextDiff), nil, nil, LayoutUnified, WithExpansion(expansionOf(nil)))
+
+	// The run under the first hunk, and the first line of the body above it — the
+	// row after the run the diff left out over the hunk's head.
+	below := doc.Expands[1].Row
+	body := doc.NextStop(doc.Expands[0].Row)
+	if doc.Rows[body].Kind != RowLine || below-body <= 1 {
+		t.Fatalf("row %d is a %v with the run at %d — want a hunk body between them", body, doc.Rows[body].Kind, below)
+	}
+	if got := doc.Leap(body, 10); got != below {
+		t.Errorf("] from the first line of the hunk = %d, want the ▾ row under it at %d", got, below)
+	}
+
+	// And going up, from inside the second hunk, to the row over its head.
+	above := doc.Expands[2].Row
+	within := doc.NextStop(doc.NextStop(above))
+	if got := doc.Leap(within, -10); got != above {
+		t.Errorf("[ from row %d = %d, want the ▴ row at %d", within, got, above)
+	}
+}
+
+// The heading over one half of a part-staged file stops a leap the way the file
+// header does. Landing under it having crossed it is the failure the two halves
+// exist to prevent: the same line number means a different line in each.
+func TestLeapStopsAtTheHalfOfAFileItReaches(t *testing.T) {
+	session := newSession(t, twoFileDiff)
+	session.Files = append(session.Files, partStagedFile(t, "notes.txt"))
+	doc := Build(session, nil, nil, LayoutUnified)
+
+	// The working tree's half, which is the one left open.
+	heading := doc.RowOfSide("notes.txt", store.OriginWorktree)
+	if heading < 0 || doc.Rows[heading].Kind != RowSide {
+		t.Fatalf("row %d is not the unstaged half's heading", heading)
+	}
+
+	last := doc.LastStop()
+	if doc.FileAt(last) != doc.FileAt(heading) || last-heading <= 1 {
+		t.Fatalf("row %d is not inside the part-staged file's body below %d", last, heading)
+	}
+	if got := doc.Leap(last, -10); got != heading {
+		t.Errorf("[ from the last line of the file = %d, want its half's heading at %d", got, heading)
+	}
+	if got := doc.Leap(heading, 10); got <= heading {
+		t.Errorf("] from the heading = %d, want it carried on down into the half's own hunks", got)
+	}
+}
+
+// A walkthrough heading stops one too. It is the note explaining the group of
+// files under it, and a jump that crossed it would put the reviewer inside a
+// group whose explanation went by unread.
+func TestLeapStopsAtAWalkthroughHeading(t *testing.T) {
+	groups := Groups{Steps: []store.Step{
+		{Title: "the change", Body: "why it is here", Files: []string{"alpha.go"}},
+		{Title: "the rest", Body: "and the rest of it", Files: []string{"beta.txt", "gamma.md"}},
+	}, Width: 40}
+	doc := Build(newSession(t, threeFileDiff), nil, nil, LayoutUnified, WithGroups(groups))
+
+	heading := doc.Steps[1].Row
+	if doc.Rows[heading].Kind != RowStep {
+		t.Fatalf("row %d is not the second group's heading", heading)
+	}
+
+	// Up from the header of the first file the group introduces — a file's own
+	// header is the nearer boundary from anywhere inside it, so the heading above
+	// it is what the next press reaches.
+	below := doc.RowOfFile(1)
+	if doc.Steps[1].Files[0] != 1 {
+		t.Fatalf("file 1 is not the first the second group introduces: %v", doc.Steps[1].Files)
+	}
+	if got := doc.Leap(below, -10); got != heading {
+		t.Errorf("[ from the file at row %d = %d, want the walkthrough heading at %d", below, got, heading)
+	}
+	// And down into it from the file the group before it ends on.
+	above := doc.PrevStop(heading)
+	if got := doc.Leap(above, 10); got != heading {
+		t.Errorf("] from row %d = %d, want the walkthrough heading at %d", above, got, heading)
 	}
 }
 
 // Counting stops where the document does. A jump longer than what is left lands
 // on the last row there is rather than off the end of the rows.
-func TestStopsAwayStopsAtTheEndsOfTheDocument(t *testing.T) {
+func TestLeapStopsAtTheEndsOfTheDocument(t *testing.T) {
 	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
 
-	if got := doc.StopsAway(doc.FirstStop(), 500); got != doc.LastStop() {
-		t.Errorf("StopsAway past the bottom = %d, want the last stop %d", got, doc.LastStop())
+	if got := doc.Leap(doc.LastStop(), 1); got != doc.LastStop() {
+		t.Errorf("Leap one past the bottom = %d, want it left at %d", got, doc.LastStop())
 	}
-	if got := doc.StopsAway(doc.LastStop(), -500); got != doc.FirstStop() {
-		t.Errorf("StopsAway past the top = %d, want the first stop %d", got, doc.FirstStop())
+	if got := doc.Leap(doc.FirstStop(), -1); got != doc.FirstStop() {
+		t.Errorf("Leap one past the top = %d, want it left at %d", got, doc.FirstStop())
 	}
-	if got := doc.StopsAway(doc.LastStop(), 1); got != doc.LastStop() {
-		t.Errorf("StopsAway one past the bottom = %d, want it left at %d", got, doc.LastStop())
-	}
-	if got := doc.StopsAway(doc.FirstStop(), -1); got != doc.FirstStop() {
-		t.Errorf("StopsAway one past the top = %d, want it left at %d", got, doc.FirstStop())
-	}
-	if got := doc.StopsAway(doc.FirstStop(), 0); got != doc.FirstStop() {
-		t.Errorf("StopsAway of nothing = %d, want it standing still at %d", got, doc.FirstStop())
+	if got := doc.Leap(doc.FirstStop(), 0); got != doc.FirstStop() {
+		t.Errorf("Leap of nothing = %d, want it standing still at %d", got, doc.FirstStop())
 	}
 }
 
 // Whatever the document holds — a walkthrough note, a comment several rows long,
-// a file whose diff is folded away — a jump of n lands exactly where n presses of
-// the arrow would, and never on a row the arrows cannot reach.
-func TestStopsAwayLandsWhereSteppingWould(t *testing.T) {
+// a file whose diff is folded away, a file git holds in both places at once, a
+// run of code the diff left out — a jump of n lands on a row the arrows can
+// reach, no further than n presses of one, and no further than the first file
+// header or hidden run in between. Either layout: the split pairs a hunk's lines
+// up differently but the rows that end a jump are the same rows.
+func TestLeapGoesNoFurtherThanSteppingOrTheFirstThingInTheWay(t *testing.T) {
 	comments := []store.Comment{
-		{ID: "c1", File: "alpha.go", Line: 3, Side: store.SideNew, Body: "first\nsecond\nthird", Author: store.AuthorUser},
+		{ID: "c1", File: "wide.go", Line: 3, Side: store.SideNew, Body: "first\nsecond\nthird", Author: store.AuthorUser},
 		{ID: "c2", File: "beta.txt", Body: "a note on the file as a whole", Author: store.AuthorAgent},
 	}
 	groups := Groups{Steps: []store.Step{
-		{Title: "the change", Body: "why it is here", Files: []string{"alpha.go"}},
+		{Title: "the change", Body: "why it is here", Files: []string{"wide.go"}},
 		{Title: "the rest", Body: "and the rest of it", Files: []string{"beta.txt", "gamma.md"}},
 	}, Width: 40}
-	doc := Build(newSession(t, threeFileDiff), comments, map[string]bool{"gamma.md": true},
-		LayoutUnified, WithGroups(groups), WithCommentWidth(40))
+	session := newSession(t, contextDiff+threeFileDiff)
+	session.Files = append(session.Files, partStagedFile(t, "notes.txt"))
+
+	for _, layout := range []Layout{LayoutUnified, LayoutSplit} {
+		t.Run(layout.String(), func(t *testing.T) {
+			doc := Build(session, comments, map[string]bool{"gamma.md": true},
+				layout, WithGroups(groups), WithPaneWidth(46), WithExpansion(expansionOf(nil)))
+			assertLeapNeverOvershoots(t, doc)
+		})
+	}
+}
+
+// assertLeapNeverOvershoots checks every jump the brackets can make from every
+// row of a document, against what stepping one line at a time reaches.
+func assertLeapNeverOvershoots(t *testing.T, doc Document) {
+	t.Helper()
+	// A document missing any of these would still pass every check below, and
+	// pass it about a diff simpler than the one this is meant to be walking.
+	held := map[RowKind]bool{}
+	for _, r := range doc.Rows {
+		held[r.Kind] = true
+	}
+	for _, kind := range []RowKind{RowFile, RowHunk, RowLine, RowComment, RowStep, RowSide, RowExpand, RowBlank} {
+		if !held[kind] {
+			t.Fatalf("the document holds no %v row, so this is not the diff the test means to walk", kind)
+		}
+	}
 
 	for start := range doc.Len() {
 		if !doc.IsStop(start) {
 			continue
 		}
 		for n := range 20 {
-			down, up := start, start
-			for range n {
-				down, up = doc.NextStop(down), doc.PrevStop(up)
-			}
-			if got := doc.StopsAway(start, n); got != down {
-				t.Fatalf("StopsAway(%d, %d) = %d, want %d", start, n, got, down)
-			}
-			if got := doc.StopsAway(start, -n); got != up {
-				t.Fatalf("StopsAway(%d, %d) = %d, want %d", start, -n, got, up)
-			}
-			if !doc.IsStop(down) || !doc.IsStop(up) {
-				t.Fatalf("stepping %d from %d reached a row the cursor cannot rest on", n, start)
+			for _, dir := range []int{1, -1} {
+				step := doc.NextStop
+				if dir < 0 {
+					step = doc.PrevStop
+				}
+				got := doc.Leap(start, dir*n)
+				if !doc.IsStop(got) {
+					t.Fatalf("Leap(%d, %d) = %d, a row the cursor cannot rest on", start, dir*n, got)
+				}
+
+				// Walk the same way one stop at a time to see what the jump crossed
+				// on its way there: never more than n of them, and never a row that
+				// should have ended it.
+				moved := 0
+				for at := start; at != got; moved++ {
+					next := step(at)
+					if next == at || moved >= n {
+						t.Fatalf("Leap(%d, %d) = %d, which stepping that way never reaches", start, dir*n, got)
+					}
+					if at = next; at != got && doc.endsLeap(at) {
+						t.Fatalf("Leap(%d, %d) = %d, past row %d, which should have ended it",
+							start, dir*n, got, at)
+					}
+				}
+				// Stopping short of n is only allowed where something stopped it.
+				if moved < n && !doc.endsLeap(got) && step(got) != got {
+					t.Fatalf("Leap(%d, %d) = %d, %d lines short with nothing there to stop it",
+						start, dir*n, got, n-moved)
+				}
 			}
 		}
 	}

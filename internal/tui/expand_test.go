@@ -760,6 +760,40 @@ func TestJumpingHunkToHunkStepsPastTheOfferToReadMore(t *testing.T) {
 	}
 }
 
+// The brackets do stop on it. Ten lines that ran past a run of hidden code would
+// put the reviewer below a gap with nothing on screen saying they had crossed
+// one, so the jump ends on the row that says so — and the next press carries on
+// from there.
+func TestTenLinesStopsAtTheOfferToReadMore(t *testing.T) {
+	_, m := expandModel(t)
+
+	// Down the first hunk's body, which is eight lines with the offer under it.
+	press(t, m, "j", "down", "down")
+	if got := m.doc.Rows[m.cursor].Kind; got != RowLine {
+		t.Fatalf("the cursor is on a %v, want the first line of the hunk body", got)
+	}
+
+	press(t, m, "]")
+	if got := m.doc.Rows[m.cursor].Kind; got != RowExpand {
+		t.Fatalf("] landed on a %v, want the ▾ row under the hunk", got)
+	}
+	if m.cursor != m.doc.Expands[1].Row {
+		t.Errorf("] landed on row %d, want the run below the first hunk at %d",
+			m.cursor, m.doc.Expands[1].Row)
+	}
+
+	press(t, m, "]")
+	if got := m.doc.Rows[m.cursor].Kind; got == RowExpand && m.cursor == m.doc.Expands[1].Row {
+		t.Error("a second ] stayed on the row it had stopped on")
+	}
+
+	press(t, m, "[")
+	if m.cursor != m.doc.Expands[1].Row {
+		t.Errorf("[ back left the cursor at row %d, want the ▾ row at %d it came from",
+			m.cursor, m.doc.Expands[1].Row)
+	}
+}
+
 // A hunk that only adds lines covers none on the old side, and one that only
 // removes them covers none on the new — so the numbers git prints are one short
 // of where the run either side of it starts, and the two sides have drifted by

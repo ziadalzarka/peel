@@ -96,8 +96,11 @@ type Row struct {
 	// Expand indexes into Document.Expands on a row offering to read in code the
 	// diff left out, and is -1 on every other row.
 	Expand int
-	Text   string
-	Head   bool
+	// Noted marks a line a saved comment was written about — every line of the
+	// run, not only the last one the note itself hangs off.
+	Noted bool
+	Text  string
+	Head  bool
 }
 
 // HunkRef is one addressable hunk within the document.
@@ -173,6 +176,11 @@ type StepRef struct {
 // moves the code it is about.
 type Draft struct {
 	anchor
+	// Editing is the ID of the comment being rewritten, and empty when the note
+	// is a new one. The editor then stands in that comment's place rather than
+	// under it: what is being written is the note itself, and drawing both would
+	// put two versions of it on screen at once.
+	Editing string
 	// Height is how many rows the editor needs. Zero means nothing is being
 	// written, which is what leaves the document with no draft in it.
 	Height int
@@ -185,9 +193,9 @@ type buildConfig struct {
 	// sides overrides the default fold of a file's index side, by path. A path
 	// with no entry takes the default.
 	sides map[string]bool
-	// commentWidth is the room a comment's text has beside its bar and tag.
-	// Zero leaves a comment's lines as they were written.
-	commentWidth int
+	// pane is the room the diff has on screen, which is what a comment is
+	// wrapped to. Zero leaves a comment's lines as they were written.
+	pane int
 	// expand is the unchanged code read in around the hunks, and the files it
 	// comes out of. Its zero value offers nothing, which is what leaves a diff
 	// peel has no copy of the files for exactly as git printed it.
@@ -206,10 +214,11 @@ func WithSideFolds(folds map[string]bool) BuildOption {
 	return func(c *buildConfig) { c.sides = folds }
 }
 
-// WithCommentWidth wraps a comment's text to the room it has, so a long line
-// runs on to the next row instead of off the edge of the pane.
-func WithCommentWidth(w int) BuildOption {
-	return func(c *buildConfig) { c.commentWidth = w }
+// WithPaneWidth gives the layout the room the diff has, so a comment too long
+// for it runs on to the next row instead of off the edge — wrapped to the half
+// it hangs under, where the split layout hangs it under one.
+func WithPaneWidth(w int) BuildOption {
+	return func(c *buildConfig) { c.pane = w }
 }
 
 // WithExpansion draws in the unchanged code a review has asked to see around its
@@ -244,9 +253,9 @@ type Document struct {
 	// DraftRow is the first row of the editor, and -1 when nothing is being
 	// written. The rest of the editor follows it, one row per line.
 	DraftRow int
-	// commentWidth is the room a comment's text is wrapped to, before its tag
-	// is taken off the first row.
-	commentWidth int
+	// pane is the room the diff has on screen, which a comment is wrapped to
+	// before its tag is taken off the first row.
+	pane int
 	// expand is the code read in around the hunks, kept so the layout can be
 	// worked out one side at a time.
 	expand Expansion
@@ -259,7 +268,7 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 		opt(&cfg)
 	}
 	doc := Document{Comments: comments, Layout: layout, Draft: cfg.draft, DraftRow: -1,
-		commentWidth: cfg.commentWidth, expand: cfg.expand}
+		pane: cfg.pane, expand: cfg.expand}
 	if s == nil {
 		return doc
 	}
@@ -302,29 +311,67 @@ func (d *Document) addDraft(file, hunk int, here bool) {
 	}
 }
 
+// editorOn reports that the editor is open on this comment, which is drawn as
+// the editor standing where it stands: a note being rewritten is one note, and
+// its old text under the editor holding the new would read as two.
+func (d Document) editorOn(c store.Comment) bool {
+	return d.Draft.Editing != "" && d.Draft.Editing == c.ID && d.Draft.Height > 0 && d.DraftRow < 0
+}
+
+// draftPlacedByAnchor reports that where the editor goes is worked out from the
+// anchor the note will attach to.
+//
+// Every draft but one: an editor opened on a note already in the review goes
+// where that note is drawn instead, so a note peel could not place — one whose
+// code has been rewritten away — is still rewritten where the reviewer found it,
+// rather than on whatever line has since taken its number.
+func (d Document) draftPlacedByAnchor() bool { return d.Draft.Editing == "" }
+
 // draftOnFile reports that the comment being written is a note on the file as a
 // whole, which is where a draft with no line of its own goes.
 func (d Document) draftOnFile(path string) bool {
-	return d.Draft.path == path && d.Draft.line <= 0 && d.Draft.hunk == ""
+	return d.draftPlacedByAnchor() && d.Draft.path == path && d.Draft.line <= 0 && d.Draft.hunk == ""
 }
 
 // draftOnHunk reports that the comment being written is about a hunk that has no
 // line to hang it on.
 func (d Document) draftOnHunk(ref HunkRef) bool {
-	return d.Draft.path == ref.Path && d.Draft.line <= 0 && d.Draft.hunk == ref.ID.String()
+	return d.draftPlacedByAnchor() && d.Draft.path == ref.Path && d.Draft.line <= 0 &&
+		d.Draft.hunk == ref.ID.String()
 }
 
-// draftOnLine reports that the comment being written anchors to either line of a
+// draftOnLine reports that the comment being written hangs off either line of a
 // displayed pair.
 func (d Document) draftOnLine(ref HunkRef, pair linePair) bool {
+	if !d.draftPlacedByAnchor() {
+		return false
+	}
 	if d.Draft.path != ref.Path || d.Draft.line <= 0 || !sameOrigin(d.Draft.origin, ref) {
 		return false
 	}
+	return pairHolds(ref, pair, d.Draft.side, hangsOn(d.Draft.line, d.Draft.end))
+}
+
+// hangsOn is the line a note hangs off: the last line of the run it covers, so
+// the note sits under the whole of what it is about rather than partway down it,
+// with the rest of the run reading as code nobody wrote about.
+//
+// A note on a single line is a run of one, and hangs off that line.
+func hangsOn(line, end int) int {
+	if end > line {
+		return end
+	}
+	return line
+}
+
+// pairHolds reports that a displayed pair shows the given line of the given
+// side.
+func pairHolds(ref HunkRef, pair linePair, side store.Side, line int) bool {
 	for _, i := range []int{pair.left, pair.right} {
 		if i < 0 || i >= len(ref.Hunk.Lines) {
 			continue
 		}
-		if anchors(ref.Hunk.Lines[i], d.Draft.side, d.Draft.line) {
+		if anchors(ref.Hunk.Lines[i], side, line) {
 			return true
 		}
 	}
@@ -372,6 +419,10 @@ func (d *Document) add(r Row) { d.Rows = append(d.Rows, r) }
 
 func (d *Document) addComments(file, hunk int, ids []int) {
 	for _, ci := range ids {
+		if d.editorOn(d.Comments[ci]) {
+			d.addDraft(file, hunk, true)
+			continue
+		}
 		row := Row{
 			Kind:    RowComment,
 			File:    file,
@@ -383,7 +434,7 @@ func (d *Document) addComments(file, hunk int, ids []int) {
 			Side:    -1,
 			Head:    true,
 		}
-		for _, text := range d.wrapComment(d.Comments[ci]) {
+		for _, text := range d.wrapComment(d.Comments[ci], hunk >= 0) {
 			row.Text = text
 			d.add(row)
 			row.Head = false
@@ -397,13 +448,16 @@ func (d *Document) addComments(file, hunk int, ids []int) {
 // hold runs on to the next row.
 //
 // Every row is wrapped to the same width: the tag naming the author takes room
-// on the first row, and the renderer indents the rest below it to match.
-func (d Document) wrapComment(c store.Comment) []string {
+// on the first row, and the renderer indents the rest below it to match. online
+// says the note hangs off a line of a hunk rather than off a file, which is what
+// decides whether the split layout gives it half the pane or all of it.
+func (d Document) wrapComment(c store.Comment, online bool) []string {
 	lines := strings.Split(c.Body, "\n")
-	if d.commentWidth <= 0 {
+	if d.pane <= 0 {
 		return lines
 	}
-	width := max(d.commentWidth-ansi.StringWidth(commentTag(c)), minCommentWidth)
+	room := noteHalf(d.Layout, online, c.Side).room(d.pane)
+	width := max(room-ansi.StringWidth(commentTag(c)), minCommentWidth)
 	var out []string
 	for _, line := range lines {
 		out = append(out, strings.Split(ansi.Wrap(expandTabs(line), width, " -"), "\n")...)
@@ -528,7 +582,8 @@ func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *co
 		// code it is about to show will be.
 		d.addExpand(fi, gaps, i, count, gaps.above)
 		for _, pair := range pairLines(shown.Lines, d.Layout) {
-			d.add(Row{Kind: RowLine, File: fi, Hunk: hi, Left: pair.left, Right: pair.right, Step: -1, Side: -1, Expand: -1})
+			d.add(Row{Kind: RowLine, File: fi, Hunk: hi, Left: pair.left, Right: pair.right, Step: -1, Side: -1, Expand: -1,
+				Noted: idx.covers(d.Hunks[hi], pair)})
 			d.addComments(fi, hi, idx.takeLine(d.Hunks[hi], pair))
 			d.addDraft(fi, hi, d.draftOnLine(d.Hunks[hi], pair))
 		}
@@ -764,20 +819,18 @@ func (d Document) PrevStop(from int) int {
 	return from
 }
 
-// StopsAway returns the cursor position n stops from row, down the document for
-// a positive n and up it for a negative one.
+// Leap returns where a jump of n lines from row lands: n cursor positions down
+// the document for a positive n and up it for a negative one, or the first row
+// that ends a leap on the way there.
 //
-// It counts cursor positions rather than rows, so a jump of ten is ten presses
-// of the arrow and lands where they would: the blank between two files, a folded
-// step's explanation and the lines a comment runs on to are passed over without
-// being counted, since the cursor never rests on one.
+// It counts cursor positions rather than rows, so a jump of ten is at most ten
+// presses of the arrow and lands where they would: the blank between two files,
+// a folded step's explanation and the lines a comment runs on to are passed over
+// without being counted, since the cursor never rests on one.
 //
-// Nothing stops it at a file. A count that runs past the end of the file it
-// started in carries on into the header of the next one and down into its diff,
-// which is what makes the jump a distance rather than a place. The ends of the
-// document do stop it: past them there is nothing left to count, and it returns
-// the last position it reached.
-func (d Document) StopsAway(row, n int) int {
+// The ends of the document stop it the same way a heading does: past them there
+// is nothing left to count, and it returns the last position it reached.
+func (d Document) Leap(row, n int) int {
 	step := d.NextStop
 	if n < 0 {
 		step, n = d.PrevStop, -n
@@ -788,8 +841,37 @@ func (d Document) StopsAway(row, n int) int {
 			break
 		}
 		row = next
+		if d.endsLeap(row) {
+			break
+		}
 	}
 	return row
+}
+
+// endsLeap reports that a row stops a leap short of its full distance: anything
+// that heads what comes under it — a file, one of the two halves of a file git
+// holds in both places at once, a walkthrough group — or a row standing where
+// the diff left code out.
+//
+// They are the places the reading changes rather than continues, and the ten
+// lines are worth less than arriving at one of them. A leap that ran past a
+// heading would land under something whose name went by on the way, which is
+// where a review goes wrong quietly: the index's half of a file read as the
+// working tree's is a line number pointing at the wrong line. One that ran past
+// hidden code would put the reviewer below a gap they were given a row to open,
+// the row being what says the code the jump crossed was never shown. Landing on
+// any of them leaves the next press to carry on past it, which is the same jump
+// split where something happened.
+func (d Document) endsLeap(row int) bool {
+	if row < 0 || row >= len(d.Rows) {
+		return false
+	}
+	switch d.Rows[row].Kind {
+	case RowFile, RowSide, RowStep, RowExpand:
+		return true
+	default:
+		return false
+	}
 }
 
 // StopBetween returns a cursor position within the inclusive row range, or -1
@@ -1170,7 +1252,7 @@ func (x *commentIndex) takeFile(path string) []int {
 	return x.take(path, func(c store.Comment) bool { return c.Line <= 0 })
 }
 
-// takeLine returns comments anchored to either line of a displayed pair.
+// takeLine returns the comments that hang off either line of a displayed pair.
 //
 // A note whose code is gone claims no line at all. Its number still names a line
 // — some line, whatever moved into the gap — and hanging the note there would be
@@ -1181,16 +1263,44 @@ func (x *commentIndex) takeLine(ref HunkRef, pair linePair) []int {
 		if c.Line <= 0 || c.Outdated || !sameOrigin(c.Origin, ref) {
 			return false
 		}
-		for _, i := range []int{pair.left, pair.right} {
-			if i < 0 || i >= len(ref.Hunk.Lines) {
-				continue
-			}
-			if anchors(ref.Hunk.Lines[i], c.Side, c.Line) {
-				return true
-			}
-		}
-		return false
+		return pairHolds(ref, pair, c.Side, hangsOn(c.Line, c.EndLine))
 	})
+}
+
+// covers reports that some saved note was written about this displayed pair.
+//
+// It looks at the whole of every note's run rather than the line the note hangs
+// off, so the reviewer can see how far a note reaches while reading the code —
+// the tag under the run says where it starts, but only once you have got there.
+// Nothing is claimed here: a note bars all of its lines and is still drawn once,
+// at its anchor.
+func (x *commentIndex) covers(ref HunkRef, pair linePair) bool {
+	for _, i := range x.byFile[ref.Path] {
+		c := x.comments[i]
+		if c.Line <= 0 || c.Outdated || !sameOrigin(c.Origin, ref) {
+			continue
+		}
+		if pairWithin(ref, pair, c) {
+			return true
+		}
+	}
+	return false
+}
+
+// pairWithin reports that a displayed pair shows a line inside a note's run.
+//
+// A run of one is a note on a single line, and that line is inside it.
+func pairWithin(ref HunkRef, pair linePair, c store.Comment) bool {
+	for _, i := range []int{pair.left, pair.right} {
+		if i < 0 || i >= len(ref.Hunk.Lines) {
+			continue
+		}
+		n := lineOn(ref.Hunk.Lines[i], c.Side)
+		if n >= c.Line && n <= hangsOn(c.Line, c.EndLine) {
+			return true
+		}
+	}
+	return false
 }
 
 // sameOrigin reports that a note numbered against one of the two diffs belongs
@@ -1225,8 +1335,14 @@ func (x *commentIndex) take(path string, match func(store.Comment) bool) []int {
 
 // anchors reports that a note on the given line number and side belongs to l.
 func anchors(l git.Line, side store.Side, line int) bool {
+	return lineOn(l, side) == line
+}
+
+// lineOn is a line's number on one side of the diff, and 0 where that side does
+// not hold it at all.
+func lineOn(l git.Line, side store.Side) int {
 	if side == store.SideOld {
-		return l.OldLine == line
+		return l.OldLine
 	}
-	return l.NewLine == line
+	return l.NewLine
 }

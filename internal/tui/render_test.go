@@ -645,3 +645,82 @@ func TestRenderExpandRowCountsOneLineAsOne(t *testing.T) {
 		t.Errorf("row = %q, want %q", got, want)
 	}
 }
+
+// A note in the split layout hangs under the half of the row that holds the line
+// it was written on, so it sits below that code rather than beside it.
+func TestRenderSplitHangsANoteUnderTheCodeItIsAbout(t *testing.T) {
+	comments := []store.Comment{
+		{ID: "arriving", File: "alpha.go", Line: 4, Side: store.SideNew, Body: "about the new line", Author: store.AuthorUser},
+		{ID: "leaving", File: "alpha.go", Line: 3, Side: store.SideOld, Body: "about the line it replaced", Author: store.AuthorUser},
+		{ID: "whole", File: "alpha.go", Body: "about the file", Author: store.AuthorUser},
+	}
+	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutSplit, WithPaneWidth(80))
+	r := plainRenderer(80)
+
+	for _, tc := range []struct {
+		id   string
+		want string
+	}{
+		{id: "arriving", want: "new"},
+		{id: "leaving", want: "old"},
+		// A note about the file as a whole is about neither side, and hangs under
+		// the header it was written on, which rules across the pane.
+		{id: "whole", want: "pane"},
+	} {
+		row := doc.RowOfComment(tc.id)
+		if row < 0 {
+			t.Fatalf("comment %s was not placed", tc.id)
+		}
+		if got := noteColumn(t, r.Row(doc, row, RowState{})); got != tc.want {
+			t.Errorf("the note %s is drawn on the %s side, want the %s", tc.id, got, tc.want)
+		}
+	}
+}
+
+// noteColumn says where in a row a note's bar stands: left of the divider, right
+// of it, or across a row that has no divider at all.
+func noteColumn(t *testing.T, row string) string {
+	t.Helper()
+	bar := strings.Index(row, "┃")
+	if bar < 0 {
+		t.Fatalf("row has no comment bar: %q", row)
+	}
+	switch rule := strings.Index(row, "│"); {
+	case rule < 0:
+		return "pane"
+	case bar < rule:
+		return "old"
+	default:
+		return "new"
+	}
+}
+
+// A note hung under one half has that half's room and no more, so a long one
+// wraps inside its column instead of being cut off at the edge of it.
+func TestRenderSplitWrapsANoteToTheHalfItHangsUnder(t *testing.T) {
+	body := "this note is far too long to stand in one half of an eighty column pane, so it has to run on"
+	comments := []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 4, Side: store.SideNew, Body: body, Author: store.AuthorUser},
+	}
+	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutSplit, WithPaneWidth(80))
+	r := plainRenderer(80)
+
+	head := doc.RowOfComment("c1")
+	if head < 0 {
+		t.Fatal("comment was not placed")
+	}
+	rows := 0
+	for i := head; i < len(doc.Rows) && doc.Rows[i].Kind == RowComment; i++ {
+		rows++
+		got := r.Row(doc, i, RowState{})
+		if strings.Contains(got, "…") {
+			t.Errorf("row %d ran past its half and was cut off: %q", i, got)
+		}
+		if noteColumn(t, got) != "new" {
+			t.Errorf("row %d left the half the note hangs under: %q", i, got)
+		}
+	}
+	if rows < 3 {
+		t.Errorf("the note took %d rows, want it wrapped to the half across several", rows)
+	}
+}

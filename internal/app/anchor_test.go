@@ -600,6 +600,47 @@ func TestRelocateCarriesBothEndsOfARun(t *testing.T) {
 	}
 }
 
+// A run is a claim about a continuous stretch of code, so code arriving between
+// its ends is not the note growing to cover it. Both numbers stay findable while
+// what sits between them is no longer what was read.
+func TestARunWithCodeInsertedInsideItIsOutdated(t *testing.T) {
+	ctx := context.Background()
+	a, repo := anchorRepo(t, "a\nb\nc\nd\ne\n", "a\nb\nc\nd\ne\n")
+	s, _ := a.LoadWorkingTree(ctx)
+	runNote(t, a, s, 3, 4, "c and d belong together")
+
+	// c and d are both still there, with something new between them.
+	repo.Write("svc.go", "a\nb\nc\nBETWEEN\nd\ne\n")
+	s, _ = a.LoadWorkingTree(ctx)
+
+	all, _ := a.Comments.List(store.Filter{})
+	got := a.Relocate(ctx, s, all)
+	if !got[0].Outdated {
+		t.Error("the note reads as current, and now covers a line nobody wrote about")
+	}
+	if got[0].Line != 3 || got[0].EndLine != 4 {
+		t.Errorf("note covers %d-%d, want the 3-4 it was written on", got[0].Line, got[0].EndLine)
+	}
+}
+
+// The same the other way round: a run with a line taken out of the middle is
+// shorter than the one that was read.
+func TestARunWithALineTakenOutOfItIsOutdated(t *testing.T) {
+	ctx := context.Background()
+	a, repo := anchorRepo(t, "a\nb\nc\nd\ne\nf\n", "a\nb\nc\nd\ne\nf\n")
+	s, _ := a.LoadWorkingTree(ctx)
+	runNote(t, a, s, 3, 5, "c through e")
+
+	repo.Write("svc.go", "a\nb\nc\ne\nf\n")
+	s, _ = a.LoadWorkingTree(ctx)
+
+	all, _ := a.Comments.List(store.Filter{})
+	got := a.Relocate(ctx, s, all)
+	if !got[0].Outdated {
+		t.Error("the note reads as current, with a line out of the middle of what it covers")
+	}
+}
+
 // Half a run is not a run. A note whose far end has been rewritten covers a
 // stretch of code nobody read, and saying so is the only true thing left.
 func TestARunWithOneEndRewrittenIsOutdated(t *testing.T) {

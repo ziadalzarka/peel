@@ -94,6 +94,10 @@ type Model struct {
 
 	input   textarea.Model
 	pending anchor
+	// editing is the ID of the note the editor was opened on, and empty when
+	// what is being written is a new one. It is what makes `enter` rewrite that
+	// note rather than leave a second one beside it.
+	editing string
 	// ask is the question the footer is putting to the reviewer, and what to do
 	// if they say yes. It is set only in modeConfirm.
 	ask *confirm
@@ -479,9 +483,9 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 	}
 }
 
-// leapLines is how far the brackets move the cursor: far enough to cross a hunk
-// in one press, short enough to keep the row it lands on in sight of the one it
-// left.
+// leapLines is how far the brackets move the cursor when nothing on the way
+// stops them sooner: far enough to cross a hunk in one press, short enough to
+// keep the row it lands on in sight of the one it left.
 const leapLines = 10
 
 func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
@@ -508,9 +512,9 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 	case "up":
 		m.moveTo(m.doc.PrevStop(m.cursor))
 	case "]":
-		m.moveTo(m.doc.StopsAway(m.cursor, leapLines))
+		m.moveTo(m.doc.Leap(m.cursor, leapLines))
 	case "[":
-		m.moveTo(m.doc.StopsAway(m.cursor, -leapLines))
+		m.moveTo(m.doc.Leap(m.cursor, -leapLines))
 	case "shift+down":
 		m.mark(1)
 	case "shift+up":
@@ -555,6 +559,8 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 		return m.unstageEverything()
 	case "c":
 		m.openComment()
+	case "e":
+		m.editComment()
 	case "x":
 		return m.toggleResolved()
 	case "D":
@@ -694,8 +700,12 @@ func (m *Model) confirmKey(msg tea.KeyMsg) tea.Cmd {
 func (m *Model) commentKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "esc":
+		editing := m.editing != ""
 		m.closeComment()
 		m.status = "comment cancelled"
+		if editing {
+			m.status = "edit cancelled — the comment is as it was"
+		}
 		return nil
 	case "enter":
 		return m.submitComment()
@@ -709,13 +719,19 @@ func (m *Model) commentKey(msg tea.KeyMsg) tea.Cmd {
 // fitDraft sizes the editor to what has been written, so the diff parts by
 // exactly as much as the comment needs and closes back up as lines are deleted.
 func (m *Model) fitDraft() {
-	want := min(max(m.input.LineCount(), draftMinHeight), draftMaxHeight)
+	want := m.draftHeight()
 	if want == m.input.Height() {
 		return
 	}
 	m.input.SetHeight(want)
 	m.relayout()
 	m.revealDraft()
+}
+
+// draftHeight is the room what is written needs, within what the editor is
+// allowed to take from the diff.
+func (m *Model) draftHeight() int {
+	return min(max(m.input.LineCount(), draftMinHeight), draftMaxHeight)
 }
 
 // groups is the walkthrough the document is laid out under. It stays empty until
@@ -1111,7 +1127,7 @@ func (m *Model) reopenStagedChanged() []string {
 // better place to be than an arbitrary one.
 func (m *Model) advanceFrom(path string) {
 	if next := m.nextToReview(path); next >= 0 {
-		m.showFile(m.doc.topOf(m.doc.RowOfFile(next)))
+		m.revealFile(m.doc.topOf(m.doc.RowOfFile(next)))
 		return
 	}
 	m.restoreCursor(path)
@@ -1204,27 +1220,67 @@ func (m *Model) openComment() {
 		m.status = "nothing to comment on here"
 		return
 	}
-	m.pending = got
+	m.openEditor(got, "", "")
+	m.status = "commenting on " + got.location()
+}
+
+// editComment opens the editor on the note at the cursor, holding what it says,
+// so a note is corrected where it stands rather than deleted and written again.
+//
+// Only the reviewer's own. An agent's note is signed by the agent, and rewriting
+// one would put the reviewer's words behind that name — where `C` would then
+// leave them out of the review it hands over, and `X` would clear them with the
+// rest of the agent's pass. What to do with a note of the agent's is answer it,
+// resolve it or delete it.
+func (m *Model) editComment() {
+	c, ok := m.commentAtCursor("edit")
+	if !ok {
+		return
+	}
+	if c.Author == store.AuthorAgent {
+		m.status = "that note is the agent's — x resolves it, D deletes it"
+		return
+	}
+	m.openEditor(anchor{path: c.File, line: c.Line, end: c.EndLine, side: sideOr(c.Side),
+		origin: c.Origin, hunk: c.Hunk}, c.ID, c.Body)
+	m.status = "editing the comment on " + c.Location()
+}
+
+// openEditor puts the editor up at an anchor, holding the text it starts from:
+// nothing for a new note, what the note says for one being rewritten.
+func (m *Model) openEditor(at anchor, editing, body string) {
+	m.pending, m.editing = at, editing
 	m.mode = modeComment
 	m.input.Reset()
 	m.input.SetWidth(m.draftWidth())
-	m.input.SetHeight(draftMinHeight)
+	m.input.SetValue(body)
+	m.input.SetHeight(m.draftHeight())
 	m.input.Focus()
-	m.status = "commenting on " + got.location()
 
 	m.relayout()
 	m.revealDraft()
 }
 
 // closeComment puts the editor away, leaving the cursor on the code it was
-// opened from.
+// opened from — or, for an editor opened on a note that has stood in its place
+// since, back on the note itself, which is where the cursor was when `e` was
+// pressed.
 func (m *Model) closeComment() {
+	editing := m.editing
 	m.input.Blur()
 	m.mode = modeBrowse
+	m.editing = ""
 	// The run stays marked while the note about it is written, and is let go of
 	// with the editor: it was marked to write that note, saved or not.
 	m.sel = nil
 	m.relayout()
+
+	if editing == "" {
+		return
+	}
+	if row := m.doc.RowOfComment(editing); row >= 0 {
+		m.moveTo(row)
+	}
 }
 
 // draft is the comment being written, or the zero draft when nothing is.
@@ -1232,18 +1288,19 @@ func (m *Model) draft() Draft {
 	if m.mode != modeComment {
 		return Draft{}
 	}
-	return Draft{anchor: m.pending, Height: m.input.Height()}
+	return Draft{anchor: m.pending, Editing: m.editing, Height: m.input.Height()}
 }
 
 // draftWidth is the room the editor has, leaving the indent that lines it up
-// with the comment bar.
-func (m *Model) draftWidth() int { return max(m.diffWidth()-commentIndent, 20) }
-
-// commentWidth is the room a saved comment's text has: the indent it shares
-// with the editor, less the bar and the space after it.
-func (m *Model) commentWidth() int {
-	return max(m.diffWidth()-commentIndent-2, minCommentWidth)
+// with the comment bar — and, where the note being written will hang under one
+// half of a split row, leaving the other half alone.
+func (m *Model) draftWidth() int {
+	return max(noteHalf(m.layout, m.pending.line > 0, m.pending.side).editorRoom(m.diffWidth()), minDraftWidth)
 }
+
+// minDraftWidth keeps the editor usable in a pane too narrow to line it up with
+// the comment it is being written as.
+const minDraftWidth = 20
 
 // revealDraft scrolls the editor into view without taking the cursor off the
 // code the comment is about.
@@ -1274,7 +1331,8 @@ func (m *Model) anchorAt() (anchor, bool) {
 		return got, true
 	}
 	if c, ok := m.doc.CommentAt(m.cursor); ok {
-		return anchor{path: c.File, line: c.Line, side: sideOr(c.Side), origin: c.Origin, hunk: c.Hunk}, true
+		return anchor{path: c.File, line: c.Line, end: c.EndLine, side: sideOr(c.Side),
+			origin: c.Origin, hunk: c.Hunk}, true
 	}
 
 	target := m.doc.TargetAt(m.cursor)
@@ -1298,14 +1356,17 @@ func (m *Model) anchorAt() (anchor, bool) {
 	}
 }
 
-// markedAnchor is where a note on the marked run attaches: the first line of
-// the run, with the last line of it recorded alongside.
+// markedAnchor is where a note on the marked run attaches: the two ends of the
+// run, counted on one side of the diff.
 //
-// A note is about one side of the diff — the code arriving or the code leaving,
-// not both — so the far end is the last line of the run that has a number on the
-// side the run started on. A run marked from an addition passes over the
-// removals inside it: the old file's numbers are not the numbers this note is
-// counted in.
+// A note is about one side — the code arriving or the code leaving, not both —
+// and the side is the one the run reaches rather than the one it started on.
+// Marking a removal and the lines that replaced it is reading a replacement, and
+// what a note on a replacement is about is the code that arrived.
+//
+// The ends are then the first and last numbers the run has on that side, so a
+// run passes over the lines the other side owns instead of being cut short by
+// them.
 //
 // A run the reviewer has walked back to a single line is no run at all, and
 // falls through to the plain line anchor the cursor already resolves to.
@@ -1319,7 +1380,28 @@ func (m *Model) markedAnchor() (anchor, bool) {
 		return anchor{}, false
 	}
 
+	marked := m.markedLines(lo, hi)
 	got := lineAnchor(ref, ref.Hunk.Lines[index])
+	got.side = runSide(marked)
+
+	got.line = 0
+	for _, l := range marked {
+		n := lineNumberOn(l, got.side)
+		if n <= 0 {
+			continue
+		}
+		if got.line == 0 || n < got.line {
+			got.line = n
+		}
+		got.end = max(got.end, n)
+	}
+	return got, true
+}
+
+// markedLines is the diff's own lines under a run of rows, in the order they are
+// read.
+func (m *Model) markedLines(lo, hi int) []git.Line {
+	var out []git.Line
 	for row := lo; row <= hi; row++ {
 		r := m.doc.Rows[row]
 		if r.Kind != RowLine || r.Hunk < 0 || r.Hunk >= len(m.doc.Hunks) {
@@ -1327,13 +1409,29 @@ func (m *Model) markedAnchor() (anchor, bool) {
 		}
 		lines := m.doc.Hunks[r.Hunk].Hunk.Lines
 		for _, i := range []int{r.Left, r.Right} {
-			if i < 0 || i >= len(lines) {
-				continue
+			if i >= 0 && i < len(lines) {
+				out = append(out, lines[i])
 			}
-			got.end = max(got.end, lineNumberOn(lines[i], got.side))
 		}
 	}
-	return got, true
+	return out
+}
+
+// runSide is the side of the diff a run is counted on: the new one as soon as
+// the run takes in a line that is arriving, the old one when all it holds of the
+// change is code leaving, and the new one for a run of untouched code, whose
+// numbers are the current file's.
+func runSide(lines []git.Line) store.Side {
+	side := store.SideNew
+	for _, l := range lines {
+		switch l.Kind {
+		case git.LineAdded:
+			return store.SideNew
+		case git.LineRemoved:
+			side = store.SideOld
+		}
+	}
+	return side
 }
 
 // lineNumberOn is a line's number on one side of the diff, and zero where that
@@ -1381,8 +1479,11 @@ func sideOr(s store.Side) store.Side {
 
 func (m *Model) submitComment() tea.Cmd {
 	body := strings.TrimSpace(m.input.Value())
-	got := m.pending
+	got, editing := m.pending, m.editing
 	m.closeComment()
+	if editing != "" {
+		return m.saveEdit(editing, body)
+	}
 	if body == "" {
 		m.status = "empty comment discarded"
 		return nil
@@ -1411,6 +1512,36 @@ func (m *Model) submitComment() tea.Cmd {
 	}, func(ctx context.Context) error {
 		_, err := m.backend.AddComment(ctx, comment)
 		return err
+	})
+}
+
+// saveEdit stores what a note says now. Where it is anchored is untouched: the
+// note is about the same code it always was, and the reviewer was correcting the
+// words rather than pointing it somewhere else.
+//
+// Emptying the editor is not how a note is deleted. `D` is that key, and it
+// says which note it is about to remove first, where an editor cleared with
+// ctrl+u would take one away silently.
+func (m *Model) saveEdit(id, body string) tea.Cmd {
+	c, ok := commentByID(m.comments, id)
+	if !ok {
+		m.status = "that comment is gone"
+		return nil
+	}
+	if body == "" {
+		m.status = "an empty comment is not a way to delete one — D does that"
+		return nil
+	}
+	if body == c.Body {
+		m.status = "comment unchanged"
+		return nil
+	}
+	return m.apply(func() {
+		m.comments = withBody(m.comments, id, body)
+		m.status = "edited the comment on " + c.Location()
+		m.relayout()
+	}, func(context.Context) error {
+		return m.backend.EditComment(id, body)
 	})
 }
 
@@ -1800,7 +1931,7 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 		// A question waiting for an answer goes the same way: what it was about to
 		// delete was read before the reload.
 		m.input.Blur()
-		m.mode, m.ask = modeBrowse, nil
+		m.mode, m.ask, m.editing = modeBrowse, nil, ""
 	}
 	// The narrative is kept: it is the notes the reviewer is reading, and
 	// dropping it would reorder the diff underneath them every time they staged
@@ -1938,7 +2069,7 @@ func (m *Model) currentPath() string {
 func (m *Model) rebuild() {
 	m.doc = Build(m.session, m.visibleComments(), m.collapsed, m.layout,
 		WithGroups(m.groups()), WithDraft(m.draft()), WithSideFolds(m.sideFolds),
-		WithCommentWidth(m.commentWidth()), WithExpansion(m.expansion()))
+		WithPaneWidth(m.diffWidth()), WithExpansion(m.expansion()))
 	m.fileRows = fileTree(m.doc.Files)
 	if m.cursor >= m.doc.Len() {
 		m.cursor = m.doc.LastStop()
@@ -2066,6 +2197,35 @@ func (m *Model) showFile(row int) {
 	m.clampTop()
 	m.ensureFileVisible()
 }
+
+// revealFile puts the cursor on the top of the file the pass has moved on to
+// after folding or staging the one before it, and moves the window only when
+// that row is off screen. Folding a file pulls what is below it up, so the file
+// the pass carries on with is often already in front of the reviewer — jumping
+// it to the first row would throw away the diff they are still looking at to
+// show them something they can already see.
+//
+// When the window does have to move it stops as soon as the file's first
+// revealLines rows are on screen, rather than carrying on until its header is at
+// the top. The file arrives at the bottom of the window with what came before it
+// still above, which is how it would have arrived had the reviewer scrolled
+// there.
+func (m *Model) revealFile(row int) {
+	if row < 0 || row >= m.doc.Len() {
+		return
+	}
+	m.cursor = row
+	if height := m.bodyHeight(); row < m.top || row >= m.top+height {
+		m.top = row - max(height-revealLines, 0)
+	}
+	m.clampTop()
+	m.ensureFileVisible()
+}
+
+// revealLines is how much of a file revealFile brings on screen when the window
+// has to move: enough to read the header and start on the first hunk, and few
+// enough that the file lands at the bottom of the window rather than filling it.
+const revealLines = 12
 
 func (m *Model) moveTo(row int) {
 	if row < 0 || row >= m.doc.Len() {

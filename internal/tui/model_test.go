@@ -216,29 +216,29 @@ func TestArrowKeysMoveTheCursorOneLineAtATime(t *testing.T) {
 	}
 }
 
-// The brackets move ten lines, which is ten presses of the arrow and not a place
-// in the file: the count runs on through the file below rather than stopping at
-// its last line.
-func TestBracketsMoveTenLinesThroughTheFilesBelow(t *testing.T) {
+// The brackets move up to ten lines and stop at the header of the file below
+// rather than counting on past it, so a file is never entered partway down with
+// its name having gone by on the way.
+func TestBracketsStopAtTheFileTheyReach(t *testing.T) {
 	m := newModel(t, newFakeBackend(newSession(t, threeFileDiff)), WithSize(100, 12))
 
 	start := m.cursor
 	press(t, m, "]")
 	leapt := m.cursor
 
-	// Ten presses of the arrow, counted out here rather than taken from the
-	// constant, so the distance itself is what is being checked.
+	// Ten presses of the arrow from the same row, counted out here rather than
+	// taken from the constant, so what the jump gave up is what is being checked.
 	stepped := newModel(t, newFakeBackend(newSession(t, threeFileDiff)), WithSize(100, 12))
 	for range 10 {
 		press(t, stepped, "down")
 	}
-	if leapt != stepped.cursor {
-		t.Fatalf("] left the cursor at row %d, want %d — where ten presses of down reach",
-			leapt, stepped.cursor)
+	if leapt >= stepped.cursor {
+		t.Fatalf("] left the cursor at row %d, at or past the %d ten presses of down reach — "+
+			"want it stopped short at the file in between", leapt, stepped.cursor)
 	}
-	if m.doc.FileAt(leapt) == m.doc.FileAt(start) {
-		t.Errorf("ten lines from the top of the diff stayed in %q, want the count carried into the file below",
-			m.doc.Files[m.doc.FileAt(start)].Entry.Path)
+	if leapt != m.doc.RowOfFile(1) {
+		t.Fatalf("] left the cursor at row %d, want the second file's header at %d",
+			leapt, m.doc.RowOfFile(1))
 	}
 	if !m.doc.IsStop(leapt) {
 		t.Errorf("the cursor landed on row %d, which it cannot rest on", leapt)
@@ -248,6 +248,15 @@ func TestBracketsMoveTenLinesThroughTheFilesBelow(t *testing.T) {
 			leapt, m.top, m.top+m.bodyHeight())
 	}
 
+	// And the next press carries on past it, so the jump is split where something
+	// happened rather than blocked there.
+	press(t, m, "]")
+	if m.cursor <= leapt {
+		t.Errorf("a second ] left the cursor at row %d, want it carried on past the header at %d",
+			m.cursor, leapt)
+	}
+
+	press(t, m, "[")
 	press(t, m, "[")
 	if m.cursor != start {
 		t.Errorf("[ left the cursor at row %d, want the row it started on, %d", m.cursor, start)
@@ -258,8 +267,8 @@ func TestBracketsMoveTenLinesThroughTheFilesBelow(t *testing.T) {
 	}
 }
 
-// The ends of the diff stop the jump rather than the file boundaries, so holding
-// the bracket walks the whole review and stops at the bottom of it.
+// A file header stops one press, not the key: holding the bracket walks through
+// every file of the review and stops at the bottom of it.
 func TestBracketsStopAtTheEndsOfTheDiff(t *testing.T) {
 	m := newModel(t, newFakeBackend(manyFileSession(t, 20)), WithSize(100, 12))
 
@@ -289,7 +298,7 @@ func TestOptionArrowsMoveAWholeFileAtATime(t *testing.T) {
 
 	// From inside a file, back up to its own header first — the file being left is
 	// the one the cursor is in, not the one below it.
-	m.moveTo(m.doc.StopsAway(m.doc.RowOfFile(3), 2))
+	m.moveTo(m.doc.Leap(m.doc.RowOfFile(3), 2))
 	press(t, m, "alt+up")
 	if m.cursor != m.doc.RowOfFile(3) {
 		t.Fatalf("opt+↑ from inside file 3 left the cursor at %d, want its header at %d",
@@ -715,10 +724,11 @@ func TestStagingAdvancesToTheNextFile(t *testing.T) {
 	}
 }
 
-// The file left behind is left the way `J` leaves one: the next file opens at the
-// top of the window, so it is read from its first line instead of from the bottom
-// of a window the file before it still fills.
-func TestStagingOpensTheWindowOnTheNextFile(t *testing.T) {
+// Folding a file away pulls what is below it up, so the file the pass carries on
+// with is usually already on screen. The window stays where it is when it is:
+// scrolling it to put a file the reviewer can already see at the first row would
+// throw away the diff around it for nothing.
+func TestStagingLeavesTheWindowOnANextFileAlreadyOnScreen(t *testing.T) {
 	backend := newFakeBackend(manyFileSession(t, 20))
 	staged := manyFileSession(t, 20)
 	staged.Files[0].Staged, staged.Files[0].Unstaged = staged.Files[0].Unstaged, nil
@@ -727,9 +737,44 @@ func TestStagingOpensTheWindowOnTheNextFile(t *testing.T) {
 	m := newModel(t, backend, WithSize(100, 12))
 	press(t, m, "s")
 
-	if want := m.doc.RowOfFile(1); m.cursor != want || m.top != want {
-		t.Errorf("after staging the window starts at row %d and the cursor is at %d, want both at the next file's header (%d)",
-			m.top, m.cursor, want)
+	want := m.doc.RowOfFile(1)
+	if m.cursor != want {
+		t.Fatalf("after staging the cursor is at row %d, want the next file's header (%d)", m.cursor, want)
+	}
+	if want >= m.bodyHeight() {
+		t.Fatalf("the next file's header at row %d is off a window %d rows tall, so this is not the case being tested",
+			want, m.bodyHeight())
+	}
+	if m.top != 0 {
+		t.Errorf("the window moved to row %d for a file already on screen, want it left at 0", m.top)
+	}
+}
+
+// When the next file is off screen the window moves only as far as it has to:
+// far enough to read the file's opening lines, and no further. The file lands at
+// the bottom of the window with what came before it still above, the way it would
+// have arrived had the reviewer scrolled there by hand.
+func TestFoldingScrollsFarEnoughToOpenTheNextFile(t *testing.T) {
+	m := newModel(t, newFakeBackend(manyFileSession(t, 20)), WithSize(100, 30))
+
+	// Everything between the first file and file 14 has been folded away already,
+	// so the file the pass moves on to is far below the window.
+	for i := 1; i < 14; i++ {
+		m.collapsed[m.doc.Files[i].Entry.Path] = true
+	}
+	m.rebuild()
+	press(t, m, " ")
+
+	want := m.doc.RowOfFile(14)
+	if m.cursor != want {
+		t.Fatalf("after folding the cursor is at row %d, want file 14's header (%d)", m.cursor, want)
+	}
+	if m.top >= want {
+		t.Fatalf("the window starts at row %d, want it above file 14's header (%d) with the files before it still in view",
+			m.top, want)
+	}
+	if shown := m.top + m.bodyHeight() - want; shown != revealLines {
+		t.Errorf("the window shows %d rows of file 14, want its first %d", shown, revealLines)
 	}
 }
 
@@ -1096,6 +1141,26 @@ func TestTheCommentEditorOpensInTheDiffAtTheAnchor(t *testing.T) {
 	}
 	if got := ansi.Strip(m.View()); !strings.Contains(got, "Write a review comment") {
 		t.Errorf("the editor is not on screen:\n%s", got)
+	}
+}
+
+// The editor stands where the note will, so in the split layout it opens in the
+// half the note is going to hang under and is sized to it.
+func TestTheCommentEditorOpensInTheHalfTheNoteWillHangUnder(t *testing.T) {
+	m := newModel(t, newFakeBackend(newSession(t, twoFileDiff)))
+
+	press(t, m, `\`, "j", "c")
+	typeText(t, m, "about the code arriving")
+	if m.doc.DraftRow < 0 {
+		t.Fatal("the editor was not laid out")
+	}
+
+	got := ansi.Strip(m.renderer.Row(m.doc, m.doc.DraftRow, RowState{Draft: m.draftLines()[0]}))
+	if noteColumn(t, got) != "new" {
+		t.Errorf("the editor opened on the old side: %q", got)
+	}
+	if strings.Contains(got, "…") {
+		t.Errorf("the editor was sized to the pane and cut off by its half: %q", got)
 	}
 }
 

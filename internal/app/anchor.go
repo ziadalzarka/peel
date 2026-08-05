@@ -138,30 +138,47 @@ func (a *App) Relocate(ctx context.Context, s *Session, comments []store.Comment
 		// Line stays where it was written when the code is gone: there is no
 		// current line to name, and the number it was written at is the only
 		// true thing left to say about it.
-		//
-		// A note written on a run of lines carries both ends through the same
-		// mapping, and is outdated if either of them has gone: a range with one
-		// end still findable names a stretch of code that is no longer the
-		// stretch anybody read.
-		line, ok := m.Lookup(c.Line)
-		end, endOK := line, true
-		if c.EndLine > 0 {
-			end, endOK = m.Lookup(c.EndLine)
-		}
-		switch {
-		case !ok || !endOK:
+		line, end, ok := relocateRun(m, c.Line, c.EndLine)
+		if !ok {
 			c.Outdated = true
-		default:
-			if line != c.Line {
-				c.MovedFrom = c.Line
-			}
-			c.Line = line
-			if c.EndLine > 0 {
-				c.EndLine = end
-			}
+			continue
+		}
+		if line != c.Line {
+			c.MovedFrom = c.Line
+		}
+		c.Line = line
+		if c.EndLine > 0 {
+			c.EndLine = end
 		}
 	}
 	return out
+}
+
+// relocateRun moves a note's run onto the file as it is now, and reports false
+// when what it covers is no longer what was read.
+//
+// Every line of the run goes through the mapping, not just its two ends. A run
+// is a claim about a continuous stretch of code, so it survives only if that
+// stretch survives: a line rewritten inside it has gone the same way a rewritten
+// end has, and lines inserted between the ends leave the two numbers still
+// findable while the note quietly grows to cover code nobody wrote about.
+//
+// A note on a single line is a run of one, and asks the one question it always
+// asked.
+func relocateRun(m git.LineMap, line, end int) (int, int, bool) {
+	first, ok := m.Lookup(line)
+	if !ok {
+		return 0, 0, false
+	}
+	last := first
+	for l := line + 1; l <= end; l++ {
+		at, ok := m.Lookup(l)
+		if !ok || at != last+1 {
+			return 0, 0, false
+		}
+		last = at
+	}
+	return first, last, true
 }
 
 // lineMap asks git how numbering moved from the note's blob to the file now.

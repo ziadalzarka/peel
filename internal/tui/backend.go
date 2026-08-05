@@ -19,6 +19,9 @@ type Backend interface {
 	// line its code sits on now.
 	Comments(ctx context.Context) ([]store.Comment, error)
 	AddComment(ctx context.Context, c store.Comment) (store.Comment, error)
+	// EditComment rewrites the body of a comment already stored, leaving
+	// everything about where it is anchored alone.
+	EditComment(id, body string) error
 	RemoveComment(ctx context.Context, id string) error
 	SetResolved(id string, resolved bool) error
 
@@ -112,6 +115,14 @@ func (b *appBackend) AddComment(ctx context.Context, c store.Comment) (store.Com
 		return store.Comment{}, err
 	}
 	return created, b.app.KeepAnchors(ctx)
+}
+
+// EditComment replaces what a note says. The blob it is anchored to is left
+// exactly as it was: the note is about the same code as before, and re-freezing
+// the file here would move it on to whatever that line holds now.
+func (b *appBackend) EditComment(id, body string) error {
+	_, err := b.app.Comments.Update(id, func(c *store.Comment) { c.Body = body })
+	return err
 }
 
 func (b *appBackend) RemoveComment(ctx context.Context, id string) error {

@@ -86,11 +86,11 @@ func TestTerminalBytesMoveTheCursor(t *testing.T) {
 			want: func(d Document) int { return d.RowOfFile(1) },
 		},
 		{
-			// The brackets are the ten-line jump, which is ten presses of the arrow
-			// and carries on into the file below rather than stopping at its end.
+			// The brackets are the ten-line jump, which is at most ten presses of
+			// the arrow and stops short where something is in the way.
 			name: "]",
 			seq:  "]",
-			want: func(d Document) int { return d.StopsAway(d.FirstStop(), 10) },
+			want: func(d Document) int { return d.Leap(d.FirstStop(), 10) },
 		},
 		{
 			// A plain arrow still moves one line, so reading the modified forms has

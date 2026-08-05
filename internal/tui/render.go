@@ -85,10 +85,19 @@ func (r *Renderer) SetOffset(off int) {
 func (r *Renderer) CodeColumns(l Layout) int {
 	body := r.width - 1
 	if l == LayoutSplit {
-		half := (body - ansi.StringWidth(splitDivider)) / 2
+		half, _ := splitHalves(body)
 		return max(half-lineNumWidth-2, 1)
 	}
 	return max(body-lineNumWidth-2, 1)
+}
+
+// splitHalves divides what a split row has left, once the marker down its left
+// edge has taken a column, between the old side and the new one — the divider
+// between them coming off the top.
+func splitHalves(width int) (left, right int) {
+	sides := width - ansi.StringWidth(splitDivider)
+	left = sides / 2
+	return left, sides - left
 }
 
 // Row renders one row of the document to a single line.
@@ -113,7 +122,7 @@ func (r *Renderer) Row(d Document, i int, st RowState) string {
 	case RowComment:
 		return r.comment(d, row, st)
 	case RowDraft:
-		return r.draft(st)
+		return r.draft(d, row, st)
 	case RowStep:
 		return r.step(d, row, st)
 	case RowStepText:
@@ -278,10 +287,10 @@ func codeIndent(l Layout) string {
 
 func (r *Renderer) line(d Document, row Row, st RowState) string {
 	ref := d.Hunks[row.Hunk]
-	prefix := r.marker(st)
+	prefix := r.lineMarker(row, st)
 	width := r.width - ansi.StringWidth(prefix)
 	if d.Layout == LayoutSplit {
-		return prefix + r.splitBody(ref, row, st, width)
+		return prefix + r.splitBody(ref, row, prefix, width)
 	}
 	return prefix + r.unifiedBody(ref, row, width)
 }
@@ -293,15 +302,17 @@ func (r *Renderer) unifiedBody(ref HunkRef, row Row, width int) string {
 }
 
 // splitBody puts the old side left of the new side. Either index may be -1,
-// where the change has no counterpart on that side. The cursor is marked once
-// against each half.
-func (r *Renderer) splitBody(ref HunkRef, row Row, st RowState, width int) string {
-	divider := r.theme.Dim.Render(splitRule) + r.marker(st)
-	sides := width - ansi.StringWidth(divider)
-	half := sides / 2
-	left := r.halfLine(ref, row.Left, true, half)
-	right := r.halfLine(ref, row.Right, false, sides-half)
-	return left + divider + right
+// where the change has no counterpart on that side. The row's marker is drawn
+// once against each half.
+func (r *Renderer) splitBody(ref HunkRef, row Row, marker string, width int) string {
+	lw, rw := splitHalves(width)
+	return r.halfLine(ref, row.Left, true, lw) + r.divider(marker) + r.halfLine(ref, row.Right, false, rw)
+}
+
+// divider is the rule down the middle of a split row, with the column after it
+// the new side's marker stands in.
+func (r *Renderer) divider(marker string) string {
+	return r.theme.Dim.Render(splitRule) + marker
 }
 
 func (r *Renderer) halfLine(ref HunkRef, index int, old bool, width int) string {
@@ -405,15 +416,14 @@ func (r *Renderer) comment(d Document, row Row, st RowState) string {
 
 	gap := strings.Repeat(" ", commentIndent-1)
 	bar := r.theme.Comment.Render("┃")
-	if !row.Head {
-		indent := strings.Repeat(" ", ansi.StringWidth(commentTag(c)))
-		return r.fit(r.marker(st) + gap + bar + " " + indent + body)
+	tag := strings.Repeat(" ", ansi.StringWidth(commentTag(c)))
+	if row.Head {
+		tag = r.theme.Author.Render(commentTag(c))
+		if st.Cursor {
+			tag = r.theme.Cursor.Render(commentTag(c))
+		}
 	}
-	tag := r.theme.Author.Render(commentTag(c))
-	if st.Cursor {
-		tag = r.theme.Cursor.Render(commentTag(c))
-	}
-	return r.fit(r.marker(st) + gap + bar + " " + tag + body)
+	return r.place(noteHalf(d.Layout, row.Hunk >= 0, c.Side), gap+bar+" "+tag+body, st)
 }
 
 // commentIndent is how far a comment's bar sits from the left edge, marker
@@ -421,11 +431,73 @@ func (r *Renderer) comment(d Document, row Row, st RowState) string {
 // stands exactly where the comment will.
 const commentIndent = 4
 
+// half says which side of a split row a note is drawn under.
+type half int
+
+const (
+	// halfNone is a note drawn across the pane: every note in the unified
+	// layout, and a note about a file rather than about a line of one.
+	halfNone half = iota
+	halfOld
+	halfNew
+)
+
+// noteHalf places a note beside the code it is about. In the split layout that
+// is the new side, where the reviewed code is — except for a note on a line the
+// change removed, which is only on the old side, and hanging it off the new one
+// would point at the line that replaced it or at nothing at all.
+func noteHalf(l Layout, online bool, side store.Side) half {
+	if l != LayoutSplit || !online {
+		return halfNone
+	}
+	if side == store.SideOld {
+		return halfOld
+	}
+	return halfNew
+}
+
+// room is how much of a pane this wide a note's text has, once the marker, the
+// indent, the bar and — where the note hangs under one half of a split row —
+// the other half and the divider have taken their columns.
+func (h half) room(pane int) int {
+	column := pane - 1
+	if h != halfNone {
+		left, right := splitHalves(column)
+		column = right
+		if h == halfOld {
+			column = left
+		}
+	}
+	return column - (commentIndent - 1) - 2
+}
+
+// editorRoom is the width the comment editor is given where a note hangs here:
+// what the note's text will have, plus the bar and the space after it, which
+// the editor draws itself.
+func (h half) editorRoom(pane int) int { return h.room(pane) + 2 }
+
+// place puts a note where the code it is about is: across the pane, or — in the
+// split layout — under the half of the row that holds its line, the other half
+// left as it would be beside any other row.
+func (r *Renderer) place(h half, note string, st RowState) string {
+	prefix := r.marker(st)
+	width := r.width - ansi.StringWidth(prefix)
+	if h == halfNone {
+		return prefix + fit(note, width)
+	}
+	lw, rw := splitHalves(width)
+	if h == halfOld {
+		return prefix + fit(note, lw) + r.divider(prefix) + fit("", rw)
+	}
+	return prefix + fit("", lw) + r.divider(prefix) + fit(note, rw)
+}
+
 // draft renders one line of the comment editor. The editor draws its own bar —
 // the same ┃ a saved comment carries — so the only thing left to do here is put
-// it in the comment column and fit it to the pane.
-func (r *Renderer) draft(st RowState) string {
-	return r.fit(r.marker(st) + strings.Repeat(" ", commentIndent-1) + st.Draft)
+// it where the comment will stand.
+func (r *Renderer) draft(d Document, row Row, st RowState) string {
+	h := noteHalf(d.Layout, row.Hunk >= 0 && d.Draft.line > 0, d.Draft.side)
+	return r.place(h, strings.Repeat(" ", commentIndent-1)+st.Draft, st)
 }
 
 // commentTag prefixes a comment with who wrote it, and marks it resolved.
@@ -443,8 +515,8 @@ func commentTag(c store.Comment) string {
 	// what it was ever about.
 	case c.Outdated:
 		tag = fmt.Sprintf("%s (outdated · was :%s)", tag, lineSpan(c))
-	// A note written on a run of lines sits under the first of them, so the run
-	// is the one thing about it nothing else on screen says.
+	// A note written on a run of lines sits under the last of them, so where it
+	// starts is the one thing about it nothing else on screen says.
 	case c.EndLine > c.Line:
 		tag = fmt.Sprintf("%s (lines %d-%d)", tag, c.Line, c.EndLine)
 	}
@@ -476,6 +548,17 @@ func (r *Renderer) marker(st RowState) string {
 	default:
 		return " "
 	}
+}
+
+// lineMarker is a line's own bar. A line a note was already written about is
+// barred like one being marked to write a note about now: both say the same
+// thing — this line is part of a run somebody wrote about — and a run of one
+// says it as much as a run of ten.
+func (r *Renderer) lineMarker(row Row, st RowState) string {
+	if row.Noted && !st.Cursor && !st.Marked {
+		return r.theme.Comment.Render("▌")
+	}
+	return r.marker(st)
 }
 
 func (r *Renderer) stateSymbol(s git.StageState) string {

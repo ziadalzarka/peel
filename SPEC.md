@@ -87,12 +87,15 @@ it doesn't get relitigated.
 | **Staging mechanism** | `git add` / `git restore --staged` per path | The whole-file decision removes the need to generate patches at all: no `git apply --cached`, no `@@` arithmetic, no intent-to-add dance for untracked files |
 | **Staged files fold away** | `s` collapses the file, moves to the next one still open; `space` reopens it | The list left open is the list still to review, so the diff shrinks as the pass goes on, and the one key that ends a file also starts the next. Collapsing is display only — `space` reads a staged file back without touching the index. Revised 2026-08-04: the move looks at the fold and not the index, so a file staged outside peel is still somewhere the pass stops — its diff has not been read here, and skipping it hid changes an agent had staged |
 | **Folding is the same decision without the index** | `space` folds a file away and moves on exactly as `s` does | Not every file read is a file to stage — a read-only session has none, and a working tree has files you have looked at and left alone. Folding is how a pass records what has been read, so it moves on the way staging does |
+| **Moving on scrolls only when it has to** | the cursor lands on the next file open below either way; the window moves only when that file is off screen, and then far enough to bring its first twelve rows in rather than its header to the first row | Revised 2026-08-05. Folding a file pulls everything under it up, so the file the pass carries on with is usually already in front of the reviewer — and opening the window on it anyway scrolled the diff around it away to show something that was on screen the whole time. Once the window does have to move, stopping at the top of the file is the same mistake in the other direction: the file fills the window, and what the reviewer had just read is gone. Twelve rows is a header and the start of the first hunk, which is enough to carry on reading with and leaves what came before still above it — where scrolling there by hand would have left it. The file jumps, `opt+↓`/`opt+↑`, still open the window on the file: there the jump is the whole point of the keypress, and nothing was being read around it |
 | **A part-staged file reads as two halves** | a heading rules across the pane above each one — `staged · already in the index` and `unstaged · not in the index yet` — and the index's half opens folded, `space` on the heading showing it | Added 2026-08-05. git can put one file in both places at once, and peel drew the two changes as one run of hunks with the word `index` or `worktree` at the end of each hunk header. Fifty green `+` lines that are already staged, then four that are not, read as one change of fifty-four: the new work is at the bottom of something that looks reviewed, and nothing on screen says where the reviewed part stopped. The heading is a break rather than a label because that is the actual question — where does one change end — and the fold answers it by removing the reviewed half from the pass, which is the same rule `s` follows on a whole file. Only a file in both places at once is headed at all: a file whose changes are all in one place has one half, and a heading over the only change there is names nothing to tell it from — the `staged` rule over a file already marked `✓` was a line to read with nothing to read it for, and once its fold was remembered it could hide the file's whole diff behind itself. The file header carries the split too (`index +47 -0  worktree +4 -0`), since a folded file shows nothing else |
 | **The code a hunk left out can be read in** | a `▴`/`▾` row at each end of every run of unchanged code the diff skipped, saying how much is hidden; `space` reads twenty more lines in, and they join the hunk rather than becoming one | Added 2026-08-05. Three lines of context is what `git diff` prints, not what a reviewer needs to answer the question a hunk raises — whether the early return above it already covers the case, what the signature it is inside actually takes, where the lock was taken twenty lines up. Every reviewer's workaround is to leave peel and open the file, which is the review leaving the tool. GitHub's expander is the reference, down to the arrow saying which way the code will arrive. The lines are merged into the hunk's own, head or tail, because everything that already works on a hunk's lines then keeps working on them unchanged — the cursor, a note and its anchor, the split layout's pairing, a marked run — where a row kind of their own would need every one of those again. The hunk's ID stays the four range numbers of the hunk git printed, so what the CLI and an agent address does not move because somebody pressed space. The code is read out of the file the diff was measured against rather than asked of git as a wider diff: `--unified=<n>` re-runs the diff and lets git re-split and re-number the hunks, which would change hunk IDs under a review in progress, and it still could not say how much code follows the last hunk — only the file itself knows where it ends. A part-staged file is read twice, the index's copy for the staged half and the disk's for the rest, for the same reason a note records which of the two it was written against. A pull request is not read at all: its paths name local files that are not the files under review. Twenty lines a press, and a run of twenty or fewer is one row that finishes it rather than two rows and two presses. What has been read in is recorded against the hunk it was read from and the direction it grew, not against the run's position among the others: peel re-reads the repository while the review is open, and counting the runs meant a change arriving anywhere above renumbered every run below it, so code opened at the bottom of a file reappeared around whichever run had taken its number. Naming the pair of hunks either side would lose it instead, since a change landing between them splits the run in two. Hanging it off the one hunk it was read towards survives both, and a hunk rewritten under it has a new ID, so what was read around it reads as closed rather than as another hunk's |
-| **A note can be about a run of lines** | `shift+↓`/`shift+↑` mark a run of lines inside one hunk; `endLine` on the comment, beside the line it starts on | Added 2026-08-05. Half of what a review has to say is about several lines at once — a loop and the condition above it, three lines that should have been one call — and a note left on the first of them is a note whose extent the reader has to guess. The run is marked with the same arrow that was already moving the cursor, so marking is the reading; and it is let go of by carrying on rather than dismissed, since every key except the one that writes the note is the reviewer moving on, and a run still marked behind them is a note about to land on lines they had stopped looking at. It stays inside one hunk because a range is a claim about the lines between its two ends, and between one hunk and the next those are lines the diff never put on screen. Both ends are numbered against one side of the diff — the code arriving or the code leaving, not both — and both follow their code the way a single line does, so a run whose far end has been rewritten reads as outdated rather than as a range over code nobody read |
+| **A note can be about a run of lines** | `shift+↓`/`shift+↑` mark a run of lines inside one hunk; `endLine` on the comment, which hangs under the last line of the run | Added 2026-08-05. Half of what a review has to say is about several lines at once — a loop and the condition above it, three lines that should have been one call — and a note left on the first of them is a note whose extent the reader has to guess. The run is marked with the same arrow that was already moving the cursor, so marking is the reading; and it is let go of by carrying on rather than dismissed, since every key except the one that writes the note is the reviewer moving on, and a run still marked behind them is a note about to land on lines they had stopped looking at. It stays inside one hunk because a range is a claim about the lines between its two ends, and between one hunk and the next those are lines the diff never put on screen. The note hangs off the last line of the run rather than the first, since a note in the middle of what it covers reads as a note about the one line above it. Both ends are numbered against one side of the diff — the code arriving or the code leaving, not both — and the side is the one the run reaches: a run that takes in an addition is a note about the code arriving however it started, because marking a removal and the lines that replaced it is reading a replacement. Every line of the run follows its code the way a single line does, not just its two ends, so a run whose far end was rewritten, or that has had code put into or taken out of the middle of it, reads as outdated rather than as a range over code nobody read |
+| **A note can be rewritten** | `e` on a note of the reviewer's own opens the editor in that note's place, holding what it says; saving replaces the body and nothing else | Added 2026-08-05. Every other way of fixing a typo in a note is delete-and-write-again, which loses the note's anchor and its place in the review to change a word. The editor stands where the note stands rather than under it, since the old text and the new one on screen together is the same note twice with one of them already wrong, and it follows the note rather than the note's line number — an outdated note is drawn under its file, and placing its editor by number would open it down in the diff against code the note was never about. Only the body is written: the blob, the line and the run are what the note is *about*, and re-freezing the file here would quietly move a note about reviewed code on to whatever that line holds now. An empty editor is not a delete — `D` names what it removes before removing it, where a note lost to ctrl+u would go without a word. And only the reviewer's own: an agent's note is signed by the agent, so a rewrite would put the reviewer's words behind that name, out of the review `C` hands over and inside the group `X` clears |
 | **A note records which diff it is numbered against** | `origin`: `index` or `worktree`, on the comment | Added 2026-08-05. The two halves of a part-staged file are measured against different files, so both have a line 12 and they are not the same line. Anchoring on `file:line:side` alone put every note written on the working tree onto whatever the index happened to hold at that number — several lines away, in code the reviewer had not been reading. The old anchor is not narrowed, it is completed: a note with no origin is one written before the distinction existed, and still lands where it always did |
 | **A note is anchored to the file, not to a number in it** | `blob`: the git object the note's line counts lines in, frozen when the note is written. Where that line is now is `git diff` between that blob and the file as it stands | Added 2026-08-05. peel reviews a working tree an editor and an agent both write to while the review is open, so the code under a note moves and the note does not: two lines added above line 42 left the note hanging on whatever slid into 42, silently, reading as a review of code nobody had reviewed. GitHub never loses a line because a review comment there is pinned to a commit — `original_commit_id` plus `original_line` — and re-found by diffing that commit against head. A working tree has no commit to name, so peel makes the missing half: `git hash-object -w` freezes the content, and the note's number becomes a number *in that*. Finding it again is then git's own diff rather than a search for something that looks similar, which is what makes it exact where a text search has to guess — twenty identical `}` included |
 | **A note whose code is gone says so rather than moving** | `outdated`, worked out on every read; the note is drawn under its file with the line it was written on | Added 2026-08-05. The half of GitHub's design worth copying is not the object store, it is the refusal to guess: when the mapping fails GitHub nulls `position` and shows the comment outdated beside the diff it was written against, and never relocates it. A line that was rewritten has no successor, and putting the note on the nearest thing would be the original bug wearing a fix. So the note claims no line at all, falls through to where peel already puts notes it cannot place, and keeps its original number — the only true thing left to say about it. The CLI says `(outdated)` and sets `"outdated": true`, because what an agent does with a line number is go and edit that line |
+| **A note is drawn under the code it is about** | side by side, a note hangs under the half of the row that holds its line — the new side, or the old side for a note on a line the change took away — and is wrapped to that half | Added 2026-08-05. Drawn across the pane, every note started in the old side's column, so a note about the code arriving read as a note about the code leaving: the column a note starts in is the one thing on screen saying which side it is about, and for almost every note it was saying the wrong one. Hanging it under the half that holds its line says it without a word, and it is the same rule the anchor already follows — the new side for an addition and for context, the old side for a removal, where the new side holds either the line that replaced it or nothing at all. A note about the file rather than about a line of it still rules across the pane, since the header it hangs off does. The editor opens in that half too, sized to it: the point of writing in the diff is that the note stands where it will be read, and an editor drawn across the pane would move on being saved. The text is wrapped to the half rather than to the pane, or every note long enough to wrap would be cut off at the divider instead |
 | **peel's objects are held by refs, and let go with the note** | one `refs/peel/anchors/<blob>` per snapshot; the ref set is made equal to the blobs the stored notes name after every write | Added 2026-08-05. A blob nothing points at is what `git gc` exists to delete, so an unreferenced snapshot is an anchor that rots — the same bug arriving later and harder to explain. One ref per blob fixes that and is also the whole cleanup story, in the same mechanism: what peel costs the repository is one blob per file version somebody commented on, deduplicated by content, and removing the last note naming one drops the ref and hands the object straight back. peel never runs `gc` in someone else's repository; it only stops holding on. Reading a review writes nothing at all — the working tree is compared by streaming the blob to a temporary file, because follow mode re-reads continuously and hashing on every read would litter the repository being reviewed. The refs sit outside `refs/heads` and `refs/tags`, so `status`, `branch`, `tag`, `log --all` and a default `push` never see them |
 | **A file changed after it was staged opens again** | a fold made by `s` reopens on the reload that finds working-tree changes in it; a fold made by `space` does not | Added 2026-08-05. Staging says "done with this file" about the changes that went into the index and nothing about the ones that arrive afterwards — and a `✓` in the tree is the one place a change can hide from a pass, since the pass skips what is folded. What opens is the new work alone: the index's half stays folded, so the file shows exactly what arrived. A file put away with `space` was put away deliberately and stays that way, which is the difference between the two keys that otherwise do the same thing |
 | **Folds persist** | JSON at `.git/peel/folds.json`, per target | A pass through a large diff rarely finishes in one sitting, and reopening to a diff that has forgotten every file already read starts the pass again. Folds of files no longer in the diff are dropped, so the next change to a file is not hidden by a fold left from the last one |
@@ -367,12 +370,23 @@ left the screen. Mouse reporting is on, so the wheel arrives as a wheel event
 rather than as whatever arrow keys the terminal would emulate.
 
 `]`/`[` go ten lines at once, for reading down a long hunk faster than a line a
-press. Ten is a distance rather than a place: ten lines from the fourth line of a
-file is six lines into the next one, header and all, and not the last line of the
-one it started in. It is counted in rows the cursor can rest on, which is ten
-presses of the arrow — the blank between two files and the rows a long comment
-runs on to are passed over rather than counted, since the cursor never lands on
-one either way.
+press. It is counted in rows the cursor can rest on, which is ten presses of the
+arrow — the blank between two files and the rows a long comment runs on to are
+passed over rather than counted, since the cursor never lands on one either way.
+
+Ten is the most it moves rather than always what it moves. Anything that heads
+what comes under it stops the jump there instead — a file, one of the two halves
+of a part-staged file, a walkthrough group — and so does a row standing where the
+diff left code out. They are the places the reading changes, and arriving at one
+is worth more than the rest of the ten. Ten lines from the fourth line of a file
+is the next file's header, not six lines into a file whose name went by on the
+way; `[` from the fifth line of a file is that file's own header, not a row of the
+file above it. Landing under a heading the jump crossed is where a review goes
+wrong quietly — the index's half of a file read as the working tree's is a line
+number pointing at the wrong line — and a run of hidden code crossed without
+stopping is code nothing on screen says was skipped. The next press carries on
+past whichever stopped it, so a leap held down still walks the whole review — it
+just breaks where something happens.
 
 `opt`+`↓`/`↑` move a whole file at a time and `cmd`+`↓`/`↑` reach the ends of the
 diff, so the modifier held says how far the arrow goes, the way it does in an
@@ -396,7 +410,7 @@ that report one; `h`/`l` are the path that always works.
 | Key | Action |
 |---|---|
 | `↓` / `↑` | move the cursor one line, diff body included |
-| `]` / `[` | move the cursor ten lines, counting on through the file below |
+| `]` / `[` | move the cursor up to ten lines, stopping short at any heading or run of hidden code |
 | `cmd+↓` / `cmd+↑` | last / first row, in the terminals that report the key |
 | `j` / `k` | next / previous hunk, file or comment |
 | wheel | scroll the diff, dragging the cursor along |
@@ -415,6 +429,7 @@ that report one; `h`/`l` are the path that always works.
 | `shift+↓` / `shift+↑` | mark a run of lines to write one note about; any other key lets it go |
 | `c` | comment at the cursor, or on the run of lines marked |
 | `enter` / `alt+enter` | in the editor: save the comment / write another line |
+| `e` | edit the reviewer's own comment at the cursor, in its own place |
 | `x` | resolve or reopen the comment at the cursor |
 | `D` | delete the comment at the cursor |
 | `C` | copy your own comments as text, to paste into an agent |
@@ -437,9 +452,15 @@ in git's order. Staging keeps the notes; when the code itself moves on under the
 the header says `stale` and `W` writes new ones.
 
 Staging folds and moves on. `s` stages the file the cursor is in, collapses it and
-opens the next file still open at the top of the window — so what is left open is
+puts the cursor on the next file still open — so what is left open is
 what is left to review, the diff shrinks as the pass goes on, and one key both
-ends a file and starts the next. Folded files are skipped on the way: each has
+ends a file and starts the next. The window follows only when it has to. Folding
+a file pulls what is below it up, so the file the pass carries on with is usually
+already on screen, and scrolling it to the first row would throw away the diff
+around it to show something the reviewer can already see. When the next file is
+off screen the window moves just far enough to bring its first dozen rows in,
+leaving what came before it above — the way it would have arrived had the
+reviewer scrolled there. Folded files are skipped on the way: each has
 been read, and a header with nothing under it is nothing to carry the pass on
 with. Being staged is not what makes a file done — the fold is, so a file staged
 outside peel and never folded here is a stop like any other, since its diff has
@@ -500,16 +521,34 @@ chord to finish one is the wrong default; `alt+enter` writes another line and
 `esc` cancels. Either way the cursor is left on what it was on: a note written is
 not progress through the diff, and neither is resolving one with `x`.
 
+`e` opens that same editor on a note already written, holding what it says. It
+stands in the note's place rather than under it — the note being rewritten and
+the note as it was would otherwise be on screen together, one of them already
+wrong — and the cursor is back on the note when the editor closes, saved or not.
+What is stored is the body alone: where the note points is untouched, since the
+reviewer was correcting the words and not aiming it somewhere else. Emptying the
+editor leaves the note as it was, because `D` is the key that deletes and it says
+what it is about to remove first. Only the reviewer's own notes: an agent's is
+signed by the agent, and rewriting one would put the reviewer's words behind that
+name, where `C` leaves them out of the review it hands over and `X` clears them
+with the rest of the agent's pass.
+
 A note can be about more than the line under the cursor. `shift` with `↓` or `↑`
 takes the next line into a run and moves the cursor with it, so what is marked is
 what has been read over, and reversing the arrow gives a line back. The run is
 drawn as a bar down the left edge in the comment's own colour, `c` writes one
 note about all of it, and the note records both ends — `alpha.go:12-16` in the
-footer, `endLine` in the store. It is held rather than entered: there is nothing
-to cancel, because every key that is not extending the run or writing its note
-lets it go. It stops at the ends of the hunk, since a range is a claim about the
-lines between its two numbers and between one hunk and the next those are lines
-the diff never showed.
+footer, `endLine` in the store. The editor opens under the last line of the run,
+which is where the note itself lands: a note sitting partway down the run it is
+about reads as a note about the line above it, with the rest of the run below an
+argument nobody has made about it yet. The run is counted on the side it reaches
+— the new one as soon as it takes in a line that is arriving, so marking a
+removal and the lines that replaced it is a note about the replacement, and the
+old one when all it holds of the change is code leaving. It is held rather than
+entered: there is nothing to cancel, because every key that is not extending the
+run or writing its note lets it go. It stops at the ends of the hunk, since a
+range is a claim about the lines between its two numbers and between one hunk and
+the next those are lines the diff never showed.
 
 ---
 

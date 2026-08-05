@@ -161,6 +161,11 @@ const groupedWalkthrough = "## 1. The function alpha exports\n" +
 	"\n" +
 	"The single line moves from old to new.\n"
 
+// edit is one rewrite of a comment's body, as the backend was asked for it.
+type edit struct {
+	id, body string
+}
+
 // fakeBackend records every call so tests can assert on what the UI asked for
 // rather than on what git did with it.
 type fakeBackend struct {
@@ -194,6 +199,7 @@ type fakeBackend struct {
 	agentHiddenErr   error
 
 	added    []store.Comment
+	edited   []edit
 	removed  []string
 	resolved map[string]bool
 
@@ -248,6 +254,19 @@ func (f *fakeBackend) AddComment(_ context.Context, c store.Comment) (store.Comm
 	f.added = append(f.added, c)
 	f.comments = append(f.comments, c)
 	return c, nil
+}
+
+func (f *fakeBackend) EditComment(id, body string) error {
+	if err := f.take(); err != nil {
+		return err
+	}
+	f.edited = append(f.edited, edit{id: id, body: body})
+	for i := range f.comments {
+		if f.comments[i].ID == id {
+			f.comments[i].Body = body
+		}
+	}
+	return nil
 }
 
 func (f *fakeBackend) RemoveComment(_ context.Context, id string) error {

@@ -123,6 +123,7 @@ repository changes.
 | `shift+↓` / `shift+↑` | mark a run of lines to write one note about — any other key lets it go |
 | `c` | comment at the cursor, or on the run of lines marked |
 | `enter` / `shift+enter` | in the editor: save the comment / write another line |
+| `e` | edit a comment of your own, where it stands |
 | `x` / `D` | resolve / delete the comment at the cursor |
 | `C` | copy your own comments as text, to paste into an agent |
 | `A` / `X` | hide the comments an agent left / delete every one of them |
@@ -156,6 +157,11 @@ is still on it afterwards. `enter` saves it; `shift+enter` writes another line,
 and `alt+enter` does the same in a terminal that sends shift+enter as a plain
 enter.
 
+`e` on a note of your own opens the same editor holding what the note says, in
+the note's own place — a comment is corrected where it stands rather than deleted
+and written again. Emptying it does not delete it; `D` is that key. The agent's
+notes are its own: they can be resolved, answered or deleted, not rewritten.
+
 A note can be about more than one line. `shift` with `↓` or `↑` takes the next
 line into a run and carries the cursor with it — reversing the arrow gives a line
 back — and `c` then writes one note about all of it, stored with both ends and
@@ -164,6 +170,11 @@ by carrying on, since every key that is not extending it or writing its note is
 you moving on.
 
 ![writing a comment inline, in the diff](docs/screenshots/comment.png)
+
+Side by side, a note hangs under the half of the row that holds the line it is
+about — the new side, or the old side for a note on a line the change took away —
+and the editor opens in that column too, so what you write stands where it will
+be read.
 
 A note on a file that is half staged records which half it was left on as well as
 which line, so it comes back where you wrote it instead of on the same number in

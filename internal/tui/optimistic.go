@@ -200,8 +200,8 @@ func (m *Model) unsavedID() string {
 	return fmt.Sprintf("%s%d", unsavedPrefix, m.unsavedIDs)
 }
 
-// The comment list arrives from the store and is still the store's, so the three
-// changes to it copy rather than write into what they were handed.
+// The comment list arrives from the store and is still the store's, so every
+// change to it copies rather than writes into what it was handed.
 
 func withComment(comments []store.Comment, add store.Comment) []store.Comment {
 	return append(append([]store.Comment(nil), comments...), add)
@@ -215,6 +215,27 @@ func withResolved(comments []store.Comment, id string, resolved bool) []store.Co
 		}
 	}
 	return out
+}
+
+func withBody(comments []store.Comment, id, body string) []store.Comment {
+	out := append([]store.Comment(nil), comments...)
+	for i := range out {
+		if out[i].ID == id {
+			out[i].Body = body
+		}
+	}
+	return out
+}
+
+// commentByID finds a comment the screen is holding, for a change that needs
+// what it says as well as its ID.
+func commentByID(comments []store.Comment, id string) (store.Comment, bool) {
+	for _, c := range comments {
+		if c.ID == id {
+			return c, true
+		}
+	}
+	return store.Comment{}, false
 }
 
 func withoutComment(comments []store.Comment, id string) []store.Comment {

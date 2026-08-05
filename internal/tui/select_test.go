@@ -204,21 +204,49 @@ func TestTheCommentKeysKeepTheMarkedRun(t *testing.T) {
 	}
 }
 
-// A note is about one side of the diff, so a run marked from a removal is
-// numbered against the file before the change and passes over the additions
-// inside it — they have no number there.
-func TestARunMarkedFromARemovalIsNumberedOnTheOldSide(t *testing.T) {
+// Marking a removal and the lines that replaced it is reading a replacement, and
+// a note on a replacement is about the code that arrived. So the run is numbered
+// on the new side however it started, and passes over the removal — the old
+// file's numbers are not the numbers this note is counted in.
+func TestARunThatReachesTheNewCodeIsNumberedOnTheNewSide(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	m := newModel(t, backend)
 
 	m.moveTo(lineRowOf(t, m, 0, removedOne))
 	press(t, m, "shift+down", "shift+down", "c")
+
+	// And the editor is under the run, not up on the removal it started from.
+	if _, hi := markedRun(t, m); m.doc.DraftRow != hi+1 {
+		t.Errorf("the editor is at row %d, want row %d — under the last line of the run",
+			m.doc.DraftRow, hi+1)
+	}
+
+	typeText(t, m, "this replacement")
+	press(t, m, "enter")
+
+	got := backend.added[0]
+	if got.Side != store.SideNew || got.Line != 3 || got.EndLine != 4 {
+		t.Errorf("comment = %s:%d-%d on %s, want alpha.go:3-4 on the new side",
+			got.File, got.Line, got.EndLine, got.Side)
+	}
+}
+
+// A run that never reaches the code arriving is a note about the code leaving,
+// and is numbered against the file before the change.
+func TestARunOfCodeLeavingIsNumberedOnTheOldSide(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	m := newModel(t, backend)
+
+	// Upwards from the removal, so the run holds it and the blank line above it
+	// and nothing that is arriving.
+	m.moveTo(lineRowOf(t, m, 0, removedOne))
+	press(t, m, "shift+up", "c")
 	typeText(t, m, "why did this go?")
 	press(t, m, "enter")
 
 	got := backend.added[0]
-	if got.Side != store.SideOld || got.Line != 3 || got.EndLine != 0 {
-		t.Errorf("comment = %s:%d-%d on %s, want old line 3 with nothing after it on that side",
+	if got.Side != store.SideOld || got.Line != 2 || got.EndLine != 3 {
+		t.Errorf("comment = %s:%d-%d on %s, want old lines 2-3, the file as it was",
 			got.File, got.Line, got.EndLine, got.Side)
 	}
 }
@@ -242,7 +270,66 @@ func TestTheMarkedRunIsDrawnDownTheEdgeOfTheDiff(t *testing.T) {
 	}
 }
 
-// A note on a run sits under the first line of it, so the run is the one thing
+// The editor opens under the whole of what the note is about. On the first line
+// of the run it would sit between lines the same note covers, reading as a note
+// about the one line above it and leaving the rest of the run below an argument
+// nobody had made about it yet.
+func TestTheEditorOpensBelowTheMarkedRun(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	m := newModel(t, backend)
+
+	m.moveTo(lineRowOf(t, m, 0, addedOne))
+	press(t, m, "shift+down", "c")
+
+	_, hi := markedRun(t, m)
+	if m.doc.DraftRow != hi+1 {
+		t.Errorf("the editor is at row %d, want row %d — under the last line of the run",
+			m.doc.DraftRow, hi+1)
+	}
+}
+
+// Where the editor was is where the note lands, or saving one would shuffle the
+// diff under the reviewer at the moment they stopped writing.
+func TestASavedRunNoteSitsUnderTheLastLineItCovers(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 3, EndLine: 4, Side: store.SideNew,
+			Body: "these two", Author: store.AuthorUser},
+	}
+	m := newModel(t, backend)
+
+	code, _ := codeUnder(t, m.doc, "c1")
+	if !strings.Contains(code, "func Two()") {
+		t.Errorf("the note is laid out under %q, want the last line of the run it covers", code)
+	}
+}
+
+// Writing from a note on a run is answering it, so the second note is about the
+// same run and opens in the same place. Falling back to the first line would put
+// the editor above the note being answered.
+func TestANoteWrittenFromARunNoteCoversTheSameRun(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 3, EndLine: 4, Side: store.SideNew,
+			Body: "these two", Author: store.AuthorUser},
+	}
+	m := newModel(t, backend)
+
+	row := m.doc.RowOfComment("c1")
+	if row < 0 {
+		t.Fatal("the note is not in the document")
+	}
+	m.moveTo(row)
+	press(t, m, "c")
+	typeText(t, m, "and another thing")
+	press(t, m, "enter")
+
+	if got := backend.added[0]; got.Line != 3 || got.EndLine != 4 {
+		t.Errorf("comment covers %d-%d, want the 3-4 of the note it answers", got.Line, got.EndLine)
+	}
+}
+
+// A note on a run sits under the last line of it, so the run is the one thing
 // about it nothing else on screen says.
 func TestASavedRunNoteSaysWhichLinesItCovers(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
@@ -257,6 +344,69 @@ func TestASavedRunNoteSaysWhichLinesItCovers(t *testing.T) {
 	}
 	if got := m.renderer.Row(m.doc, row, RowState{}); !strings.Contains(got, "lines 3-4") {
 		t.Errorf("the note reads %q, want the run it covers", got)
+	}
+}
+
+// The tag says which lines a note covers, but only once the reviewer has read
+// down to it. The same bar the run wore while it was being marked stays on the
+// code afterwards, so how far a note reaches is visible from the code itself.
+func TestASavedNoteBarsEveryLineItCovers(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 3, EndLine: 4, Side: store.SideNew,
+			Body: "these two", Author: store.AuthorUser},
+	}
+	m := newModel(t, backend)
+
+	rows := m.diffLines(m.bodyHeight())
+	for _, line := range []int{addedOne, addedTwo} {
+		got := rows[lineRowOf(t, m, 0, line)-m.top]
+		if !strings.HasPrefix(got, "▌") {
+			t.Errorf("line %d of the run reads %q, want the bar that says a note covers it", line, got)
+		}
+	}
+	if got := rows[lineRowOf(t, m, 0, lastLine)-m.top]; strings.HasPrefix(got, "▌") {
+		t.Errorf("a line outside the run reads %q, want no bar", got)
+	}
+}
+
+// A note on one line is a run of one, and reads like every other run: the line
+// it is about is barred. Without it the shortest note — much the commonest one —
+// is the only one whose code says nothing about it.
+func TestASavedNoteOnOneLineBarsThatLine(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 4, Side: store.SideNew,
+			Body: "hello", Author: store.AuthorUser},
+	}
+	m := newModel(t, backend)
+
+	rows := m.diffLines(m.bodyHeight())
+	if got := rows[lineRowOf(t, m, 0, addedTwo)-m.top]; !strings.HasPrefix(got, "▌") {
+		t.Errorf("the line the note is on reads %q, want the bar", got)
+	}
+	if got := rows[lineRowOf(t, m, 0, addedOne)-m.top]; strings.HasPrefix(got, "▌") {
+		t.Errorf("the line above the note reads %q, want no bar", got)
+	}
+}
+
+// A note on a removal is written against the old file, so it bars the line that
+// went rather than the one that replaced it — which is the whole reason the
+// note names a side.
+func TestASavedNoteOnARemovalBarsTheRemovedLine(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 3, Side: store.SideOld,
+			Body: "why did this go", Author: store.AuthorUser},
+	}
+	m := newModel(t, backend)
+
+	rows := m.diffLines(m.bodyHeight())
+	if got := rows[lineRowOf(t, m, 0, removedOne)-m.top]; !strings.HasPrefix(got, "▌") {
+		t.Errorf("the removed line reads %q, want the bar", got)
+	}
+	if got := rows[lineRowOf(t, m, 0, addedOne)-m.top]; strings.HasPrefix(got, "▌") {
+		t.Errorf("the line that replaced it reads %q, want no bar", got)
 	}
 }
 

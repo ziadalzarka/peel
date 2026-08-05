@@ -87,7 +87,9 @@ run — the ones you read before the edit are stale.
   at `line`. Nothing to do: `line` is correct, and this is only there to explain
   the move.
 - `"outdated": true` means the code the note was written on has been **rewritten
-  or deleted**. `line` is then where it *was*, and something unrelated is sitting
+  or deleted** — on a note with an `endLine`, that includes code put into or
+  taken out of the middle of the run, which is no longer the stretch that was
+  read. `line` is then where it *was*, and something unrelated is sitting
   at that number now. Never edit that line on the strength of the note. Read the
   file, work out whether the note still applies, and say so rather than guessing
   — often it has already been addressed, in which case `peel comment resolve
