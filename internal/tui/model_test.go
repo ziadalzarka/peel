@@ -969,6 +969,34 @@ func TestEnterSavesAndAltEnterWritesAnotherLine(t *testing.T) {
 	}
 }
 
+// csiSequenceMsg stands in for the message bubbletea hands on when it reads a
+// sequence it has no key for. Its own type is unexported, and what matters is
+// that the raw bytes arrive on a message whose type peel cannot name.
+type csiSequenceMsg []byte
+
+func TestShiftEnterWritesAnotherLine(t *testing.T) {
+	for _, seq := range []string{"\x1b[13;2u", "\x1b[27;2;13~"} {
+		backend := newFakeBackend(newSession(t, twoFileDiff))
+		m := newModel(t, backend)
+
+		press(t, m, "j", "c")
+		typeText(t, m, "first")
+		send(t, m, csiSequenceMsg(seq))
+		typeText(t, m, "second")
+		if m.mode != modeComment {
+			t.Fatalf("%q saved the comment instead of writing another line", seq)
+		}
+
+		press(t, m, "enter")
+		if len(backend.added) != 1 {
+			t.Fatalf("AddComment called %d times, want 1", len(backend.added))
+		}
+		if got := backend.added[0].Body; got != "first\nsecond" {
+			t.Errorf("%q: body = %q, want both lines", seq, got)
+		}
+	}
+}
+
 func TestCommentingLeavesTheCursorWhereItWasWritten(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	m := newModel(t, backend)

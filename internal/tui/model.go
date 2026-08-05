@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -254,10 +256,11 @@ func newInput(theme Theme) textarea.Model {
 	ta.Prompt = "┃ "
 	// Enter saves, since most comments are one line and reaching for a chord to
 	// finish one is the wrong default. Writing a second line is the deliberate
-	// press.
+	// press: shift+enter, which reaches the editor as alt+enter, and alt+enter
+	// itself for the terminals that keep shift+enter to themselves.
 	ta.KeyMap.InsertNewline = key.NewBinding(
 		key.WithKeys("alt+enter"),
-		key.WithHelp("alt+enter", "new line"),
+		key.WithHelp("shift+enter", "new line"),
 	)
 	for _, style := range []*textarea.Style{&ta.FocusedStyle, &ta.BlurredStyle} {
 		style.Prompt = theme.Comment
@@ -310,7 +313,35 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m, m.key(msg)
 	}
+	if isShiftEnter(msg) {
+		return m, m.key(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	}
 	return m, nil
+}
+
+// shiftEnterSeqs are what a terminal sends for shift+enter when it can say
+// which modifier was held: the CSI u form kitty and the terminals that followed
+// it use, and the older modifyOtherKeys form — which is what Ghostty sends by
+// default.
+//
+// bubbletea has no key of its own for either. It reads the sequence, finds
+// nothing to call it, and hands the raw bytes on, so shift+enter arrives as a
+// press with no name and is dropped.
+var shiftEnterSeqs = []string{"\x1b[13;2u", "\x1b[27;2;13~"}
+
+// isShiftEnter reports that an unnamed press was shift+enter, which peel takes
+// as the alt+enter it already writes a new line on.
+//
+// The press arrives as bubbletea's own unexported message, so there is no type
+// to compare against — only the bytes it carries, which is what this reads. A
+// terminal that says nothing about the shift key sends a bare carriage return
+// instead, and no program can tell that press from enter.
+func isShiftEnter(msg tea.Msg) bool {
+	v := reflect.ValueOf(msg)
+	if v.Kind() != reflect.Slice || v.Type().Elem().Kind() != reflect.Uint8 {
+		return false
+	}
+	return slices.Contains(shiftEnterSeqs, string(v.Bytes()))
 }
 
 // wheelLines is how far one notch of the wheel scrolls.

@@ -115,7 +115,7 @@ repository changes.
 | `a` / `U` | stage everything / unstage everything |
 | `o` | open the file the cursor is in, outside peel — in the editor you configure |
 | `c` | comment at the cursor, changed line or not |
-| `enter` / `alt+enter` | in the editor: save the comment / write another line |
+| `enter` / `shift+enter` | in the editor: save the comment / write another line |
 | `x` / `D` | resolve / delete the comment at the cursor |
 | `C` | copy the comments as text, to paste into an agent |
 | `A` / `X` | hide the comments an agent left / delete every one of them |
@@ -134,7 +134,9 @@ including on the untouched code a change breaks.
 
 `c` opens the editor inline, in the diff, exactly where the comment will sit once
 it is saved — the code stays on screen while you write about it, and the cursor
-is still on it afterwards. `enter` saves it; `alt+enter` writes another line.
+is still on it afterwards. `enter` saves it; `shift+enter` writes another line,
+and `alt+enter` does the same in a terminal that sends shift+enter as a plain
+enter.
 
 ![writing a comment inline, in the diff](docs/screenshots/comment.png)
 

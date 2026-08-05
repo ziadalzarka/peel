@@ -136,7 +136,7 @@ func (m *Model) footerView() string {
 func (m *Model) hints() string {
 	switch m.mode {
 	case modeComment:
-		return "enter save · alt+enter new line · esc cancel"
+		return "enter save · shift/alt+enter new line · esc cancel"
 	case modeHelp:
 		return "any key to close"
 	case modeConfirm:
@@ -282,7 +282,7 @@ var helpBindings = []struct{ keys, action string }{
 	{"a / U", "stage everything / unstage everything"},
 	{"o", "open the file the cursor is in, outside peel"},
 	{"c", "comment at the cursor, changed line or not"},
-	{"enter / alt+enter", "in the editor: save the comment / write another line"},
+	{"enter / shift+enter", "in the editor: save the comment / write another line"},
 	{"x", "resolve or reopen the comment at the cursor"},
 	{"D", "delete the comment at the cursor"},
 	{"C", "copy the comments as text, to paste into an agent"},
