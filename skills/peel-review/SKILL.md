@@ -64,7 +64,12 @@ peel providers
 
 `comment list --json` returns `id`, `file`, `line`, `side`, `origin`, `body`,
 `hunk`, `author`, `resolved`, `createdAt`, `target`, and — when they apply —
-`movedFrom` and `outdated`.
+`endLine`, `movedFrom` and `outdated`.
+
+`endLine` is on a note written about a run of lines: the note covers `line`
+through `endLine` inclusive, on `side`, and every line between them is what it is
+about. Read the whole run before acting on it — a note on lines 12-16 is rarely
+answered by editing line 12. A note without `endLine` is about `line` alone.
 
 `origin` is only on a note left on a file git holds in both places at once: it
 says which of the two diffs `line` counts lines in. `"worktree"` — or no `origin`
@@ -120,7 +125,7 @@ things behave differently in these sessions:
 ## Comment
 
 ```bash
-peel comment add --file <path> --line <n> --body "..." [--side new|old] [--origin index|worktree] [--hunk <id>] [--json]
+peel comment add --file <path> --line <n> --body "..." [--end-line <n>] [--side new|old] [--origin index|worktree] [--hunk <id>] [--json]
 peel comment add --file <path> --body "..."                       # file-level note
 peel comment resolve <id>... [--undo]
 peel comment rm <id>...
@@ -129,6 +134,10 @@ peel comment clear [--file <path>] [--resolved] [--author user|agent] [--all]
 
 - `--file` is required. `--line` is 1-based on `--side`; omit it for a note about
   the file as a whole.
+- `--end-line` makes the note about the run from `--line` to it, for a point
+  about several lines together — a loop and its condition, three lines that
+  should be one call. Both numbers are on the same `--side`, and everything
+  between them has to be code the note is about; otherwise leave it off.
 - `--side new` (the default) anchors to the changed file. Use `--side old` to
   comment on a line being deleted — the new file has no line number for it.
 - `--origin worktree` (what you want in almost every case) says the line number

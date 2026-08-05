@@ -138,12 +138,27 @@ func (a *App) Relocate(ctx context.Context, s *Session, comments []store.Comment
 		// Line stays where it was written when the code is gone: there is no
 		// current line to name, and the number it was written at is the only
 		// true thing left to say about it.
+		//
+		// A note written on a run of lines carries both ends through the same
+		// mapping, and is outdated if either of them has gone: a range with one
+		// end still findable names a stretch of code that is no longer the
+		// stretch anybody read.
 		line, ok := m.Lookup(c.Line)
+		end, endOK := line, true
+		if c.EndLine > 0 {
+			end, endOK = m.Lookup(c.EndLine)
+		}
 		switch {
-		case !ok:
+		case !ok || !endOK:
 			c.Outdated = true
-		case line != c.Line:
-			c.MovedFrom, c.Line = c.Line, line
+		default:
+			if line != c.Line {
+				c.MovedFrom = c.Line
+			}
+			c.Line = line
+			if c.EndLine > 0 {
+				c.EndLine = end
+			}
 		}
 	}
 	return out

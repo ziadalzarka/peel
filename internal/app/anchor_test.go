@@ -556,3 +556,68 @@ func TestRelocateReadsWithoutWritingObjects(t *testing.T) {
 		t.Errorf("reading the review wrote objects:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
 }
+
+// runNote writes a comment on a run of the working tree's lines.
+func runNote(t *testing.T, a *app.App, s *app.Session, line, end int, body string) store.Comment {
+	t.Helper()
+	c := store.Comment{
+		File: "svc.go", Line: line, EndLine: end, Side: store.SideNew,
+		Origin: store.OriginWorktree, Body: body, Author: store.AuthorUser,
+	}
+	blob, err := a.Snapshot(context.Background(), s, c)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	c.Blob = blob
+	created, err := a.Comments.Add(c)
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	return created
+}
+
+// A note written on a run of lines is a note about all of them, so both ends go
+// through the same mapping: an end left behind would name a stretch of the file
+// growing or shrinking with every edit above it.
+func TestRelocateCarriesBothEndsOfARun(t *testing.T) {
+	ctx := context.Background()
+	a, repo := anchorRepo(t, "a\nb\nc\nd\ne\n", "a\nb\nc\nd\ne\n")
+	s, _ := a.LoadWorkingTree(ctx)
+	runNote(t, a, s, 3, 4, "c and d belong together")
+
+	// Two lines arrive above the run.
+	repo.Write("svc.go", "X\nY\na\nb\nc\nd\ne\n")
+	s, _ = a.LoadWorkingTree(ctx)
+
+	all, _ := a.Comments.List(store.Filter{})
+	got := a.Relocate(ctx, s, all)
+	if got[0].Outdated {
+		t.Fatal("c and d are both still there; the note must not read as outdated")
+	}
+	if got[0].Line != 5 || got[0].EndLine != 6 || got[0].MovedFrom != 3 {
+		t.Errorf("note covers %d-%d (from %d), want 5-6 from 3",
+			got[0].Line, got[0].EndLine, got[0].MovedFrom)
+	}
+}
+
+// Half a run is not a run. A note whose far end has been rewritten covers a
+// stretch of code nobody read, and saying so is the only true thing left.
+func TestARunWithOneEndRewrittenIsOutdated(t *testing.T) {
+	ctx := context.Background()
+	a, repo := anchorRepo(t, "a\nb\nc\nd\ne\n", "a\nb\nc\nd\ne\n")
+	s, _ := a.LoadWorkingTree(ctx)
+	runNote(t, a, s, 3, 4, "c and d belong together")
+
+	// c stays; d is rewritten out from under the note.
+	repo.Write("svc.go", "a\nb\nc\nREWRITTEN\ne\n")
+	s, _ = a.LoadWorkingTree(ctx)
+
+	all, _ := a.Comments.List(store.Filter{})
+	got := a.Relocate(ctx, s, all)
+	if !got[0].Outdated {
+		t.Error("the note reads as current, with half the run it covers gone")
+	}
+	if got[0].Line != 3 || got[0].EndLine != 4 {
+		t.Errorf("note covers %d-%d, want the 3-4 it was written on", got[0].Line, got[0].EndLine)
+	}
+}

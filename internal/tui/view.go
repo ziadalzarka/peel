@@ -142,7 +142,7 @@ func (m *Model) hints() string {
 	case modeConfirm:
 		return "y confirm · any other key cancels"
 	default:
-		return `j/k hunk · ↓/↑ line · [/] file · s stage file · u unstage · space fold · c comment · b files · \ layout · w walkthrough · ? help · q quit`
+		return `j/k hunk · ↓/↑ line · [/] ten lines · opt+↓/↑ file · shift+↓/↑ mark · s stage file · u unstage · space fold · c comment · b files · \ layout · w walkthrough · ? help · q quit`
 	}
 }
 
@@ -170,8 +170,15 @@ func (m *Model) diffLines(height int) []string {
 		out = append(out, fit(" "+m.theme.Note.Render(m.emptyMessage()), width))
 	} else {
 		editor := m.draftLines()
+		lo, hi, marked := m.selectedRows()
 		for i := m.top; i < m.top+height && i < m.doc.Len(); i++ {
-			st := RowState{Cursor: i == m.cursor, Draft: nthLine(editor, i-m.doc.DraftRow)}
+			st := RowState{
+				Cursor: i == m.cursor,
+				// Only the lines themselves: a comment already sitting inside the
+				// run is not part of what a new note would be about.
+				Marked: marked && i >= lo && i <= hi && m.doc.Rows[i].Kind == RowLine,
+				Draft:  nthLine(editor, i-m.doc.DraftRow),
+			}
 			out = append(out, m.renderer.Row(m.doc, i, st))
 		}
 	}
@@ -269,19 +276,21 @@ func nthLine(lines []string, n int) string {
 var helpBindings = []struct{ keys, action string }{
 	{"j / k", "next / previous hunk, file or comment"},
 	{"↓ / ↑", "move the cursor one line (the wheel scrolls the diff)"},
-	{"] / [", "next / previous file"},
+	{"] / [", "ten lines down / up, counting on into the file below"},
+	{"opt+↓ / opt+↑", "next / previous file"},
 	{"} / {", "scroll the file tree on its own"},
 	{"h / l", "scroll the code sideways, for a line too long for the pane"},
 	{"0 / $", "back to the first column / out to the longest line's end"},
 	{"b", "hide or show the file tree, giving the diff the whole width"},
-	{"g / G", "first / last row"},
+	{"g / G", "first / last row — cmd+↑ / cmd+↓ too, where the terminal sends them"},
 	{"ctrl+d / ctrl+u", "half a page down / up"},
-	{"space", "fold away the file, the half already staged, or a walkthrough note"},
+	{"space", "fold a file, a staged half or a note away — or, on a ▴/▾ row, read in more code"},
 	{"s", "stage the file the cursor is in — it folds away and the next one opens"},
 	{"u", "unstage that file, opening it again"},
 	{"a / U", "stage everything / unstage everything"},
 	{"o", "open the file the cursor is in, outside peel"},
-	{"c", "comment at the cursor, changed line or not"},
+	{"shift+↓ / shift+↑", "mark a run of lines to write one note about — any other key lets it go"},
+	{"c", "comment at the cursor, or on the run of lines marked"},
 	{"enter / shift+enter", "in the editor: save the comment / write another line"},
 	{"x", "resolve or reopen the comment at the cursor"},
 	{"D", "delete the comment at the cursor"},

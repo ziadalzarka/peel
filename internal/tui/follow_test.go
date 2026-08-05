@@ -162,13 +162,28 @@ func TestTickWithoutFollowDoesNothing(t *testing.T) {
 	}
 }
 
+// Every review reads the files behind it, for the code the diff leaves out.
+// Only a following one also starts a timer.
 func TestInitStartsTheTimerOnlyWhenFollowing(t *testing.T) {
 	_, m := followModel(t)
-	if m.Init() == nil {
-		t.Error("follow mode started without a timer")
+	cmd := m.Init()
+	if cmd == nil {
+		t.Fatal("follow mode started without a timer")
 	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok {
+		t.Fatalf("Init produced %T, want a batch of the file read and the tick", cmd())
+	}
+	if len(batch) != 2 {
+		t.Errorf("batch has %d commands, want the file read and the tick", len(batch))
+	}
+
 	m.follow = false
-	if m.Init() != nil {
-		t.Error("a timer started without follow mode")
+	cmd = m.Init()
+	if cmd == nil {
+		t.Fatal("nothing read the files the diff leaves code out of")
+	}
+	if _, ok := cmd().(contextMsg); !ok {
+		t.Errorf("without follow Init produced %T, want the file read alone", cmd())
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ziadalzarka/peel/internal/app"
+	"github.com/ziadalzarka/peel/internal/git"
 	"github.com/ziadalzarka/peel/internal/store"
 )
 
@@ -25,6 +26,11 @@ type Backend interface {
 	UnstageFile(ctx context.Context, path string) error
 	StageAll(ctx context.Context) error
 	UnstageAll(ctx context.Context) error
+
+	// Context returns each side's own copy of the files a session shows, line by
+	// line, so the unchanged code the diff leaves out can be read in place. A
+	// side it has no copy of is one the review cannot expand.
+	Context(ctx context.Context, s *app.Session) (map[FileSide][]string, error)
 
 	// OpenFile hands a file to the desktop, for reading it outside the diff.
 	OpenFile(ctx context.Context, path string) error
@@ -146,6 +152,54 @@ func (b *appBackend) UnstageAll(ctx context.Context) error {
 		return err
 	}
 	return b.app.Stager.UnstageAll(ctx)
+}
+
+// Context reads the copy of each file its side's hunks are numbered against.
+//
+// The session is passed in rather than read off the backend: this runs on its
+// own goroutine, beside the reload that would otherwise be replacing the field
+// underneath it, and the files to read are the ones the reviewer is looking at.
+//
+// A file that cannot be read — deleted, or gone since the diff — is left out
+// rather than failing the rest, exactly as it is left out of the pass: what it
+// costs is the expanders on that one file.
+func (b *appBackend) Context(ctx context.Context, s *app.Session) (map[FileSide][]string, error) {
+	// A pull request is not in this working tree. The paths in it name local
+	// files that have nothing to do with the review, and reading context out of
+	// those would put code on screen the changeset never touched.
+	if s == nil || s.PR != nil {
+		return nil, nil
+	}
+
+	out := map[FileSide][]string{}
+	for _, f := range s.Files {
+		if f.IsBinary() {
+			continue
+		}
+		if f.Unstaged != nil {
+			if lines, err := b.app.Repo.WorkingLines(f.Path); err == nil {
+				out[FileSide{Path: f.Path}] = lines
+			}
+		}
+		if f.Staged != nil {
+			if lines, err := b.stagedLines(ctx, f); err == nil {
+				out[FileSide{Path: f.Path, Staged: true}] = lines
+			}
+		}
+	}
+	return out, nil
+}
+
+// stagedLines returns the copy the index holds.
+//
+// Only a part-staged file is worth the git call: a file with everything staged
+// has no unstaged diff, and having no unstaged diff is exactly what it means for
+// the file on disk to be the file in the index.
+func (b *appBackend) stagedLines(ctx context.Context, f git.FileEntry) ([]string, error) {
+	if f.State() == git.StatePartial {
+		return b.app.Repo.IndexLines(ctx, f.Path)
+	}
+	return b.app.Repo.WorkingLines(f.Path)
 }
 
 func (b *appBackend) OpenFile(ctx context.Context, path string) error {

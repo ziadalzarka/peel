@@ -181,6 +181,13 @@ type fakeBackend struct {
 	foldErr     error
 	foldSaveErr error
 
+	// context is each side's copy of the file, for reading in the code the diff
+	// leaves out, and contextCalls is the session peel asked for it with, once
+	// per ask.
+	context      map[FileSide][]string
+	contextCalls []*app.Session
+	contextErr   error
+
 	// agentHidden is whether the agent's notes were left out of the diff.
 	agentHidden      bool
 	agentHiddenSaves int
@@ -328,6 +335,16 @@ func (f *fakeBackend) SetAgentCommentsHidden(hidden bool) error {
 	f.agentHidden = hidden
 	f.agentHiddenSaves++
 	return nil
+}
+
+// Context hands back whatever copies of the files the test set up, recording
+// each ask so a test can see the diff moving on send peel back for them.
+func (f *fakeBackend) Context(_ context.Context, s *app.Session) (map[FileSide][]string, error) {
+	f.contextCalls = append(f.contextCalls, s)
+	if f.contextErr != nil {
+		return nil, f.contextErr
+	}
+	return f.context, nil
 }
 
 func (f *fakeBackend) OpenFile(_ context.Context, path string) error {

@@ -115,11 +115,13 @@ repository changes.
 | `0` / `$` | back to the first column / out to the longest line's end |
 | `b` | hide or show the file tree, giving the diff the whole width |
 | `space` | fold away the file, the half already staged, or a walkthrough note — or open it again |
+| `space` on a `▴`/`▾` row | read in twenty more lines of the code the diff left out |
 | `s` | stage the file the cursor is in, folding it away and moving to the next |
 | `u` | unstage that file, opening it again |
 | `a` / `U` | stage everything / unstage everything |
 | `o` | open the file the cursor is in, outside peel — in the editor you configure |
-| `c` | comment at the cursor, changed line or not |
+| `shift+↓` / `shift+↑` | mark a run of lines to write one note about — any other key lets it go |
+| `c` | comment at the cursor, or on the run of lines marked |
 | `enter` / `shift+enter` | in the editor: save the comment / write another line |
 | `x` / `D` | resolve / delete the comment at the cursor |
 | `C` | copy your own comments as text, to paste into an agent |
@@ -135,6 +137,17 @@ and every line of a diff body, changed or not. Nothing to enter first: `s`
 anywhere inside a file stages that file, `c` anywhere leaves a note there,
 including on the untouched code a change breaks.
 
+### Reading past the hunk
+
+`git diff` prints three lines either side of a change, which is rarely enough to
+tell whether the change is right. Wherever it stopped, peel says how much it left
+out — `▾ 38 lines hidden` under a hunk, `▴ 38 lines hidden` over the next one —
+and `space` on that row reads twenty of them in from that end. Press it again for
+twenty more, until the arrow goes and the code runs continuously from one hunk to
+the next. Everything works on the code that arrives the way it works on the rest:
+`c` leaves a note on it, side-by-side pairs it, and the line numbers are the
+file's own.
+
 ### Comments
 
 `c` opens the editor inline, in the diff, exactly where the comment will sit once
@@ -142,6 +155,13 @@ it is saved — the code stays on screen while you write about it, and the curso
 is still on it afterwards. `enter` saves it; `shift+enter` writes another line,
 and `alt+enter` does the same in a terminal that sends shift+enter as a plain
 enter.
+
+A note can be about more than one line. `shift` with `↓` or `↑` takes the next
+line into a run and carries the cursor with it — reversing the arrow gives a line
+back — and `c` then writes one note about all of it, stored with both ends and
+read back as `alpha.go:12-16`. Nothing has to be cancelled: the run is let go of
+by carrying on, since every key that is not extending it or writing its note is
+you moving on.
 
 ![writing a comment inline, in the diff](docs/screenshots/comment.png)
 

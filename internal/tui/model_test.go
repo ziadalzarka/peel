@@ -47,6 +47,18 @@ func keyMsg(name string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyUp}
 	case "down":
 		return tea.KeyMsg{Type: tea.KeyDown}
+	case "shift+up":
+		return tea.KeyMsg{Type: tea.KeyShiftUp}
+	case "shift+down":
+		return tea.KeyMsg{Type: tea.KeyShiftDown}
+	case "alt+up":
+		return tea.KeyMsg{Type: tea.KeyUp, Alt: true}
+	case "alt+down":
+		return tea.KeyMsg{Type: tea.KeyDown, Alt: true}
+	case "home":
+		return tea.KeyMsg{Type: tea.KeyHome}
+	case "end":
+		return tea.KeyMsg{Type: tea.KeyEnd}
 	case "left":
 		return tea.KeyMsg{Type: tea.KeyLeft}
 	case "right":
@@ -131,13 +143,13 @@ func TestNavigationKeysMoveTheCursor(t *testing.T) {
 		t.Fatalf("after k the cursor is on a %v, want a file", got)
 	}
 
-	press(t, m, "]")
+	press(t, m, "alt+down")
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
-		t.Fatalf("after ] the cursor is on %q, want beta.txt", got)
+		t.Fatalf("after opt+↓ the cursor is on %q, want beta.txt", got)
 	}
-	press(t, m, "[")
+	press(t, m, "alt+up")
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "alpha.go" {
-		t.Fatalf("after [ the cursor is on %q, want alpha.go", got)
+		t.Fatalf("after opt+↑ the cursor is on %q, want alpha.go", got)
 	}
 
 	press(t, m, "G")
@@ -201,6 +213,162 @@ func TestArrowKeysMoveTheCursorOneLineAtATime(t *testing.T) {
 	press(t, m, "up")
 	if m.cursor != start+2 {
 		t.Errorf("up left the cursor at row %d, want %d", m.cursor, start+2)
+	}
+}
+
+// The brackets move ten lines, which is ten presses of the arrow and not a place
+// in the file: the count runs on through the file below rather than stopping at
+// its last line.
+func TestBracketsMoveTenLinesThroughTheFilesBelow(t *testing.T) {
+	m := newModel(t, newFakeBackend(newSession(t, threeFileDiff)), WithSize(100, 12))
+
+	start := m.cursor
+	press(t, m, "]")
+	leapt := m.cursor
+
+	// Ten presses of the arrow, counted out here rather than taken from the
+	// constant, so the distance itself is what is being checked.
+	stepped := newModel(t, newFakeBackend(newSession(t, threeFileDiff)), WithSize(100, 12))
+	for range 10 {
+		press(t, stepped, "down")
+	}
+	if leapt != stepped.cursor {
+		t.Fatalf("] left the cursor at row %d, want %d — where ten presses of down reach",
+			leapt, stepped.cursor)
+	}
+	if m.doc.FileAt(leapt) == m.doc.FileAt(start) {
+		t.Errorf("ten lines from the top of the diff stayed in %q, want the count carried into the file below",
+			m.doc.Files[m.doc.FileAt(start)].Entry.Path)
+	}
+	if !m.doc.IsStop(leapt) {
+		t.Errorf("the cursor landed on row %d, which it cannot rest on", leapt)
+	}
+	if leapt < m.top || leapt >= m.top+m.bodyHeight() {
+		t.Errorf("the cursor %d is outside the window [%d,%d) — the window did not follow the jump",
+			leapt, m.top, m.top+m.bodyHeight())
+	}
+
+	press(t, m, "[")
+	if m.cursor != start {
+		t.Errorf("[ left the cursor at row %d, want the row it started on, %d", m.cursor, start)
+	}
+	if m.cursor < m.top || m.cursor >= m.top+m.bodyHeight() {
+		t.Errorf("after jumping back the cursor %d is outside the window [%d,%d)",
+			m.cursor, m.top, m.top+m.bodyHeight())
+	}
+}
+
+// The ends of the diff stop the jump rather than the file boundaries, so holding
+// the bracket walks the whole review and stops at the bottom of it.
+func TestBracketsStopAtTheEndsOfTheDiff(t *testing.T) {
+	m := newModel(t, newFakeBackend(manyFileSession(t, 20)), WithSize(100, 12))
+
+	for range 50 {
+		press(t, m, "]")
+	}
+	if m.cursor != m.doc.LastStop() {
+		t.Errorf("] held down left the cursor at %d, want the last row %d", m.cursor, m.doc.LastStop())
+	}
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "f19.txt" {
+		t.Errorf("the cursor ended in %q, want the last file", got)
+	}
+
+	for range 50 {
+		press(t, m, "[")
+	}
+	if m.cursor != m.doc.FirstStop() {
+		t.Errorf("[ held down left the cursor at %d, want the first row %d", m.cursor, m.doc.FirstStop())
+	}
+}
+
+// Option and an arrow are the file jump the brackets used to be: a whole file at
+// a time, landing on its header with the window opened on it, and stopping at the
+// first and last file rather than running past them.
+func TestOptionArrowsMoveAWholeFileAtATime(t *testing.T) {
+	m := newModel(t, newFakeBackend(manyFileSession(t, 20)), WithSize(100, 12))
+
+	// From inside a file, back up to its own header first — the file being left is
+	// the one the cursor is in, not the one below it.
+	m.moveTo(m.doc.StopsAway(m.doc.RowOfFile(3), 2))
+	press(t, m, "alt+up")
+	if m.cursor != m.doc.RowOfFile(3) {
+		t.Fatalf("opt+↑ from inside file 3 left the cursor at %d, want its header at %d",
+			m.cursor, m.doc.RowOfFile(3))
+	}
+
+	press(t, m, "alt+down")
+	if m.cursor != m.doc.RowOfFile(4) || m.top != m.cursor {
+		t.Errorf("opt+↓ left the cursor at %d and the window at %d, want both on file 4's header (%d)",
+			m.cursor, m.top, m.doc.RowOfFile(4))
+	}
+
+	for range 50 {
+		press(t, m, "alt+down")
+	}
+	if got := m.doc.FileAt(m.cursor); got != 19 {
+		t.Errorf("opt+↓ held down ended in file %d, want the last one", got)
+	}
+	for range 50 {
+		press(t, m, "alt+up")
+	}
+	if got := m.doc.FileAt(m.cursor); got != 0 {
+		t.Errorf("opt+↑ held down ended in file %d, want the first one", got)
+	}
+}
+
+// cmd+↑ and cmd+↓ are the ends of the diff, the same rows g and G reach. The
+// terminal has to say which modifier was held for them to arrive at all, and
+// bubbletea has no name for the sequence it sends when it does, so the raw bytes
+// are what peel reads.
+func TestCmdArrowsReachTheEndsOfTheDiff(t *testing.T) {
+	// Plain cmd, cmd with another modifier along with it, the event type kitty
+	// appends when it has been asked to report one, and the meta bit a terminal
+	// uses when it is configured to send cmd as meta instead.
+	for _, seq := range []string{"\x1b[1;9B", "\x1b[1;10B", "\x1b[1;13B", "\x1b[1;9:1B", "\x1b[1;9:3B", "\x1b[1;33B"} {
+		m := newModel(t, newFakeBackend(newSession(t, threeFileDiff)), WithSize(100, 12))
+
+		send(t, m, csiSequenceMsg(seq))
+		if m.cursor != m.doc.LastStop() {
+			t.Errorf("%q left the cursor at %d, want the last row %d", seq, m.cursor, m.doc.LastStop())
+		}
+
+		send(t, m, csiSequenceMsg(strings.Replace(seq, "B", "A", 1)))
+		if m.cursor != m.doc.FirstStop() {
+			t.Errorf("the ↑ of %q left the cursor at %d, want the first row %d", seq, m.cursor, m.doc.FirstStop())
+		}
+	}
+
+	// They are read as the home and end peel already binds, so a terminal that
+	// sends those for cmd and an arrow — several are configured to — lands on the
+	// same rows without any of the above.
+	m := newModel(t, newFakeBackend(newSession(t, threeFileDiff)), WithSize(100, 12))
+	press(t, m, "end")
+	if m.cursor != m.doc.LastStop() {
+		t.Errorf("end left the cursor at %d, want the last row %d", m.cursor, m.doc.LastStop())
+	}
+	press(t, m, "home")
+	if m.cursor != m.doc.FirstStop() {
+		t.Errorf("home left the cursor at %d, want the first row %d", m.cursor, m.doc.FirstStop())
+	}
+}
+
+// An arrow a terminal reports another modifier for is not cmd, and is left
+// alone: ctrl+↓ is not a key peel binds, and reading it as one would move the
+// cursor on a press meant for something else. Nor is cmd sideways: `0` and `$`
+// are what reach the ends of a line, and the diff does not scroll to them.
+func TestModifiedArrowsWithoutCmdUpOrDownAreLeftAlone(t *testing.T) {
+	for _, seq := range []string{
+		"\x1b[1;5B", "\x1b[1;2B", "\x1b[1;3B", "\x1b[1;7B", "\x1b[1;8B",
+		"\x1b[1;9C", "\x1b[1;9D",
+		"\x1b[3~", "\x1b[1;B", "\x1b[1;99999999999999999999B",
+	} {
+		m := newModel(t, newFakeBackend(newSession(t, threeFileDiff)), WithSize(100, 12))
+
+		start := m.cursor
+		send(t, m, csiSequenceMsg(seq))
+		if m.cursor != start {
+			t.Errorf("%q moved the cursor to %d, want it left at %d", seq, m.cursor, start)
+		}
 	}
 }
 
@@ -333,18 +501,18 @@ func TestThePaneMarksTheFileTheWindowOpensOn(t *testing.T) {
 func TestFileJumpsOpenTheWindowOnTheFile(t *testing.T) {
 	m := newModel(t, newFakeBackend(manyFileSession(t, 20)), WithSize(100, 12))
 
-	press(t, m, "]", "]")
+	press(t, m, "alt+down", "alt+down")
 	if m.cursor != m.doc.RowOfFile(2) || m.top != m.cursor {
-		t.Errorf("after two ] the window starts at row %d and the cursor is at %d, want both at file 2's header (%d)",
+		t.Errorf("after two opt+↓ the window starts at row %d and the cursor is at %d, want both at file 2's header (%d)",
 			m.top, m.cursor, m.doc.RowOfFile(2))
 	}
 	if got := m.markedFile(); got != 2 {
-		t.Errorf("after two ] the pane marks file %d, want 2", got)
+		t.Errorf("after two opt+↓ the pane marks file %d, want 2", got)
 	}
 
-	press(t, m, "[")
+	press(t, m, "alt+up")
 	if got := m.markedFile(); got != 1 {
-		t.Errorf("after [ the pane marks file %d, want 1", got)
+		t.Errorf("after opt+↑ the pane marks file %d, want 1", got)
 	}
 }
 
@@ -409,7 +577,7 @@ func TestStagingAFileFoldsItAndSpaceOpensItAgain(t *testing.T) {
 		t.Error("staging alpha.go folded beta.txt too")
 	}
 
-	press(t, m, "[", "space")
+	press(t, m, "alt+up", "space")
 	if m.doc.Files[0].Collapsed {
 		t.Error("space did not open the staged file again")
 	}
@@ -616,7 +784,7 @@ func TestStagingStaysPutWhenEverythingBelowIsFolded(t *testing.T) {
 	backend.nextSession = sessionOf(staged)
 
 	m := newModel(t, backend)
-	press(t, m, "]", "s")
+	press(t, m, "alt+down", "s")
 
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
 		t.Errorf("cursor is on %q, want it to stay on beta.txt — gamma.md is folded and alpha.go is behind the cursor", got)
@@ -633,7 +801,7 @@ func TestStagingTheLastFileStaysOnIt(t *testing.T) {
 	backend.nextSession = sessionOf(staged)
 
 	m := newModel(t, backend)
-	press(t, m, "]", "s")
+	press(t, m, "alt+down", "s")
 
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
 		t.Errorf("cursor is on %q, want it to stay on beta.txt", got)
@@ -731,7 +899,7 @@ func TestSpaceFoldsAFileAndMovesOn(t *testing.T) {
 		t.Errorf("folding alpha.go left the cursor on %q, want it moved on to beta.txt", got)
 	}
 
-	press(t, m, "[", "space")
+	press(t, m, "alt+up", "space")
 	if m.doc.Files[0].Collapsed {
 		t.Error("space did not expand alpha.go again")
 	}
@@ -810,7 +978,7 @@ func TestFoldsOfFilesNoLongerInTheDiffAreDropped(t *testing.T) {
 		t.Fatal("alpha.go opened unfolded, want the fold it was left with")
 	}
 
-	press(t, m, "]", "space")
+	press(t, m, "alt+down", "space")
 
 	want := []string{"alpha.go", "beta.txt"}
 	if got := backend.folded; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
@@ -822,7 +990,7 @@ func TestFoldsOfFilesNoLongerInTheDiffAreDropped(t *testing.T) {
 func TestFoldingTheLastFileStaysOnIt(t *testing.T) {
 	m := newModel(t, newFakeBackend(newSession(t, twoFileDiff)))
 
-	press(t, m, "]", "space")
+	press(t, m, "alt+down", "space")
 
 	if !m.doc.Files[1].Collapsed {
 		t.Fatal("space did not collapse beta.txt")
@@ -1778,7 +1946,7 @@ func TestViewOnACleanTreeSaysSo(t *testing.T) {
 		t.Errorf("view = %q, want it to say there is nothing to review", m.View())
 	}
 	// Every key must be safe on an empty document.
-	press(t, m, "j", "k", "down", "up", "]", "[", "}", "{", "g", "G", "s", "u", "o", "c", "x", "D", "space", `\`)
+	press(t, m, "j", "k", "down", "up", "]", "[", "alt+down", "alt+up", "}", "{", "g", "G", "s", "u", "o", "c", "x", "D", "space", `\`)
 	if m.err != nil {
 		t.Errorf("err = %v, want none", m.err)
 	}
@@ -1927,7 +2095,7 @@ func paths(m *Model) []string {
 func TestWalkthroughJumpingToAFileLandsOnItsNote(t *testing.T) {
 	m := newModel(t, newFakeBackend(newSession(t, twoFileDiff)))
 
-	press(t, m, "w", "]")
+	press(t, m, "w", "alt+down")
 
 	if row := m.doc.Rows[m.cursor]; row.Kind != RowStep || m.doc.StepAt(m.cursor) != 1 {
 		t.Fatalf("J landed on %+v, want the note introducing beta.txt", row)
@@ -1939,16 +2107,16 @@ func TestWalkthroughJumpingOnFromANoteReachesTheNextFile(t *testing.T) {
 
 	press(t, m, "w")
 	m.moveTo(m.doc.Steps[0].Row)
-	press(t, m, "]")
+	press(t, m, "alt+down")
 
 	if want := m.doc.Steps[1].Row; m.cursor != want {
-		t.Fatalf("] on the first note left the cursor at %d, want the note introducing beta.txt at %d", m.cursor, want)
+		t.Fatalf("opt+↓ on the first note left the cursor at %d, want the note introducing beta.txt at %d", m.cursor, want)
 	}
 
-	press(t, m, "[")
+	press(t, m, "alt+up")
 
 	if want := m.doc.Steps[0].Row; m.cursor != want {
-		t.Fatalf("[ on the second note left the cursor at %d, want the note introducing alpha.go at %d", m.cursor, want)
+		t.Fatalf("opt+↑ on the second note left the cursor at %d, want the note introducing alpha.go at %d", m.cursor, want)
 	}
 }
 
@@ -1960,10 +2128,10 @@ func TestWalkthroughJumpingOnFromANoteReachesTheSecondFileItCovers(t *testing.T)
 
 	press(t, m, "w")
 	m.moveTo(m.doc.Steps[0].Row)
-	press(t, m, "]")
+	press(t, m, "alt+down")
 
 	if want := m.doc.Files[1].Row; m.cursor != want {
-		t.Fatalf("] on a note covering two files landed at %d, want beta.txt at %d", m.cursor, want)
+		t.Fatalf("opt+↓ on a note covering two files landed at %d, want beta.txt at %d", m.cursor, want)
 	}
 }
 
@@ -2289,6 +2457,39 @@ func TestAFileFoldedByHandStaysFoldedWhenItChanges(t *testing.T) {
 
 	if !m.doc.Files[0].Collapsed {
 		t.Error("a file folded by hand opened again when it changed")
+	}
+}
+
+// Staging the rest of a part-staged file leaves it with one half, and the
+// heading that told the two apart goes with the half it was there to separate —
+// even when the reviewer had folded that heading away, which used to leave the
+// file showing a "staged" line and none of its diff.
+func TestStagingTheRestOfAFileDropsItsSideHeadings(t *testing.T) {
+	backend := newFakeBackend(sessionOf([]git.FileEntry{partStagedFile(t, "notes.txt")}))
+	m := newModel(t, backend)
+
+	m.moveTo(m.doc.Sides[0].Row)
+	press(t, m, "space")
+	press(t, m, "space")
+	if !m.doc.Sides[0].Folded {
+		t.Fatal("the index's half should be folded away by hand before staging the rest")
+	}
+
+	whole := partStagedFile(t, "notes.txt")
+	whole.Staged, whole.Unstaged = whole.Unstaged, nil
+	backend.nextSession = sessionOf([]git.FileEntry{whole})
+
+	press(t, m, "s")
+	press(t, m, "space")
+
+	if m.doc.Files[0].Collapsed {
+		t.Fatal("space did not open the file staging had folded away")
+	}
+	if len(m.doc.Sides) != 0 {
+		t.Errorf("sides = %+v, want none — the file is all in the index now", m.doc.Sides)
+	}
+	if len(m.doc.Hunks) == 0 {
+		t.Error("the file opened onto nothing, with its diff still hidden behind a folded heading")
 	}
 }
 

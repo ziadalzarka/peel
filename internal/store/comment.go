@@ -59,8 +59,15 @@ type Comment struct {
 	File string `json:"file"`
 	// Line is the 1-based line number on Side. Zero means the comment applies
 	// to the file as a whole rather than a specific line.
-	Line int  `json:"line"`
-	Side Side `json:"side"`
+	Line int `json:"line"`
+	// EndLine is the last line of the run the note was written on, when it was
+	// written on more than one. Zero means the note is about Line alone.
+	//
+	// A run is one continuous stretch of one side of one hunk, which is what
+	// makes the pair a range rather than two numbers: everything between them is
+	// code the note is about.
+	EndLine int  `json:"endLine,omitempty"`
+	Side    Side `json:"side"`
 	// Origin is which of the two diffs Line was read from. Empty means the note
 	// predates the distinction, or came from a caller that did not make it, and
 	// is placed on whichever side claims it first.
@@ -109,6 +116,14 @@ func (c Comment) Validate() error {
 	if c.Line < 0 {
 		return fmt.Errorf("comment: line %d is negative", c.Line)
 	}
+	if c.EndLine != 0 {
+		if c.Line <= 0 {
+			return fmt.Errorf("comment: end line %d with no line to run from", c.EndLine)
+		}
+		if c.EndLine < c.Line {
+			return fmt.Errorf("comment: end line %d is before line %d", c.EndLine, c.Line)
+		}
+	}
 	if c.Side != "" && !c.Side.Valid() {
 		return fmt.Errorf("comment: unknown side %q", c.Side)
 	}
@@ -121,10 +136,14 @@ func (c Comment) Validate() error {
 	return nil
 }
 
-// Location renders the comment's anchor for display, e.g. "src/main.go:42".
+// Location renders the comment's anchor for display, e.g. "src/main.go:42", or
+// "src/main.go:42-48" for a note written on a run of lines.
 func (c Comment) Location() string {
 	if c.Line == 0 {
 		return c.File
+	}
+	if c.EndLine > c.Line {
+		return fmt.Sprintf("%s:%d-%d", c.File, c.Line, c.EndLine)
 	}
 	return fmt.Sprintf("%s:%d", c.File, c.Line)
 }

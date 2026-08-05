@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -212,6 +214,34 @@ func (r *Repo) UntrackedDiff(ctx context.Context, path string) (FileDiff, error)
 	f.OldPath = path
 	f.NewPath = path
 	return f, nil
+}
+
+// WorkingLines returns the working tree's copy of path, line by line.
+//
+// It is what a diff against the index is measured against, so the unchanged
+// code a hunk's three lines of context leave out can be read straight out of it
+// rather than asked of git a second time.
+func (r *Repo) WorkingLines(path string) ([]string, error) {
+	content, err := os.ReadFile(filepath.Join(r.dir, path))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", path, err)
+	}
+	return splitLines(string(content)), nil
+}
+
+// IndexLines returns the copy git holds staged for path, line by line — what
+// the staged half of a part-staged file is measured against, and a different
+// file from the one on disk.
+func (r *Repo) IndexLines(ctx context.Context, path string) ([]string, error) {
+	res, err := r.runner.Run(ctx, exec.Command{
+		Name: "git",
+		Args: []string{"cat-file", "blob", ":" + path},
+		Dir:  r.dir,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read staged %s: %w", path, err)
+	}
+	return splitLines(string(res.Stdout)), nil
 }
 
 // StageFile stages every change to one path, including deletions and untracked

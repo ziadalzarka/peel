@@ -163,20 +163,43 @@ func TestBuildFoldsTheStagedHalfOfAPartStagedFile(t *testing.T) {
 	}
 }
 
-// A file whose changes are all in the index keeps its diff on screen: folding
-// the only thing in it would leave a header with nothing under it.
-func TestBuildKeepsAFullyStagedFileOpen(t *testing.T) {
-	entries := parseFiles(t, twoFileDiff)
-	entries[0].Staged, entries[0].Unstaged = entries[0].Unstaged, nil
+// A file whose changes are all in the index has one half like any other file,
+// and a heading over it names nothing to tell it from.
+func TestBuildDoesNotHeadSidesOfAFullyStagedFile(t *testing.T) {
+	doc := Build(sessionOf([]git.FileEntry{fullyStagedFile(t)}), nil, nil, LayoutUnified)
 
-	doc := Build(sessionOf(entries[:1]), nil, nil, LayoutUnified)
-
-	if len(doc.Sides) != 1 || doc.Sides[0].Folded {
-		t.Fatalf("sides = %v, want one open heading", doc.Sides)
+	if len(doc.Sides) != 0 {
+		t.Fatalf("sides = %v, want none where there is nothing to tell apart", doc.Sides)
 	}
 	if len(doc.Hunks) != 1 {
 		t.Errorf("hunks = %d, want the staged one shown", len(doc.Hunks))
 	}
+}
+
+// The fold of a part-staged file's index half is remembered by path, and staging
+// the rest of the file leaves that memory behind. It must not survive as a
+// heading: the file has one half now, and the heading would hide it behind a
+// line saying "staged" over a file already marked staged twice over.
+func TestBuildDropsAStaleSideFoldWhenTheFileIsFullyStaged(t *testing.T) {
+	folds := map[string]bool{"alpha.go": true}
+	doc := Build(sessionOf([]git.FileEntry{fullyStagedFile(t)}), nil, nil, LayoutUnified,
+		WithSideFolds(folds))
+
+	if len(doc.Sides) != 0 {
+		t.Fatalf("sides = %v, want none — the file has one half", doc.Sides)
+	}
+	if len(doc.Hunks) != 1 {
+		t.Errorf("hunks = %d, want the file's diff on screen rather than folded behind a heading", len(doc.Hunks))
+	}
+}
+
+// fullyStagedFile gives alpha.go changes in the index and none in the working
+// tree, which is what a file looks like once it has been staged whole.
+func fullyStagedFile(t *testing.T) git.FileEntry {
+	t.Helper()
+	entries := parseFiles(t, twoFileDiff)
+	entries[0].Staged, entries[0].Unstaged = entries[0].Unstaged, nil
+	return entries[0]
 }
 
 // An ordinary file — everything still in the working tree — is left as the plain
@@ -656,6 +679,96 @@ func TestNavigationAtTheEdgesStaysPut(t *testing.T) {
 	}
 	if got := doc.NextFile(last); got != last {
 		t.Errorf("NextFile at the bottom = %d, want %d", got, last)
+	}
+}
+
+// A jump of ten lines is ten lines wherever it starts: the file it began in
+// ending is not a wall, and the blank between two files is passed over rather
+// than counted, so the cursor moves further down the document than ten rows.
+func TestStopsAwayCountsOnThroughTheFileBelow(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+
+	first := doc.FirstStop()
+	got := doc.StopsAway(first, 10)
+
+	want := first
+	for range 10 {
+		want = doc.NextStop(want)
+	}
+	if got != want {
+		t.Fatalf("StopsAway(%d, 10) = %d, want %d — the row ten presses of down reaches", first, got, want)
+	}
+	if doc.FileAt(got) == doc.FileAt(first) {
+		t.Errorf("ten lines from the top of %q stayed in it, want the count carried into the next file",
+			doc.Files[doc.FileAt(first)].Entry.Path)
+	}
+	if got-first <= 10 {
+		t.Errorf("the jump moved %d rows for 10 lines, want further — the blank between the files is not a line",
+			got-first)
+	}
+
+	back := doc.StopsAway(got, -10)
+	if back != first {
+		t.Errorf("ten lines back up = %d, want the row it started on, %d", back, first)
+	}
+}
+
+// Counting stops where the document does. A jump longer than what is left lands
+// on the last row there is rather than off the end of the rows.
+func TestStopsAwayStopsAtTheEndsOfTheDocument(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+
+	if got := doc.StopsAway(doc.FirstStop(), 500); got != doc.LastStop() {
+		t.Errorf("StopsAway past the bottom = %d, want the last stop %d", got, doc.LastStop())
+	}
+	if got := doc.StopsAway(doc.LastStop(), -500); got != doc.FirstStop() {
+		t.Errorf("StopsAway past the top = %d, want the first stop %d", got, doc.FirstStop())
+	}
+	if got := doc.StopsAway(doc.LastStop(), 1); got != doc.LastStop() {
+		t.Errorf("StopsAway one past the bottom = %d, want it left at %d", got, doc.LastStop())
+	}
+	if got := doc.StopsAway(doc.FirstStop(), -1); got != doc.FirstStop() {
+		t.Errorf("StopsAway one past the top = %d, want it left at %d", got, doc.FirstStop())
+	}
+	if got := doc.StopsAway(doc.FirstStop(), 0); got != doc.FirstStop() {
+		t.Errorf("StopsAway of nothing = %d, want it standing still at %d", got, doc.FirstStop())
+	}
+}
+
+// Whatever the document holds — a walkthrough note, a comment several rows long,
+// a file whose diff is folded away — a jump of n lands exactly where n presses of
+// the arrow would, and never on a row the arrows cannot reach.
+func TestStopsAwayLandsWhereSteppingWould(t *testing.T) {
+	comments := []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 3, Side: store.SideNew, Body: "first\nsecond\nthird", Author: store.AuthorUser},
+		{ID: "c2", File: "beta.txt", Body: "a note on the file as a whole", Author: store.AuthorAgent},
+	}
+	groups := Groups{Steps: []store.Step{
+		{Title: "the change", Body: "why it is here", Files: []string{"alpha.go"}},
+		{Title: "the rest", Body: "and the rest of it", Files: []string{"beta.txt", "gamma.md"}},
+	}, Width: 40}
+	doc := Build(newSession(t, threeFileDiff), comments, map[string]bool{"gamma.md": true},
+		LayoutUnified, WithGroups(groups), WithCommentWidth(40))
+
+	for start := range doc.Len() {
+		if !doc.IsStop(start) {
+			continue
+		}
+		for n := range 20 {
+			down, up := start, start
+			for range n {
+				down, up = doc.NextStop(down), doc.PrevStop(up)
+			}
+			if got := doc.StopsAway(start, n); got != down {
+				t.Fatalf("StopsAway(%d, %d) = %d, want %d", start, n, got, down)
+			}
+			if got := doc.StopsAway(start, -n); got != up {
+				t.Fatalf("StopsAway(%d, %d) = %d, want %d", start, -n, got, up)
+			}
+			if !doc.IsStop(down) || !doc.IsStop(up) {
+				t.Fatalf("stepping %d from %d reached a row the cursor cannot rest on", n, start)
+			}
+		}
 	}
 }
 

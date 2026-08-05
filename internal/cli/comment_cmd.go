@@ -77,6 +77,7 @@ func commentAdd(ctx context.Context, c *CLI, args []string) error {
 	fs := newFlagSet("comment add")
 	file := fs.String("file", "", "path the comment applies to (required)")
 	line := fs.Int("line", 0, "line number; omit for a file-level comment")
+	endLine := fs.Int("end-line", 0, "last line of a run; omit for a note on one line")
 	body := fs.String("body", "", "comment text; omit to read from stdin")
 	summary := fs.String("summary", "", "alias for --body")
 	side := fs.String("side", string(store.SideNew), "which side the line is on: new or old")
@@ -112,14 +113,15 @@ func commentAdd(ctx context.Context, c *CLI, args []string) error {
 	}
 
 	comment := store.Comment{
-		File:   *file,
-		Line:   *line,
-		Body:   text,
-		Side:   store.Side(*side),
-		Origin: store.Origin(*origin),
-		Author: store.Author(*author),
-		Hunk:   *hunk,
-		Target: s.Target,
+		File:    *file,
+		Line:    *line,
+		EndLine: *endLine,
+		Body:    text,
+		Side:    store.Side(*side),
+		Origin:  store.Origin(*origin),
+		Author:  store.Author(*author),
+		Hunk:    *hunk,
+		Target:  s.Target,
 	}
 	// Freeze the file the note is about, so the line number stored with it stays
 	// findable once the code moves. A snapshot that fails is not worth losing a
@@ -270,7 +272,10 @@ type commentJSON struct {
 	ID   string `json:"id"`
 	File string `json:"file"`
 	Line int    `json:"line"`
-	Side string `json:"side"`
+	// EndLine is the last line of the run the note was written on, when it was
+	// written on more than one. Absent on a note about a single line.
+	EndLine int    `json:"endLine,omitempty"`
+	Side    string `json:"side"`
 	// Origin says which diff Line counts lines in — "index" or "worktree" — on a
 	// file git holds in both places at once. Empty where the note named neither.
 	Origin string `json:"origin,omitempty"`
@@ -294,6 +299,7 @@ func commentToJSON(c store.Comment) commentJSON {
 		ID:       c.ID,
 		File:     c.File,
 		Line:     c.Line,
+		EndLine:  c.EndLine,
 		Side:     string(c.Side),
 		Origin:   string(c.Origin),
 		Body:     c.Body,

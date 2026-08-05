@@ -33,6 +33,8 @@ const splitDivider = splitRule + " "
 type RowState struct {
 	// Cursor marks the row the cursor rests on.
 	Cursor bool
+	// Marked reports that the row is one of a run of lines marked to comment on.
+	Marked bool
 	// Draft is the line of the comment editor a draft row shows. The editor
 	// arrives per frame rather than through the document, since it changes on
 	// every keystroke and the document does not.
@@ -86,7 +88,7 @@ func (r *Renderer) CodeColumns(l Layout) int {
 		half := (body - ansi.StringWidth(splitDivider)) / 2
 		return max(half-lineNumWidth-2, 1)
 	}
-	return max(body-2*lineNumWidth-2, 1)
+	return max(body-lineNumWidth-2, 1)
 }
 
 // Row renders one row of the document to a single line.
@@ -104,6 +106,8 @@ func (r *Renderer) Row(d Document, i int, st RowState) string {
 		return r.line(d, row, st)
 	case RowSide:
 		return r.side(d, row, st)
+	case RowExpand:
+		return r.expand(d, row, st)
 	case RowNote:
 		return r.note(row, st)
 	case RowComment:
@@ -228,7 +232,7 @@ func (r *Renderer) hunk(d Document, row Row, st RowState) string {
 // with only one — where every hunk would carry the same word and it would say
 // nothing.
 func (r *Renderer) hunkOrigin(d Document, ref HunkRef) string {
-	if ref.File < 0 || ref.File >= len(d.Files) || d.Files[ref.File].Entry.Staged == nil {
+	if ref.File < 0 || ref.File >= len(d.Files) || d.Files[ref.File].Entry.State() != git.StatePartial {
 		return ""
 	}
 	if ref.Staged {
@@ -237,11 +241,39 @@ func (r *Renderer) hunkOrigin(d Document, ref HunkRef) string {
 	return r.theme.Partial.Render("worktree")
 }
 
+// expand draws a row standing where the diff leaves unchanged code out.
+//
+// It is dim and it sits in the code column, because it is not a line of the
+// file: it is the place a run of them was left out, saying how many and which
+// way `space` opens them.
+func (r *Renderer) expand(d Document, row Row, st RowState) string {
+	ref := d.Expands[row.Expand]
+	style := r.theme.Note
+	if st.Cursor {
+		style = r.theme.Cursor
+	}
+	label := expandArrow(ref.Dir) + " " + plural(ref.Hidden, "line") + " hidden"
+	return r.fit(r.marker(st) + codeIndent(d.Layout) + style.Render(label))
+}
+
+// expandArrow says which way a row opens: down from the hunk above it, up from
+// the hunk below it, or — where one press finishes the run — both at once.
+func expandArrow(d ExpandDir) string {
+	switch d {
+	case ExpandUp:
+		return "▴"
+	case ExpandAll:
+		return "▴▾"
+	default:
+		return "▾"
+	}
+}
+
 func codeIndent(l Layout) string {
 	if l == LayoutSplit {
 		return strings.Repeat(" ", lineNumWidth+2)
 	}
-	return strings.Repeat(" ", 2*lineNumWidth+2)
+	return strings.Repeat(" ", lineNumWidth+2)
 }
 
 func (r *Renderer) line(d Document, row Row, st RowState) string {
@@ -256,7 +288,7 @@ func (r *Renderer) line(d Document, row Row, st RowState) string {
 
 func (r *Renderer) unifiedBody(ref HunkRef, row Row, width int) string {
 	l := ref.Hunk.Lines[row.Left]
-	body := r.gutter(l.OldLine) + r.gutter(l.NewLine) + " " + r.content(ref.Path, l)
+	body := r.gutter(lineNumberOf(l)) + " " + r.content(ref.Path, l)
 	return fill(r.fillFor(l), fit(body, width))
 }
 
@@ -405,20 +437,45 @@ func commentTag(c store.Comment) string {
 	if c.Resolved {
 		tag = "✓ " + tag
 	}
+	switch {
 	// A note whose code was rewritten out from under it says where it was
 	// written. Without the number it is a note under a file with no way to tell
 	// what it was ever about.
-	if c.Outdated {
-		tag = fmt.Sprintf("%s (outdated · was :%d)", tag, c.Line)
+	case c.Outdated:
+		tag = fmt.Sprintf("%s (outdated · was :%s)", tag, lineSpan(c))
+	// A note written on a run of lines sits under the first of them, so the run
+	// is the one thing about it nothing else on screen says.
+	case c.EndLine > c.Line:
+		tag = fmt.Sprintf("%s (lines %d-%d)", tag, c.Line, c.EndLine)
 	}
 	return tag + ": "
 }
 
-func (r *Renderer) marker(st RowState) string {
-	if st.Cursor {
-		return r.theme.Cursor.Render("▌")
+// lineSpan is the lines a note was written on: one number, or the two ends of
+// the run it covers.
+func lineSpan(c store.Comment) string {
+	if c.EndLine > c.Line {
+		return fmt.Sprintf("%d-%d", c.Line, c.EndLine)
 	}
-	return " "
+	return strconv.Itoa(c.Line)
+}
+
+// marker is the bar down the left edge that says what a row is: the cursor, or
+// a line of the run marked to comment on.
+//
+// The run is drawn in the comment's own colour rather than the cursor's, since
+// what marks it is what it is for — and the cursor, which is always one end of
+// it, keeps its own bar so the end being moved is still the brightest thing on
+// screen.
+func (r *Renderer) marker(st RowState) string {
+	switch {
+	case st.Cursor:
+		return r.theme.Cursor.Render("▌")
+	case st.Marked:
+		return r.theme.Comment.Render("▌")
+	default:
+		return " "
+	}
 }
 
 func (r *Renderer) stateSymbol(s git.StageState) string {
@@ -430,6 +487,13 @@ func (r *Renderer) stateSymbol(s git.StageState) string {
 	default:
 		return s.Symbol()
 	}
+}
+
+func lineNumberOf(l git.Line) int {
+	if l.Kind == git.LineRemoved {
+		return l.OldLine
+	}
+	return l.NewLine
 }
 
 func (r *Renderer) gutter(n int) string {

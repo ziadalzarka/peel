@@ -402,6 +402,33 @@ func TestCommentAddAndList(t *testing.T) {
 	}
 }
 
+// A note the reviewer marked a run of lines for is a note about all of them, and
+// the run is what an agent reading the store has to be told: the lines to go and
+// read are not the one the note hangs off.
+func TestCommentAddRecordsARunOfLines(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+
+	out := h.mustRun("comment", "add", "--file", "a.txt", "--line", "1", "--end-line", "3", "--body", "these three")
+	if !strings.Contains(out, "a.txt:1-3") {
+		t.Errorf("add output = %q, want the run named", out)
+	}
+
+	var got []map[string]any
+	mustJSON(t, h.mustRun("comment", "list", "--json"), &got)
+	if got[0]["endLine"] != float64(3) {
+		t.Errorf("endLine = %v, want 3", got[0]["endLine"])
+	}
+
+	// A note on one line has no run, and an endLine of 0 on every note would read
+	// as one.
+	h.mustRun("comment", "add", "--file", "a.txt", "--line", "2", "--body", "just this")
+	mustJSON(t, h.mustRun("comment", "list", "--json"), &got)
+	if _, ok := got[1]["endLine"]; ok {
+		t.Errorf("a single-line note carries endLine = %v", got[1]["endLine"])
+	}
+}
+
 func TestCommentAddReadsStdin(t *testing.T) {
 	h := newHarness(t)
 	h.dirty()

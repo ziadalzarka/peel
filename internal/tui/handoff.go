@@ -53,7 +53,7 @@ func handoffAnchor(c store.Comment) string {
 	if c.Line <= 0 {
 		return c.File
 	}
-	anchor := fmt.Sprintf("%s:%d", c.File, c.Line)
+	anchor := c.Location()
 	if note := lineNumberNote(c); note != "" {
 		return anchor + " (" + note + ")"
 	}

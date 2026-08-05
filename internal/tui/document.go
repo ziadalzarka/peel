@@ -64,6 +64,9 @@ const (
 	// RowSide heads one of a file's two changes, the index's or the working
 	// tree's, above the hunks that belong to it.
 	RowSide
+	// RowExpand stands where the diff leaves unchanged code out, and offers to
+	// read it in.
+	RowExpand
 	// RowBlank separates files.
 	RowBlank
 )
@@ -90,8 +93,11 @@ type Row struct {
 	// Side indexes into Document.Sides on a side heading, and is -1 on every
 	// other row.
 	Side int
-	Text string
-	Head bool
+	// Expand indexes into Document.Expands on a row offering to read in code the
+	// diff left out, and is -1 on every other row.
+	Expand int
+	Text   string
+	Head   bool
 }
 
 // HunkRef is one addressable hunk within the document.
@@ -182,6 +188,10 @@ type buildConfig struct {
 	// commentWidth is the room a comment's text has beside its bar and tag.
 	// Zero leaves a comment's lines as they were written.
 	commentWidth int
+	// expand is the unchanged code read in around the hunks, and the files it
+	// comes out of. Its zero value offers nothing, which is what leaves a diff
+	// peel has no copy of the files for exactly as git printed it.
+	expand Expansion
 }
 
 // BuildOption customises how a document is laid out.
@@ -202,6 +212,12 @@ func WithCommentWidth(w int) BuildOption {
 	return func(c *buildConfig) { c.commentWidth = w }
 }
 
+// WithExpansion draws in the unchanged code a review has asked to see around its
+// hunks, and marks where there is more of it still hidden.
+func WithExpansion(x Expansion) BuildOption {
+	return func(c *buildConfig) { c.expand = x }
+}
+
 // Document is a session flattened into navigable rows.
 type Document struct {
 	Files []FileRef
@@ -210,7 +226,10 @@ type Document struct {
 	// A file whose changes are all in one place has none: there is nothing to
 	// tell apart.
 	Sides []SideRef
-	Rows  []Row
+	// Expands are the places the diff leaves unchanged code out and offers to
+	// read it in, in layout order.
+	Expands []ExpandRef
+	Rows    []Row
 	// Steps are the walkthrough groups the files are laid out under, in reading
 	// order. It is empty when there is no walkthrough on screen.
 	Steps    []StepRef
@@ -228,6 +247,9 @@ type Document struct {
 	// commentWidth is the room a comment's text is wrapped to, before its tag
 	// is taken off the first row.
 	commentWidth int
+	// expand is the code read in around the hunks, kept so the layout can be
+	// worked out one side at a time.
+	expand Expansion
 }
 
 // Build flattens a session into rows. collapsed hides a file's body by path.
@@ -237,7 +259,7 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 		opt(&cfg)
 	}
 	doc := Document{Comments: comments, Layout: layout, Draft: cfg.draft, DraftRow: -1,
-		commentWidth: cfg.commentWidth}
+		commentWidth: cfg.commentWidth, expand: cfg.expand}
 	if s == nil {
 		return doc
 	}
@@ -250,7 +272,7 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 			fi := len(doc.Files)
 			hidden := collapsed[entry.Path]
 			doc.Files = append(doc.Files, FileRef{Entry: entry, Row: len(doc.Rows), Collapsed: hidden})
-			doc.add(Row{Kind: RowFile, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1})
+			doc.add(Row{Kind: RowFile, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1})
 			doc.addComments(fi, -1, idx.takeFile(entry.Path))
 			doc.addDraft(fi, -1, doc.draftOnFile(entry.Path))
 
@@ -262,7 +284,7 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 			// the diff no longer holds — still has to be somewhere, and it goes
 			// where the comments in the same position go: under its file.
 			doc.addDraft(fi, -1, doc.Draft.path == entry.Path)
-			doc.add(Row{Kind: RowBlank, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1})
+			doc.add(Row{Kind: RowBlank, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1})
 		}
 	}
 	return doc
@@ -276,7 +298,7 @@ func (d *Document) addDraft(file, hunk int, here bool) {
 	}
 	d.DraftRow = len(d.Rows)
 	for range d.Draft.Height {
-		d.add(Row{Kind: RowDraft, File: file, Hunk: hunk, Left: -1, Right: -1, Step: -1, Side: -1})
+		d.add(Row{Kind: RowDraft, File: file, Hunk: hunk, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1})
 	}
 }
 
@@ -330,7 +352,7 @@ func (d *Document) addStep(group fileGroup, groups Groups) {
 	if len(ref.Files) > 0 {
 		file = ref.Files[0]
 	}
-	row := Row{Kind: RowStep, File: file, Hunk: -1, Left: -1, Right: -1, Step: index, Side: -1}
+	row := Row{Kind: RowStep, File: file, Hunk: -1, Left: -1, Right: -1, Step: index, Side: -1, Expand: -1}
 	d.add(row)
 
 	row.Kind = RowStepText
@@ -402,16 +424,18 @@ const minCommentWidth = 20
 // reading a part-staged file.
 func (d *Document) addBody(fi int, entry git.FileEntry, idx *commentIndex, folds map[string]bool) {
 	if entry.IsBinary() {
-		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1,
+		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1,
 			Text: "binary file — no diff to show"})
 		return
 	}
 
-	// Only a file with something in the index has two halves to tell apart. The
-	// ordinary file — everything still in the working tree — is left as the plain
-	// run of hunks it has always been, and a heading saying "unstaged" over every
-	// file in an ordinary review says nothing.
-	labelled, folded := entry.Staged != nil, false
+	// Only a file git holds in both places at once has two halves to tell apart.
+	// A file whose changes are all in one place — everything still in the working
+	// tree, or everything already staged — is left as the plain run of hunks it
+	// has always been: there is nothing to tell it from, and a heading saying
+	// "staged" over a file whose header already says so twice adds a line to read
+	// and nothing to read it for.
+	labelled, folded := entry.State() == git.StatePartial, false
 	for _, side := range sidesOf(entry) {
 		si := -1
 		if labelled {
@@ -427,7 +451,8 @@ func (d *Document) addBody(fi int, entry git.FileEntry, idx *commentIndex, folds
 	// A file with nothing to show says so — unless what it has is only hidden,
 	// where the heading above already says where it went.
 	if len(d.Files[fi].Hunks) == 0 && !folded {
-		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Text: emptyNote(entry)})
+		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1,
+			Text: emptyNote(entry)})
 	}
 }
 
@@ -444,17 +469,19 @@ func (d *Document) addSide(fi int, entry git.FileEntry, s side, folds map[string
 		Added:   added,
 		Removed: removed,
 	})
-	d.add(Row{Kind: RowSide, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: si})
+	d.add(Row{Kind: RowSide, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: si, Expand: -1})
 	return si
 }
 
 // sideFolded reports whether a side opens hidden.
 //
-// The index's half of a part-staged file does: it has been reviewed and put away
-// already, so what is left open is what is left to read — the same rule staging
-// a whole file follows. A file whose changes are all in the index keeps its diff
-// on screen, since folding the only thing in it would leave a header with
-// nothing under it. Either way `space` on the heading has the last word.
+// The index's half does: it has been reviewed and put away already, so what is
+// left open is what is left to read — the same rule staging a whole file
+// follows. `space` on the heading has the last word.
+//
+// Only a part-staged file gets here, so hiding the index's half always leaves
+// the other one on screen; a fold that emptied the file would be a header
+// pointing at nothing.
 func sideFolded(e git.FileEntry, s side, folds map[string]bool) bool {
 	if !s.staged {
 		return false
@@ -462,33 +489,71 @@ func sideFolded(e git.FileEntry, s side, folds map[string]bool) bool {
 	if folded, set := folds[e.Path]; set {
 		return folded
 	}
-	return e.Unstaged != nil
+	return true
 }
 
+// addHunks lays out one side's hunks, each carrying whatever unchanged code has
+// been read in above and below it.
+//
+// A hunk's revealed lines are part of the hunk rather than rows beside it, so
+// the cursor walks them, a note anchors to them, and the split layout pairs them
+// like any other context. What is still hidden is marked instead: a row under
+// the hunk above the run, a row over the hunk below it, and `space` on either
+// opens that end.
 func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *commentIndex) {
-	for _, h := range s.diff.Hunks {
+	gaps := gapsOf(FileSide{Path: entry.Path, Staged: s.staged}, s.diff.Hunks, s.diff.ID, d.expand)
+	count := len(s.diff.Hunks)
+
+	for i, h := range s.diff.Hunks {
 		hi := len(d.Hunks)
+		shown := h
+		shown.Lines = withContext(gaps.bottom(i), h.Lines, gaps.top(i+1))
 		d.Hunks = append(d.Hunks, HunkRef{
 			File:   fi,
 			Path:   entry.Path,
 			Staged: s.staged,
 			ID:     s.diff.ID(h),
-			Hunk:   h,
+			Hunk:   shown,
 		})
 		d.Files[fi].Hunks = append(d.Files[fi].Hunks, hi)
 		if si >= 0 {
 			d.Sides[si].Hunks = append(d.Sides[si].Hunks, hi)
 		}
-		d.add(Row{Kind: RowHunk, File: fi, Hunk: hi, Left: -1, Right: -1, Step: -1, Side: -1})
+		d.add(Row{Kind: RowHunk, File: fi, Hunk: hi, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1})
 		d.addDraft(fi, hi, d.draftOnHunk(d.Hunks[hi]))
-		d.measure(h.Lines)
+		d.measure(shown.Lines)
 
-		for _, pair := range pairLines(h.Lines, d.Layout) {
-			d.add(Row{Kind: RowLine, File: fi, Hunk: hi, Left: pair.left, Right: pair.right, Step: -1, Side: -1})
+		// The run above this hunk is marked under its header rather than over it:
+		// the lines it opens arrive directly below, so the row stands where the
+		// code it is about to show will be.
+		d.addExpand(fi, gaps, i, count, gaps.above)
+		for _, pair := range pairLines(shown.Lines, d.Layout) {
+			d.add(Row{Kind: RowLine, File: fi, Hunk: hi, Left: pair.left, Right: pair.right, Step: -1, Side: -1, Expand: -1})
 			d.addComments(fi, hi, idx.takeLine(d.Hunks[hi], pair))
 			d.addDraft(fi, hi, d.draftOnLine(d.Hunks[hi], pair))
 		}
+		d.addExpand(fi, gaps, i+1, count, gaps.below)
 	}
+}
+
+// addExpand marks one end of a run of hidden lines, when that end has a row.
+//
+// where picks the end: gaps.above for the row over the hunk below the run,
+// gaps.below for the one under the hunk above it.
+func (d *Document) addExpand(fi int, g gaps, i, hunks int, where func(int, int) (ExpandDir, bool)) {
+	dir, ok := where(i, hunks)
+	if !ok {
+		return
+	}
+	ei := len(d.Expands)
+	d.Expands = append(d.Expands, ExpandRef{
+		ExpandKey: g.keyOf(i, dir),
+		File:      fi,
+		Dir:       dir,
+		Hidden:    g.hidden(i),
+		Row:       len(d.Rows),
+	})
+	d.add(Row{Kind: RowExpand, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: ei})
 }
 
 // measure widens CodeWidth to hold a hunk's longest line. Tabs are expanded
@@ -630,6 +695,10 @@ func (d Document) IsStop(i int) bool {
 // IsMark reports whether row i heads something whole: a file, one of its two
 // changes, a hunk, a comment, or a walkthrough group. These are what j and k jump
 // between, while the arrows step row by row.
+//
+// A row offering to read in hidden code is not one of them. It sits against the
+// hunk it extends, one arrow key away, and stopping on it would put two extra
+// presses between every pair of hunks in the pass.
 func (d Document) IsMark(i int) bool {
 	if i < 0 || i >= len(d.Rows) {
 		return false
@@ -693,6 +762,34 @@ func (d Document) PrevStop(from int) int {
 		}
 	}
 	return from
+}
+
+// StopsAway returns the cursor position n stops from row, down the document for
+// a positive n and up it for a negative one.
+//
+// It counts cursor positions rather than rows, so a jump of ten is ten presses
+// of the arrow and lands where they would: the blank between two files, a folded
+// step's explanation and the lines a comment runs on to are passed over without
+// being counted, since the cursor never rests on one.
+//
+// Nothing stops it at a file. A count that runs past the end of the file it
+// started in carries on into the header of the next one and down into its diff,
+// which is what makes the jump a distance rather than a place. The ends of the
+// document do stop it: past them there is nothing left to count, and it returns
+// the last position it reached.
+func (d Document) StopsAway(row, n int) int {
+	step := d.NextStop
+	if n < 0 {
+		step, n = d.PrevStop, -n
+	}
+	for range n {
+		next := step(row)
+		if next == row {
+			break
+		}
+		row = next
+	}
+	return row
 }
 
 // StopBetween returns a cursor position within the inclusive row range, or -1
@@ -818,6 +915,38 @@ func (d Document) SideAt(row int) int {
 	return side
 }
 
+// ExpandAt returns the run of hidden lines a row offers to open, and -1 on
+// every other row.
+func (d Document) ExpandAt(row int) int {
+	if row < 0 || row >= len(d.Rows) {
+		return -1
+	}
+	at := d.Rows[row].Expand
+	if at < 0 || at >= len(d.Expands) {
+		return -1
+	}
+	return at
+}
+
+// RowOfExpand returns the row opening a run of hidden lines from the given end.
+//
+// It falls back to the run's other end, since opening one end can leave too
+// little hidden to be worth two rows and the pair becomes the single row that
+// finishes the run — which is still the row the reviewer was on.
+func (d Document) RowOfExpand(key ExpandKey, dir ExpandDir) int {
+	other := -1
+	for _, e := range d.Expands {
+		if e.ExpandKey != key {
+			continue
+		}
+		if e.Dir == dir {
+			return e.Row
+		}
+		other = e.Row
+	}
+	return other
+}
+
 // RowOfSide returns the heading row of one file's index or working-tree change,
 // or -1.
 func (d Document) RowOfSide(path string, origin store.Origin) int {
@@ -858,6 +987,25 @@ func (d Document) RowOfLine(hunk, line int) int {
 		}
 	}
 	return -1
+}
+
+// LineRows returns the rows displaying a hunk's body, in reading order.
+//
+// A run of marked lines is held as positions in this list rather than as row
+// numbers: laying the document out again — opening the comment editor inside the
+// run, or resizing the pane — renumbers every row, while a hunk's body stays
+// exactly as long and in exactly the same order.
+func (d Document) LineRows(hunk int) []int {
+	if hunk < 0 || hunk >= len(d.Hunks) {
+		return nil
+	}
+	var out []int
+	for i, r := range d.Rows {
+		if r.Kind == RowLine && r.Hunk == hunk {
+			out = append(out, i)
+		}
+	}
+	return out
 }
 
 // RowOfComment returns the first row of a comment, by ID, or -1.

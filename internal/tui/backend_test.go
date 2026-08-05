@@ -18,10 +18,19 @@ import (
 // on its working tree.
 func openBackend(t *testing.T) (*app.App, *app.Session, tui.Backend) {
 	t.Helper()
+	return backendOver(t, func(repo *gittest.Repo) {
+		repo.Write("main.go", "package main\n\nfunc main() {}\n")
+		repo.Commit("initial")
+		repo.Write("main.go", "package main\n\nfunc main() { println(1) }\n")
+	})
+}
+
+// backendOver is openBackend over a repository the test lays out itself, for
+// the shapes one changed file cannot show.
+func backendOver(t *testing.T, setup func(*gittest.Repo)) (*app.App, *app.Session, tui.Backend) {
+	t.Helper()
 	repo := gittest.New(t)
-	repo.Write("main.go", "package main\n\nfunc main() {}\n")
-	repo.Commit("initial")
-	repo.Write("main.go", "package main\n\nfunc main() { println(1) }\n")
+	setup(repo)
 
 	// No providers: a test must never shell out to claude or gh.
 	a, err := app.Open(context.Background(), repo.Dir,
@@ -341,5 +350,114 @@ func TestBackendWalkthroughReportsAMissingProvider(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "provider") {
 		t.Errorf("error = %v, want it to mention the missing provider", err)
+	}
+}
+
+// contextOf reads the copies of the files behind a session, failing the test if
+// the read itself fails.
+func contextOf(t *testing.T, backend tui.Backend, s *app.Session) map[tui.FileSide][]string {
+	t.Helper()
+	files, err := backend.Context(context.Background(), s)
+	if err != nil {
+		t.Fatalf("Context: %v", err)
+	}
+	return files
+}
+
+// The code a hunk leaves out is read straight from the working tree, whole —
+// not the three lines of context the diff carries.
+func TestBackendReadsTheWorkingTreeBehindTheDiff(t *testing.T) {
+	_, session, backend := openBackend(t)
+
+	files := contextOf(t, backend, session)
+	lines, ok := files[tui.FileSide{Path: "main.go"}]
+	if !ok {
+		t.Fatalf("nothing was read for main.go, got %v", files)
+	}
+	want := []string{"package main", "", "func main() { println(1) }"}
+	if strings.Join(lines, "|") != strings.Join(want, "|") {
+		t.Errorf("lines = %q, want %q", lines, want)
+	}
+	if _, ok := files[tui.FileSide{Path: "main.go", Staged: true}]; ok {
+		t.Error("a file with nothing staged had a staged half read for it")
+	}
+}
+
+// A part-staged file is two files on screen, numbered against two different
+// copies: the index's for the staged half, the disk's for the rest. Reading the
+// wrong one puts code beside a hunk that was never there.
+func TestBackendReadsEachHalfOfAPartStagedFile(t *testing.T) {
+	_, session, backend := backendOver(t, func(repo *gittest.Repo) {
+		repo.Write("notes.txt", "one\ntwo\nthree\n")
+		repo.Commit("initial")
+		repo.Write("notes.txt", "one\nstaged\nthree\n")
+		repo.Git("add", "notes.txt")
+		repo.Write("notes.txt", "one\nstaged\nthree\non disk\n")
+	})
+	if got := session.Files[0].State(); got != git.StatePartial {
+		t.Fatalf("state = %v, want part staged", got)
+	}
+
+	files := contextOf(t, backend, session)
+	staged := strings.Join(files[tui.FileSide{Path: "notes.txt", Staged: true}], "|")
+	if staged != "one|staged|three" {
+		t.Errorf("staged half read %q, want the index's copy one|staged|three", staged)
+	}
+	working := strings.Join(files[tui.FileSide{Path: "notes.txt"}], "|")
+	if working != "one|staged|three|on disk" {
+		t.Errorf("working half read %q, want the disk's copy", working)
+	}
+}
+
+// A pull request's files are not in this working tree. A local file at the same
+// path is a different file, and reading it would put unrelated code in the diff.
+func TestBackendReadsNothingBehindAPullRequest(t *testing.T) {
+	a, _, _ := openBackend(t)
+
+	session := &app.Session{
+		Target:    "github:cli/cli#412",
+		Title:     "cli/cli#412 fix the thing",
+		Stageable: false,
+		PR:        &forge.PullRequest{Ref: forge.Ref{Owner: "cli", Repo: "cli", Number: 412}},
+		Files:     []git.FileEntry{{Path: "main.go"}},
+	}
+	backend := tui.NewBackend(a, session)
+
+	if files := contextOf(t, backend, session); len(files) != 0 {
+		t.Errorf("a pull request read %v, want nothing", files)
+	}
+}
+
+// A binary file has no lines to read and no hunks to read them around.
+func TestBackendReadsNothingBehindABinaryFile(t *testing.T) {
+	binary := []byte{0x00, 0x01, 0x02, 0xff, 0xfe, 0x00, 0x42}
+	_, session, backend := backendOver(t, func(repo *gittest.Repo) {
+		repo.WriteBytes("img.bin", binary)
+		repo.Commit("initial")
+		repo.WriteBytes("img.bin", append(binary, 0x99, 0x00, 0x11))
+	})
+
+	if files := contextOf(t, backend, session); len(files) != 0 {
+		t.Errorf("a binary file read %v, want nothing", files)
+	}
+}
+
+// A deleted file has nothing on disk to read. That is one file peel cannot
+// offer to open up, not a failed review.
+func TestBackendReadsPastAFileThatIsGone(t *testing.T) {
+	_, session, backend := backendOver(t, func(repo *gittest.Repo) {
+		repo.Write("gone.txt", "one\ntwo\n")
+		repo.Write("kept.go", "package main\n\nfunc main() {}\n")
+		repo.Commit("initial")
+		repo.Remove("gone.txt")
+		repo.Write("kept.go", "package main\n\nfunc main() { println(1) }\n")
+	})
+
+	files := contextOf(t, backend, session)
+	if _, ok := files[tui.FileSide{Path: "gone.txt"}]; ok {
+		t.Error("a deleted file was read off disk")
+	}
+	if _, ok := files[tui.FileSide{Path: "kept.go"}]; !ok {
+		t.Errorf("the file still there was not read, got %v", files)
 	}
 }

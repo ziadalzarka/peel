@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -53,9 +55,20 @@ type Model struct {
 	// hidden. It holds only what the reviewer has said with `space`; everything
 	// else takes the default.
 	sideFolds map[string]bool
+	// context is each side's own copy of the file its hunks are numbered
+	// against, which is what the unchanged code around a hunk is read out of. It
+	// is dropped whenever the diff moves on and read again behind the screen, so
+	// nothing is ever revealed out of a file that has since changed.
+	context map[FileSide][]string
+	// revealed is how far each run of hidden code has been opened, by `space` on
+	// the row standing where it was left out.
+	revealed map[ExpandKey]int
 
 	cursor int
-	top    int
+	// sel is the run of lines marked with shift and an arrow to write one note
+	// about, and nil when nothing is marked.
+	sel *selection
+	top int
 	// fileRows is the side pane's tree: the changed files under the directories
 	// they live in, one row each. It is rebuilt with the document, since it is
 	// the same files laid out a second way.
@@ -191,6 +204,7 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 		collapsed:   map[string]bool{},
 		stagedFolds: map[string]bool{},
 		sideFolds:   map[string]bool{},
+		revealed:    map[ExpandKey]int{},
 		layout:      cfg.layout,
 		theme:       cfg.theme,
 		renderer:    NewRenderer(cfg.theme, cfg.syntax),
@@ -290,13 +304,17 @@ func newInput(theme Theme) textarea.Model {
 	return ta
 }
 
-// Init satisfies tea.Model. The session and its comments are already loaded, so
-// the only thing to start is the follow timer.
+// Init satisfies tea.Model.
+//
+// The session and its comments are already loaded. What is left is the follow
+// timer and the copies of the files the diff is measured against — read behind
+// the first frame, since nothing on screen waits on them: until they land the
+// diff is what git printed, with no offer to read past it.
 func (m *Model) Init() tea.Cmd {
 	if m.follow {
-		return m.tickCmd()
+		return tea.Batch(m.contextCmd(), m.tickCmd())
 	}
-	return nil
+	return m.contextCmd()
 }
 
 // Update satisfies tea.Model.
@@ -306,7 +324,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resize(msg.Width, msg.Height)
 		return m, nil
 	case loadedMsg:
-		m.applyLoaded(msg)
+		return m, m.applyLoaded(msg)
+	case contextMsg:
+		m.setContext(msg)
 		return m, nil
 	case walkthroughMsg:
 		m.busy = ""
@@ -331,8 +351,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m, m.key(msg)
 	}
-	if isShiftEnter(msg) {
-		return m, m.key(tea.KeyMsg{Type: tea.KeyEnter, Alt: true})
+	if key, ok := unnamedKey(msg); ok {
+		return m, m.key(key)
 	}
 	return m, nil
 }
@@ -347,19 +367,59 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // press with no name and is dropped.
 var shiftEnterSeqs = []string{"\x1b[13;2u", "\x1b[27;2;13~"}
 
-// isShiftEnter reports that an unnamed press was shift+enter, which peel takes
-// as the alt+enter it already writes a new line on.
+// modifiedArrowRe matches an arrow press a terminal has named a modifier for:
+// `ESC [ 1 ; <modifiers> <A|B>`, with the event type kitty appends when it is
+// asked to report one. The modifier is a bitmask offset by one — shift 1, alt 2,
+// ctrl 4 — so `1;9A` is cmd+↑ and `1;10A` is cmd+shift+↑.
 //
-// The press arrives as bubbletea's own unexported message, so there is no type
-// to compare against — only the bytes it carries, which is what this reads. A
-// terminal that says nothing about the shift key sends a bare carriage return
-// instead, and no program can tell that press from enter.
-func isShiftEnter(msg tea.Msg) bool {
+// bubbletea names the combinations of shift, alt and ctrl itself; what is left
+// for this to read is the ones with cmd in them.
+var modifiedArrowRe = regexp.MustCompile(`^\x1b\[1;(\d+)(?::\d+)?([AB])$`)
+
+// cmdBits are the places cmd can take in that mask. Terminals disagree on which
+// it is — kitty's protocol calls the key super and gives it bit 8, xterm's older
+// encoding has no super and gives bit 8 to meta, which is what a terminal
+// configured to send cmd as meta then uses — so both are read as cmd. Neither is
+// a key peel binds otherwise.
+//
+// Which other modifiers are held alongside does not matter: cmd and an arrow is
+// the press being read, and a terminal reporting cmd+shift+↓ means the same
+// thing by it.
+const cmdBits = 8 | 32
+
+// unnamedKey turns a press bubbletea could not name into one peel already
+// handles, and reports whether it was one.
+//
+// These arrive as bubbletea's own unexported message, so there is no type to
+// compare against — only the bytes it carries, which is what this reads.
+//
+//   - shift+enter becomes the alt+enter the editor writes a new line on. A
+//     terminal that says nothing about the shift key sends a bare carriage
+//     return instead, and no program can tell that press from enter.
+//   - cmd+↑ and cmd+↓ become home and end, the first and last row. Whether they
+//     arrive at all is the terminal's to decide: several keep cmd to themselves
+//     for scrollback, and there is nothing an application can do about that.
+func unnamedKey(msg tea.Msg) (tea.KeyMsg, bool) {
 	v := reflect.ValueOf(msg)
 	if v.Kind() != reflect.Slice || v.Type().Elem().Kind() != reflect.Uint8 {
-		return false
+		return tea.KeyMsg{}, false
 	}
-	return slices.Contains(shiftEnterSeqs, string(v.Bytes()))
+	seq := string(v.Bytes())
+
+	if slices.Contains(shiftEnterSeqs, seq) {
+		return tea.KeyMsg{Type: tea.KeyEnter, Alt: true}, true
+	}
+	if match := modifiedArrowRe.FindStringSubmatch(seq); match != nil {
+		mods, err := strconv.Atoi(match[1])
+		if err != nil || (mods-1)&cmdBits == 0 {
+			return tea.KeyMsg{}, false
+		}
+		if match[2] == "A" {
+			return tea.KeyMsg{Type: tea.KeyHome}, true
+		}
+		return tea.KeyMsg{Type: tea.KeyEnd}, true
+	}
+	return tea.KeyMsg{}, false
 }
 
 // wheelLines is how far one notch of the wheel scrolls.
@@ -375,6 +435,9 @@ func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
 	if m.mode != modeBrowse {
 		return nil
 	}
+	// Reaching for the mouse is doing something else, the way any other key is:
+	// a wheel notch drags the cursor off the run it was marking.
+	m.sel = nil
 
 	switch msg.Button {
 	case tea.MouseButtonWheelDown:
@@ -416,10 +479,22 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 	}
 }
 
+// leapLines is how far the brackets move the cursor: far enough to cross a hunk
+// in one press, short enough to keep the row it lands on in sight of the one it
+// left.
+const leapLines = 10
+
 func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 	m.status, m.err = "", nil
 
-	switch msg.String() {
+	key := msg.String()
+	// Marked lines are held, not entered: anything that is not extending the run
+	// or writing the note it was marked for lets it go.
+	if !keepsSelection(key) {
+		m.sel = nil
+	}
+
+	switch key {
 	case "q", "ctrl+c":
 		return m.quit()
 	case "?":
@@ -433,8 +508,16 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 	case "up":
 		m.moveTo(m.doc.PrevStop(m.cursor))
 	case "]":
-		m.showFile(m.doc.NextFile(m.cursor))
+		m.moveTo(m.doc.StopsAway(m.cursor, leapLines))
 	case "[":
+		m.moveTo(m.doc.StopsAway(m.cursor, -leapLines))
+	case "shift+down":
+		m.mark(1)
+	case "shift+up":
+		m.mark(-1)
+	case "alt+down":
+		m.showFile(m.doc.NextFile(m.cursor))
+	case "alt+up":
 		m.showFile(m.doc.PrevFile(m.cursor))
 	case "}":
 		m.scrollFiles(1)
@@ -494,6 +577,96 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 		return m.toggleFollow()
 	}
 	return nil
+}
+
+// selection is a run of lines marked to write one note about: a hunk, and the
+// two ends of the run inside it.
+//
+// The ends are positions in the hunk's body rather than row numbers, so the run
+// survives the document being laid out again — which is what opening the comment
+// editor inside it does. anchor is the line shift was first held on and stays
+// put; head is the cursor, so reversing the arrow gives lines back instead of
+// starting a second run.
+type selection struct {
+	hunk         git.HunkID
+	anchor, head int
+}
+
+func (s selection) lo() int { return min(s.anchor, s.head) }
+func (s selection) hi() int { return max(s.anchor, s.head) }
+
+// keepsSelection reports the keys a marked run survives: the ones that extend
+// it, and the ones that write the note it was marked for.
+//
+// Everything else is the reviewer doing something else, and a run still marked
+// behind them is a note about to land on lines they had stopped looking at. So
+// the run is not something to dismiss — it is let go of by carrying on.
+func keepsSelection(key string) bool {
+	switch key {
+	case "shift+down", "shift+up", "c", "C":
+		return true
+	}
+	return false
+}
+
+// mark takes one more line of the diff into the run, or gives one back when the
+// arrow reverses.
+//
+// The run starts on the line under the cursor and grows with the cursor's own
+// movement, so what is marked is what has been moved over. It stops at the ends
+// of the hunk: a note's two numbers are only a range if the file holds every
+// line between them, and between one hunk and the next they number code that is
+// not on screen.
+func (m *Model) mark(delta int) {
+	hunk, at, ok := m.lineRowAt(m.cursor)
+	if !ok {
+		m.status = "move to a line of the diff to mark lines to comment on"
+		return
+	}
+	if m.sel == nil || m.sel.hunk != m.doc.Hunks[hunk].ID {
+		m.sel = &selection{hunk: m.doc.Hunks[hunk].ID, anchor: at, head: at}
+	}
+
+	rows := m.doc.LineRows(hunk)
+	next := m.sel.head + delta
+	if next < 0 || next >= len(rows) {
+		m.status = "the run stops at the end of the hunk"
+		return
+	}
+	m.sel.head = next
+	m.moveTo(rows[next])
+	m.status = plural(m.sel.hi()-m.sel.lo()+1, "line") + " marked — c writes one note on them"
+}
+
+// lineRowAt resolves a row to the hunk it is a body line of, and how far down
+// that body it sits.
+func (m *Model) lineRowAt(row int) (hunk, at int, ok bool) {
+	if row < 0 || row >= m.doc.Len() {
+		return 0, 0, false
+	}
+	r := m.doc.Rows[row]
+	if r.Kind != RowLine {
+		return 0, 0, false
+	}
+	for i, body := range m.doc.LineRows(r.Hunk) {
+		if body == row {
+			return r.Hunk, i, true
+		}
+	}
+	return 0, 0, false
+}
+
+// selectedRows is the span of rows the marked run covers, and false when
+// nothing is marked or the hunk it was marked in has left the document.
+func (m *Model) selectedRows() (lo, hi int, ok bool) {
+	if m.sel == nil {
+		return 0, 0, false
+	}
+	rows := m.doc.LineRows(m.findHunk(m.sel.hunk))
+	if m.sel.hi() >= len(rows) {
+		return 0, 0, false
+	}
+	return rows[m.sel.lo()], rows[m.sel.hi()], true
 }
 
 // confirm is a question the footer is putting to the reviewer, and what to do
@@ -998,13 +1171,28 @@ type anchor struct {
 	// each, so the note has to record which one it was written on.
 	origin store.Origin
 	hunk   string
+	// end is the last line of the run the note is being written on, when it was
+	// written on a run rather than on one line.
+	end int
 }
 
 func (a anchor) location() string {
 	if a.line <= 0 {
 		return a.path
 	}
+	if a.end > a.line {
+		return fmt.Sprintf("%s:%d-%d", a.path, a.line, a.end)
+	}
 	return fmt.Sprintf("%s:%d", a.path, a.line)
+}
+
+// rangeEnd is the far end of the run to store with the note, and zero when the
+// note is about a single line — which is every note written without marking one.
+func (a anchor) rangeEnd() int {
+	if a.end > a.line {
+		return a.end
+	}
+	return 0
 }
 
 // openComment opens the editor where the comment will land, rather than on a
@@ -1033,6 +1221,9 @@ func (m *Model) openComment() {
 func (m *Model) closeComment() {
 	m.input.Blur()
 	m.mode = modeBrowse
+	// The run stays marked while the note about it is written, and is let go of
+	// with the editor: it was marked to write that note, saved or not.
+	m.sel = nil
 	m.relayout()
 }
 
@@ -1072,13 +1263,16 @@ func (m *Model) draftLines() []string {
 	return strings.Split(m.input.View(), "\n")
 }
 
-// anchorAt resolves the cursor to a comment anchor: the line under the cursor,
-// the first changed line of a hunk, an existing comment's own anchor, or the file
-// as a whole.
+// anchorAt resolves the cursor to a comment anchor: the run of lines marked to
+// comment on, the line under the cursor, the first changed line of a hunk, an
+// existing comment's own anchor, or the file as a whole.
 //
 // A line anchor does not care whether the line changed, so a note can be left on
 // the untouched code a change breaks.
 func (m *Model) anchorAt() (anchor, bool) {
+	if got, ok := m.markedAnchor(); ok {
+		return got, true
+	}
 	if c, ok := m.doc.CommentAt(m.cursor); ok {
 		return anchor{path: c.File, line: c.Line, side: sideOr(c.Side), origin: c.Origin, hunk: c.Hunk}, true
 	}
@@ -1102,6 +1296,53 @@ func (m *Model) anchorAt() (anchor, bool) {
 	default:
 		return anchor{}, false
 	}
+}
+
+// markedAnchor is where a note on the marked run attaches: the first line of
+// the run, with the last line of it recorded alongside.
+//
+// A note is about one side of the diff — the code arriving or the code leaving,
+// not both — so the far end is the last line of the run that has a number on the
+// side the run started on. A run marked from an addition passes over the
+// removals inside it: the old file's numbers are not the numbers this note is
+// counted in.
+//
+// A run the reviewer has walked back to a single line is no run at all, and
+// falls through to the plain line anchor the cursor already resolves to.
+func (m *Model) markedAnchor() (anchor, bool) {
+	lo, hi, ok := m.selectedRows()
+	if !ok || lo >= hi {
+		return anchor{}, false
+	}
+	ref, index, ok := m.doc.LineAt(lo)
+	if !ok {
+		return anchor{}, false
+	}
+
+	got := lineAnchor(ref, ref.Hunk.Lines[index])
+	for row := lo; row <= hi; row++ {
+		r := m.doc.Rows[row]
+		if r.Kind != RowLine || r.Hunk < 0 || r.Hunk >= len(m.doc.Hunks) {
+			continue
+		}
+		lines := m.doc.Hunks[r.Hunk].Hunk.Lines
+		for _, i := range []int{r.Left, r.Right} {
+			if i < 0 || i >= len(lines) {
+				continue
+			}
+			got.end = max(got.end, lineNumberOn(lines[i], got.side))
+		}
+	}
+	return got, true
+}
+
+// lineNumberOn is a line's number on one side of the diff, and zero where that
+// side does not have the line at all.
+func lineNumberOn(l git.Line, side store.Side) int {
+	if side == store.SideOld {
+		return l.OldLine
+	}
+	return l.NewLine
 }
 
 // headlineIndex picks the line a comment on a whole hunk should attach to. An
@@ -1148,13 +1389,14 @@ func (m *Model) submitComment() tea.Cmd {
 	}
 
 	comment := store.Comment{
-		File:   got.path,
-		Line:   got.line,
-		Side:   got.side,
-		Origin: got.origin,
-		Body:   body,
-		Hunk:   got.hunk,
-		Author: store.AuthorUser,
+		File:    got.path,
+		Line:    got.line,
+		EndLine: got.rangeEnd(),
+		Side:    got.side,
+		Origin:  got.origin,
+		Body:    body,
+		Hunk:    got.hunk,
+		Author:  store.AuthorUser,
 	}
 	// The note takes its place in the diff on the keypress, under the code it was
 	// written about, with the cursor left on that code: writing a note is not
@@ -1466,25 +1708,90 @@ type loadedMsg struct {
 
 type walkthroughMsg struct{ body string }
 
+// contextMsg carries the copies of the files the diff is measured against, for
+// reading in the unchanged code it leaves out.
+type contextMsg struct{ files map[FileSide][]string }
+
 type errMsg struct{ err error }
 
 type tickMsg struct{}
 
+// contextCmd reads those copies behind the screen.
+//
+// The session it reads is the one on screen now, passed along rather than read
+// off the backend, so a reload landing meanwhile cannot swap the files out from
+// under it.
+//
+// A read that fails says nothing. It costs the rows offering to open a run of
+// hidden code and nothing else, and a banner over a review because a file could
+// not be read a second time would be reporting on something nobody asked for.
+func (m *Model) contextCmd() tea.Cmd {
+	backend, ctx, session := m.backend, m.ctx, m.session
+	return func() tea.Msg {
+		files, err := backend.Context(ctx, session)
+		if err != nil {
+			return nil
+		}
+		return contextMsg{files: files}
+	}
+}
+
+// setContext draws the rows that offer to open what the diff left out, now that
+// there is something to open them from.
+func (m *Model) setContext(msg contextMsg) {
+	m.context = msg.files
+	m.relayout()
+}
+
+// expansion is the code read in around the hunks, as the document takes it.
+func (m *Model) expansion() Expansion {
+	return Expansion{Files: m.context, Revealed: m.revealed}
+}
+
+// expandAt reads in a step's worth of the code the diff left out at the cursor.
+//
+// The cursor stays on the row it was pressed on, so holding `space` walks
+// outwards from the hunk a step at a time. A run finished off has no row left to
+// stand on, and the cursor lands on the code that arrived where it was.
+func (m *Model) expandAt(at int) {
+	ref := m.doc.Expands[at]
+	shown := min(expandStep, ref.Hidden)
+	m.revealed[ref.ExpandKey] += shown
+
+	row := ref.Row
+	m.rebuild()
+	if back := m.doc.RowOfExpand(ref.ExpandKey, ref.Dir); back >= 0 {
+		m.moveTo(back)
+	} else {
+		m.moveTo(m.doc.Nearest(min(row, max(m.doc.Len()-1, 0))))
+	}
+	m.status = "showing " + plural(shown, "line") + " more of " + ref.Path
+}
+
 // applyLoaded swaps in a freshly read session, keeping the reviewer roughly
 // where they were rather than jumping back to the top.
-func (m *Model) applyLoaded(msg loadedMsg) {
+//
+// It hands back the read of the files behind it: the diff has moved on, so the
+// copies the revealed code came out of have to be taken as moved on too, and a
+// load nobody applied leaves them alone.
+func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 	if msg.reconcile && m.writes.Load() > 0 {
 		// A change pressed while this was being read is on screen already: this
 		// session was read before it, so applying it would take that change back
 		// off. The write behind it brings its own read-back.
-		return
+		return nil
 	}
 	if msg.poll && !m.acceptPoll(msg) {
-		return
+		return nil
 	}
 	at, path := m.spot(), m.currentPath()
 	m.session = msg.session
 	m.comments = msg.comments
+	// The code read in around the hunks came out of files this load has just
+	// replaced. What has been asked for is kept — a run opened by hand stays open
+	// — but the copies it is drawn from are read again, so nothing on screen is
+	// text from a file as it was.
+	m.context = nil
 	if !msg.reconcile {
 		m.busy = ""
 		m.err = nil
@@ -1528,6 +1835,7 @@ func (m *Model) applyLoaded(msg loadedMsg) {
 	if len(reopened) > 0 {
 		m.status = "reopened " + strings.Join(reopened, ", ") + " — changed since it was staged"
 	}
+	return m.contextCmd()
 }
 
 // acceptPoll decides whether an unrequested reload is worth applying. Redrawing
@@ -1535,6 +1843,12 @@ func (m *Model) applyLoaded(msg loadedMsg) {
 // is worse than waiting for the next tick.
 func (m *Model) acceptPoll(msg loadedMsg) bool {
 	if m.mode == modeComment || m.mode == modeConfirm {
+		return false
+	}
+	// Lines marked to comment on are a note half written: redrawing the diff
+	// under them would take the run away mid-thought, and the next tick will
+	// still find whatever changed.
+	if m.sel != nil {
 		return false
 	}
 	// A change of the reviewer's own is on screen and still being written: this
@@ -1624,7 +1938,7 @@ func (m *Model) currentPath() string {
 func (m *Model) rebuild() {
 	m.doc = Build(m.session, m.visibleComments(), m.collapsed, m.layout,
 		WithGroups(m.groups()), WithDraft(m.draft()), WithSideFolds(m.sideFolds),
-		WithCommentWidth(m.commentWidth()))
+		WithCommentWidth(m.commentWidth()), WithExpansion(m.expansion()))
 	m.fileRows = fileTree(m.doc.Files)
 	if m.cursor >= m.doc.Len() {
 		m.cursor = m.doc.LastStop()
@@ -1667,8 +1981,14 @@ func (m *Model) fileIndex(path string) int {
 	return -1
 }
 
-// toggleCollapse folds whatever the cursor is on out of the way: a walkthrough
-// step's explanation, one half of a part-staged file, or a file's body.
+// toggleCollapse opens or puts away whatever the cursor is on: a walkthrough
+// step's explanation, one half of a part-staged file, a run of code the diff
+// left out, or a file's body.
+//
+// One key for all of them because they are one question — is this worth having
+// on screen — asked of whatever the cursor names. On a row standing where code
+// was left out the answer runs the other way: there is more of the file to read,
+// and this shows it.
 //
 // Folding a file means the same thing staging one does — done with it — so the
 // cursor moves on to the next file still open. Opening one again leaves the
@@ -1680,6 +2000,10 @@ func (m *Model) toggleCollapse() {
 	}
 	if side := m.doc.SideAt(m.cursor); side >= 0 {
 		m.foldSide(side)
+		return
+	}
+	if at := m.doc.ExpandAt(m.cursor); at >= 0 {
+		m.expandAt(at)
 		return
 	}
 	file := m.doc.FileAt(m.cursor)

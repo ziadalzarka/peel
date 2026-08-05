@@ -176,7 +176,7 @@ func TestThePaneScrollsToTheMarkedFilesRow(t *testing.T) {
 	m := newModel(t, newFakeBackend(pathSession(t, paths...)), WithSize(100, 12))
 
 	for range 7 {
-		press(t, m, "]")
+		press(t, m, "alt+down")
 	}
 	file := m.markedFile()
 	row := m.paneRowOf(file)

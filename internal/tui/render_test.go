@@ -18,7 +18,7 @@ func plainRenderer(width int) *Renderer {
 	return r
 }
 
-func TestRenderUnifiedLineAlignsBothLineNumbers(t *testing.T) {
+func TestRenderUnifiedLineNumbersTheLineInTheFileItLivesIn(t *testing.T) {
 	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
 	r := plainRenderer(40)
 
@@ -31,12 +31,13 @@ func TestRenderUnifiedLineAlignsBothLineNumbers(t *testing.T) {
 		rows[line.Render()] = strings.TrimRight(r.Row(doc, i, RowState{}), " ")
 	}
 
-	// One marker column, then a four-wide old-line and new-line column, then the
-	// origin character. A line missing from one side leaves that column blank.
+	// One marker column, then a four-wide line-number column, then the origin
+	// character. A removal is numbered in the old file and everything else in the
+	// new one, which is the number a comment on the line would be written against.
 	cases := map[string]string{
-		" package alpha":               "    1   1  package alpha",
-		"-func One() int { return 1 }": "    3     -func One() int { return 1 }",
-		"+func One() int { return 2 }": "        3 +func One() int { return 2 }",
+		" package alpha":               "    1  package alpha",
+		"-func One() int { return 1 }": "    3 -func One() int { return 1 }",
+		"+func One() int { return 2 }": "    3 +func One() int { return 2 }",
 	}
 	for render, want := range cases {
 		got, ok := rows[render]
@@ -474,10 +475,10 @@ func TestRenderScrolledCodeSlidesUnderAPinnedGutter(t *testing.T) {
 	at0 := r.Row(doc, row, RowState{})
 	r.SetOffset(20)
 
-	// One marker column, both line-number columns, the space before the code and
-	// the origin character. None of it moves, so the row still says which line it
-	// is and whether the line was added.
-	head := 1 + 2*lineNumWidth + 1 + 1
+	// One marker column, the line-number column, the space before the code and the
+	// origin character. None of it moves, so the row still says which line it is
+	// and whether the line was added.
+	head := 1 + lineNumWidth + 1 + 1
 	want := at0[:head] + fit(wideLine[20:], 60-head)
 	if got := r.Row(doc, row, RowState{}); got != want {
 		t.Errorf("scrolled row\n got %q\nwant %q", got, want)
@@ -581,5 +582,66 @@ func TestRenderHunkHeaderOfAnUnstagedFileNamesNoHalf(t *testing.T) {
 
 	if got := r.Row(doc, doc.RowOfHunk(0), RowState{}); strings.Contains(got, "worktree") {
 		t.Errorf("hunk header = %q, want no half named where there is only one", got)
+	}
+}
+
+// A run of code the diff left out is a row that says how much is there and
+// which way pressing space carries the hunk.
+func TestRenderExpandRowCountsWhatIsHiddenAndPointsAtIt(t *testing.T) {
+	doc := Build(newSession(t, contextDiff), nil, nil, LayoutUnified, WithExpansion(expansionOf(nil)))
+	r := plainRenderer(70)
+
+	rows := map[ExpandDir]string{}
+	for i, row := range doc.Rows {
+		if row.Kind != RowExpand {
+			continue
+		}
+		ref := doc.Expands[row.Expand]
+		if ref.Hidden == 38 {
+			rows[ref.Dir] = strings.TrimRight(r.Row(doc, i, RowState{}), " ")
+		}
+	}
+
+	// Reading down from the hunk above points down; reading up from the one below
+	// points up. Both name the same thirty-eight lines.
+	if got, want := rows[ExpandDown], "           ▾ 38 lines hidden"; got != want {
+		t.Errorf("row below the hunk = %q, want %q", got, want)
+	}
+	if got, want := rows[ExpandUp], "           ▴ 38 lines hidden"; got != want {
+		t.Errorf("row above the hunk = %q, want %q", got, want)
+	}
+}
+
+// A run short enough to read in one press has one row, and it points both ways
+// because that press finishes it.
+func TestRenderExpandRowOfAShortRunPointsBothWays(t *testing.T) {
+	doc := Build(newSession(t, contextDiff), nil, nil, LayoutUnified,
+		WithExpansion(expansionOf(map[ExpandKey]int{down(0): 30})))
+	r := plainRenderer(70)
+
+	var got string
+	for i, row := range doc.Rows {
+		if row.Kind == RowExpand && doc.Expands[row.Expand].Hidden == 8 {
+			got = strings.TrimRight(r.Row(doc, i, RowState{}), " ")
+		}
+	}
+	if want := "           ▴▾ 8 lines hidden"; got != want {
+		t.Errorf("row = %q, want %q", got, want)
+	}
+}
+
+// One line left is a line, not 1 lines.
+func TestRenderExpandRowCountsOneLineAsOne(t *testing.T) {
+	doc := Build(newSession(t, contextDiff), nil, nil, LayoutUnified, WithExpansion(expansionOf(nil)))
+	r := plainRenderer(70)
+
+	var got string
+	for i, row := range doc.Rows {
+		if row.Kind == RowExpand && doc.Expands[row.Expand].ExpandKey == up(0) {
+			got = strings.TrimRight(r.Row(doc, i, RowState{}), " ")
+		}
+	}
+	if want := "           ▴ 1 line hidden"; got != want {
+		t.Errorf("row = %q, want %q", got, want)
 	}
 }
