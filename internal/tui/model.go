@@ -28,6 +28,7 @@ const (
 	modeComment
 	modeHelp
 	modeConfirm
+	modeFind
 )
 
 // Model is the review UI's state.
@@ -101,6 +102,11 @@ type Model struct {
 	// ask is the question the footer is putting to the reviewer, and what to do
 	// if they say yes. It is set only in modeConfirm.
 	ask *confirm
+	// find is the file search, and is only being typed into in modeFind.
+	find finder
+	// helpTop is the first line of the help screen drawn, for the terminals too
+	// short to hold every key at once.
+	helpTop int
 
 	// walkSteps is the narrative parsed into the groups it comments on, kept so
 	// the diff can be laid out again when the terminal resizes or a step folds.
@@ -380,6 +386,16 @@ var shiftEnterSeqs = []string{"\x1b[13;2u", "\x1b[27;2;13~"}
 // for this to read is the ones with cmd in them.
 var modifiedArrowRe = regexp.MustCompile(`^\x1b\[1;(\d+)(?::\d+)?([AB])$`)
 
+// cmdKeyRe matches a letter press a terminal has named a modifier for, in the
+// two forms terminals write one: kitty's `ESC [ <letter> ; <modifiers> u`, with
+// the event type it appends when it is asked to report one, and the older
+// modifyOtherKeys `ESC [ 27 ; <modifiers> ; <letter> ~` — the same two forms
+// shiftEnterSeqs is written out for. The letter is its code point, so `112` is
+// `p`.
+//
+// bubbletea names no press in either form, so what reaches peel is the bytes.
+var cmdKeyRe = regexp.MustCompile(`^\x1b\[(?:(\d+);(\d+)(?::\d+)?u|27;(\d+);(\d+)~)$`)
+
 // cmdBits are the places cmd can take in that mask. Terminals disagree on which
 // it is — kitty's protocol calls the key super and gives it bit 8, xterm's older
 // encoding has no super and gives bit 8 to meta, which is what a terminal
@@ -403,6 +419,8 @@ const cmdBits = 8 | 32
 //   - cmd+↑ and cmd+↓ become home and end, the first and last row. Whether they
 //     arrive at all is the terminal's to decide: several keep cmd to themselves
 //     for scrollback, and there is nothing an application can do about that.
+//   - cmd+p becomes the ctrl+p the file search opens on, for the terminals that
+//     do send it. ctrl+p is the one that always arrives.
 func unnamedKey(msg tea.Msg) (tea.KeyMsg, bool) {
 	v := reflect.ValueOf(msg)
 	if v.Kind() != reflect.Slice || v.Type().Elem().Kind() != reflect.Uint8 {
@@ -423,7 +441,34 @@ func unnamedKey(msg tea.Msg) (tea.KeyMsg, bool) {
 		}
 		return tea.KeyMsg{Type: tea.KeyEnd}, true
 	}
+	if cmdLetter(seq) == 'p' {
+		return tea.KeyMsg{Type: tea.KeyCtrlP}, true
+	}
 	return tea.KeyMsg{}, false
+}
+
+// cmdLetter is the letter a terminal has reported cmd being held on, and zero
+// for a sequence that is not one — including a letter reported for some other
+// modifier, which is a press meant for something else.
+func cmdLetter(seq string) rune {
+	match := cmdKeyRe.FindStringSubmatch(seq)
+	if match == nil {
+		return 0
+	}
+	// The two forms write the letter and the modifiers in opposite orders.
+	code, mods := match[1], match[2]
+	if code == "" {
+		code, mods = match[4], match[3]
+	}
+	held, err := strconv.Atoi(mods)
+	if err != nil || (held-1)&cmdBits == 0 {
+		return 0
+	}
+	letter, err := strconv.Atoi(code)
+	if err != nil {
+		return 0
+	}
+	return rune(letter)
 }
 
 // wheelLines is how far one notch of the wheel scrolls.
@@ -478,6 +523,8 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 		return m.commentKey(msg)
 	case modeConfirm:
 		return m.confirmKey(msg)
+	case modeFind:
+		return m.findKey(msg)
 	default:
 		return m.browseKey(msg)
 	}
@@ -502,7 +549,7 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 	case "q", "ctrl+c":
 		return m.quit()
 	case "?":
-		m.mode = modeHelp
+		m.mode, m.helpTop = modeHelp, 0
 	case "j":
 		m.moveTo(m.doc.NextMark(m.cursor))
 	case "k":
@@ -523,6 +570,8 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 		m.showFile(m.doc.NextFile(m.cursor))
 	case "alt+up":
 		m.showFile(m.doc.PrevFile(m.cursor))
+	case "ctrl+p":
+		m.openFind()
 	case "}":
 		m.scrollFiles(1)
 	case "{":
@@ -875,12 +924,28 @@ func (m *Model) foldStep(step int) {
 	}
 }
 
+// helpKey closes the help screen, or reads further down it — the list of keys
+// is longer than a short terminal, and the same keys that move the diff move it.
 func (m *Model) helpKey(msg tea.KeyMsg) tea.Cmd {
-	if msg.String() == "ctrl+c" {
+	switch msg.String() {
+	case "ctrl+c":
 		return m.quit()
+	case "down", "j":
+		m.scrollHelp(1)
+	case "up", "k":
+		m.scrollHelp(-1)
+	case " ", "ctrl+d", "pgdown":
+		m.scrollHelp(m.bodyHeight() / 2)
+	case "ctrl+u", "pgup":
+		m.scrollHelp(-m.bodyHeight() / 2)
+	default:
+		m.mode = modeBrowse
 	}
-	m.mode = modeBrowse
 	return nil
+}
+
+func (m *Model) scrollHelp(delta int) {
+	m.helpTop = min(max(m.helpTop+delta, 0), m.helpBottom(m.helpLines()))
 }
 
 // quit leaves, once the changes already pressed have been written.
@@ -1929,9 +1994,10 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 		// A reload that lands under an open editor takes the keyboard back, so the
 		// editor has to be put away with it rather than left focused and invisible.
 		// A question waiting for an answer goes the same way: what it was about to
-		// delete was read before the reload.
+		// delete was read before the reload. So does a search: the files it was
+		// listing are the ones this reload has just replaced.
 		m.input.Blur()
-		m.mode, m.ask, m.editing = modeBrowse, nil, ""
+		m.mode, m.ask, m.editing, m.find = modeBrowse, nil, "", finder{}
 	}
 	// The narrative is kept: it is the notes the reviewer is reading, and
 	// dropping it would reorder the diff underneath them every time they staged
@@ -1973,7 +2039,10 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 // while someone is mid-comment or mid-answer, or when nothing actually changed,
 // is worse than waiting for the next tick.
 func (m *Model) acceptPoll(msg loadedMsg) bool {
-	if m.mode == modeComment || m.mode == modeConfirm {
+	// A search half typed is a file about to be gone to, the way a comment half
+	// written is: relisting what it matches mid-thought is worse than waiting for
+	// the next tick, which will still find whatever changed.
+	if m.mode == modeComment || m.mode == modeConfirm || m.mode == modeFind {
 		return false
 	}
 	// Lines marked to comment on are a note half written: redrawing the diff

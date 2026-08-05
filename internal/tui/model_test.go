@@ -43,6 +43,10 @@ func keyMsg(name string) tea.KeyMsg {
 		return tea.KeyMsg{Type: tea.KeyCtrlD}
 	case "ctrl+u":
 		return tea.KeyMsg{Type: tea.KeyCtrlU}
+	case "ctrl+p":
+		return tea.KeyMsg{Type: tea.KeyCtrlP}
+	case "backspace":
+		return tea.KeyMsg{Type: tea.KeyBackspace}
 	case "up":
 		return tea.KeyMsg{Type: tea.KeyUp}
 	case "down":
@@ -1864,23 +1868,47 @@ func TestWalkthroughFailureIsReported(t *testing.T) {
 	}
 }
 
-func TestHelpOpensAndAnyKeyCloses(t *testing.T) {
+func TestHelpOpensAndAnyOtherKeyCloses(t *testing.T) {
 	m := newModel(t, newFakeBackend(newSession(t, twoFileDiff)))
 
 	press(t, m, "?")
 	if m.mode != modeHelp {
 		t.Fatalf("mode = %v, want help", m.mode)
 	}
-	view := m.View()
-	for _, want := range []string{"stage the file", `\`, "walkthrough"} {
-		if !strings.Contains(view, want) {
-			t.Errorf("help does not mention %q", want)
+	if !strings.Contains(m.View(), "stage the file") {
+		t.Error("help does not mention staging")
+	}
+
+	press(t, m, "x")
+	if m.mode != modeBrowse {
+		t.Errorf("mode = %v, want browse after any other key", m.mode)
+	}
+}
+
+// There are more keys than rows on a short terminal, and a list cut off at the
+// bottom is a key nobody reading it knows about — so the help screen scrolls,
+// and every binding can be read on the smallest window peel opens in.
+func TestHelpScrollsToTheEndOfTheKeys(t *testing.T) {
+	m := newModel(t, newFakeBackend(newSession(t, twoFileDiff)), WithSize(100, 8))
+
+	press(t, m, "?")
+	var read strings.Builder
+	for range len(helpBindings) + 4 {
+		read.WriteString(m.View())
+		press(t, m, "down")
+		if m.mode != modeHelp {
+			t.Fatalf("↓ closed the help screen instead of reading on")
+		}
+	}
+	for _, want := range []string{`\`, "walkthrough", "go to a file by name", "never from the command line"} {
+		if !strings.Contains(read.String(), want) {
+			t.Errorf("scrolling the whole help screen never showed %q", want)
 		}
 	}
 
-	press(t, m, "j")
-	if m.mode != modeBrowse {
-		t.Errorf("mode = %v, want browse after any key", m.mode)
+	// It stops at the last line rather than scrolling the list off the top.
+	if !strings.Contains(m.View(), "never from the command line") {
+		t.Error("the foot of the help screen scrolled past its own end")
 	}
 }
 

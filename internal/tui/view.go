@@ -138,26 +138,32 @@ func (m *Model) hints() string {
 	case modeComment:
 		return "enter save · shift/alt+enter new line · esc cancel"
 	case modeHelp:
+		if m.helpBottom(m.helpLines()) > 0 {
+			return "↓/↑ read on · any other key closes"
+		}
 		return "any key to close"
 	case modeConfirm:
 		return "y confirm · any other key cancels"
+	case modeFind:
+		return "type part of a path · ↓/↑ choose · enter go there · esc cancel"
 	default:
-		return `j/k hunk · ↓/↑ line · [/] ten lines · opt+↓/↑ file · shift+↓/↑ mark · s stage file · u unstage · space fold · c comment · b files · \ layout · w walkthrough · ? help · q quit`
+		return `j/k hunk · ↓/↑ line · [/] ten lines · opt+↓/↑ file · ctrl+p go to file · shift+↓/↑ mark · s stage file · u unstage · space fold · c comment · b files · \ layout · w walkthrough · ? help · q quit`
 	}
 }
 
-// bodyView draws the file pane beside the diff.
+// bodyView draws the file pane beside the diff, with the file search over the
+// foot of both while one is open.
 func (m *Model) bodyView() string {
 	height := m.bodyHeight()
-	diff := m.diffLines(height)
+	rows := m.diffLines(height)
 
-	pane := m.fileLines(height)
-	if pane == nil {
-		return strings.Join(diff, "\n")
+	if pane := m.fileLines(height); pane != nil {
+		for i := range rows {
+			rows[i] = pane[i] + m.theme.Dim.Render("│") + rows[i]
+		}
 	}
-	rows := make([]string, height)
-	for i := range rows {
-		rows[i] = pane[i] + m.theme.Dim.Render("│") + diff[i]
+	if m.mode == modeFind {
+		rows = overlay(rows, m.findLines(m.width))
 	}
 	return strings.Join(rows, "\n")
 }
@@ -277,6 +283,7 @@ var helpBindings = []struct{ keys, action string }{
 	{"↓ / ↑", "move the cursor one line (the wheel scrolls the diff)"},
 	{"] / [", "ten lines down / up, stopping short at any heading or ▴/▾ row on the way"},
 	{"opt+↓ / opt+↑", "next / previous file"},
+	{"ctrl+p", "go to a file by name — cmd+p too, where the terminal sends it"},
 	{"} / {", "scroll the file tree on its own"},
 	{"h / l", "scroll the code sideways, for a line too long for the pane"},
 	{"0 / $", "back to the first column / out to the longest line's end"},
@@ -304,16 +311,34 @@ var helpBindings = []struct{ keys, action string }{
 	{"? / q", "help / quit"},
 }
 
-func (m *Model) helpView() string {
+// helpLines is the whole help screen, however tall the terminal is.
+func (m *Model) helpLines() []string {
 	lines := []string{fit(" "+m.theme.Header.Render("Keys"), m.width), fit("", m.width)}
 	for _, b := range helpBindings {
 		lines = append(lines, fit(" "+m.theme.Key.Render(padRight(b.keys, 17))+" "+b.action, m.width))
 	}
-	lines = append(lines,
+	return append(lines,
 		fit("", m.width),
 		fit(" "+m.theme.Note.Render("Staging happens here, never from the command line."), m.width),
 	)
-	return strings.Join(padLines(lines, m.bodyHeight(), m.width), "\n")
+}
+
+// helpView draws as much of that list as the terminal holds, from wherever it
+// has been scrolled to.
+//
+// There are more keys than rows on a short terminal, and a list cut off at the
+// bottom is a key that does not exist as far as anyone reading it knows — so the
+// list is windowed and the footer says there is more of it.
+func (m *Model) helpView() string {
+	lines := m.helpLines()
+	top := min(max(m.helpTop, 0), m.helpBottom(lines))
+	return strings.Join(padLines(lines[top:], m.bodyHeight(), m.width), "\n")
+}
+
+// helpBottom is as far as the help screen scrolls: the last window that still
+// ends on the final line, and 0 when the whole list already fits.
+func (m *Model) helpBottom(lines []string) int {
+	return max(len(lines)-m.bodyHeight(), 0)
 }
 
 // padLines trims or extends lines to exactly height rows of the given width, so
