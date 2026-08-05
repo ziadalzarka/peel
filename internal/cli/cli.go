@@ -12,8 +12,10 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ziadalzarka/peel/internal/app"
+	"github.com/ziadalzarka/peel/internal/update"
 )
 
 // Version is the build version, overridden at link time.
@@ -45,6 +47,9 @@ type CLI struct {
 	OpenApp func(ctx context.Context, dir string) (*app.App, error)
 	// RunTUI launches the interactive UI when no subcommand is given.
 	RunTUI TUIRunner
+	// CheckUpdate reports a newer release as the line to print once the review
+	// is over, or "" when there is nothing to say. Defaults to update.Checker.
+	CheckUpdate func(ctx context.Context) string
 
 	// pr is the global --pr flag, shared by the TUI and the pr subcommands.
 	pr string
@@ -154,6 +159,9 @@ func (c *CLI) applyDefaults() {
 			return app.Open(ctx, dir)
 		}
 	}
+	if c.CheckUpdate == nil {
+		c.CheckUpdate = update.Checker{Current: Version}.Notice
+	}
 }
 
 // report prints an error and maps it to an exit code.
@@ -203,6 +211,10 @@ func (c *CLI) openSession(ctx context.Context) (*app.App, *app.Session, error) {
 }
 
 // runTUI launches the interactive review UI.
+//
+// The update check runs beside the review rather than after it, so quitting
+// stays as immediate as every other keypress: by the time the reviewer is done
+// the answer is already waiting, and a check still in flight is simply dropped.
 func (c *CLI) runTUI(ctx context.Context) error {
 	if c.RunTUI == nil {
 		return fmt.Errorf("no interactive UI is available in this build")
@@ -211,8 +223,49 @@ func (c *CLI) runTUI(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return c.RunTUI(ctx, a, s, c.ui)
+
+	notice := c.startUpdateCheck()
+	if err := c.RunTUI(ctx, a, s, c.ui); err != nil {
+		return err
+	}
+	c.printUpdateNotice(notice)
+	return nil
 }
+
+// startUpdateCheck asks about a newer release in the background. The check is
+// given its own context: it outlives a ^C out of the review, and is short
+// enough not to hold the process open for long if the network hangs.
+func (c *CLI) startUpdateCheck() <-chan string {
+	if c.CheckUpdate == nil {
+		return nil
+	}
+	out := make(chan string, 1)
+	go func() { out <- c.CheckUpdate(context.Background()) }()
+	return out
+}
+
+// printUpdateNotice says what the check found. It waits only a moment for it:
+// a cached answer is a file read and is always there by now, and the once-a-day
+// request is not worth holding a finished review open for. An answer that
+// misses the moment is one for the next session, which will have it cached.
+func (c *CLI) printUpdateNotice(notice <-chan string) {
+	if notice == nil {
+		return
+	}
+	timer := time.NewTimer(updateGrace)
+	defer timer.Stop()
+
+	select {
+	case msg := <-notice:
+		if msg != "" {
+			fmt.Fprintln(c.Stderr, msg)
+		}
+	case <-timer.C:
+	}
+}
+
+// updateGrace is how long quitting waits for a release check still in flight.
+const updateGrace = 250 * time.Millisecond
 
 func (c *CLI) printUsage(w io.Writer) {
 	fmt.Fprint(w, `peel — review a diff and stage what you just reviewed

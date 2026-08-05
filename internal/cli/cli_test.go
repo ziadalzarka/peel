@@ -81,8 +81,13 @@ type harness struct {
 	ai         *fakeAI
 	forge      *fakeForge
 	tuiRan     bool
+	tuiErr     error
 	tuiOptions cli.UIOptions
 	tuiSession *app.Session
+	// update is what the release check finds, and updates counts the times it
+	// is asked. Nothing here reaches the network.
+	update  string
+	updates int
 }
 
 func newHarness(t *testing.T) *harness {
@@ -117,7 +122,11 @@ func newHarness(t *testing.T) *harness {
 			h.tuiRan = true
 			h.tuiOptions = ui
 			h.tuiSession = s
-			return nil
+			return h.tuiErr
+		},
+		CheckUpdate: func(context.Context) string {
+			h.updates++
+			return h.update
 		},
 	}
 	return h
@@ -199,6 +208,57 @@ func TestNoArgsLaunchesTUI(t *testing.T) {
 	want := cli.UIOptions{Follow: true}
 	if h.tuiOptions != want {
 		t.Errorf("UI options = %+v, want %+v", h.tuiOptions, want)
+	}
+}
+
+// A newer release is news for after the review, not during it.
+func TestANewerReleaseIsAnnouncedOnTheWayOut(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+	h.update = "peel v0.5.0 is out — you have v0.4.0\n  brew upgrade ziadalzarka/tap/peel"
+
+	if code := h.run(); code != 0 {
+		t.Fatalf("exit code = %d: %s", code, h.err())
+	}
+	if !strings.Contains(h.err(), "brew upgrade") {
+		t.Errorf("quitting printed %q, want the update notice", h.err())
+	}
+	if strings.Contains(h.out(), "brew upgrade") {
+		t.Error("the notice went to stdout, where piped output would pick it up")
+	}
+}
+
+// The check belongs to the review UI. An agent reading comments must get the
+// data it asked for and nothing else, and must not reach the network for it.
+func TestTheCommandSurfaceIsNeverCheckedForUpdates(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+	h.update = "peel v0.5.0 is out"
+
+	h.mustRun("comment", "list", "--json")
+	h.mustRun("version")
+
+	if h.updates != 0 {
+		t.Errorf("the subcommands checked for updates %d times, want none", h.updates)
+	}
+	if strings.Contains(h.err(), "v0.5.0") {
+		t.Errorf("a subcommand printed the update notice: %q", h.err())
+	}
+}
+
+// A session that ended badly has the error to deal with; an update notice under
+// it is only in the way.
+func TestAFailedSessionIsNotToldAboutUpdates(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+	h.update = "peel v0.5.0 is out"
+	h.tuiErr = errors.New("terminal does not support this")
+
+	if code := h.run(); code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if strings.Contains(h.err(), "v0.5.0") {
+		t.Errorf("a failed session printed the update notice: %q", h.err())
 	}
 }
 

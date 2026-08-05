@@ -63,6 +63,18 @@ Go 1.26+, one static binary, no runtime. `gh` is required for PR mode; either
 `claude` or `codex` can write walkthroughs. `peel providers` shows what is
 available.
 
+peel looks for a newer release while you review and tells you once you have
+quit, with the command that installs it:
+
+```
+peel v0.5.0 is out — you have v0.4.0
+  brew upgrade ziadalzarka/tap/peel
+```
+
+That check is the only thing peel sends anywhere on its own — one unauthenticated
+request to the GitHub releases API, asked at most once a day and never by a build
+made from a checkout. `PEEL_NO_UPDATE_CHECK=1` turns it off.
+
 ## Use
 
 ```sh
@@ -270,6 +282,7 @@ internal/store     comments, folds, and the walkthrough cache, under .git/peel/
 internal/ai        walkthrough providers (claude-code, codex)
 internal/forge     pull request providers (github, via gh)
 internal/registry  provider lookup, shared by both
+internal/update    the release check, and the only thing peel sends unasked
 internal/app       wiring; the only package that names concrete providers
 internal/cli       the agent-facing command surface
 internal/tui       the review UI
