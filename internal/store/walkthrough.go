@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -234,35 +233,7 @@ func (c *JSONWalkthroughCache) Save(w Walkthrough) error {
 	if w.CreatedAt.IsZero() {
 		w.CreatedAt = c.now().UTC()
 	}
-	b, err := json.MarshalIndent(w, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode walkthrough: %w", err)
-	}
-	b = append(b, '\n')
-
-	dir := filepath.Dir(c.path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", dir, err)
-	}
-
-	tmp, err := os.CreateTemp(dir, ".walkthrough-*.json")
-	if err != nil {
-		return fmt.Errorf("create temp file in %s: %w", dir, err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write %s: %w", tmpName, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close %s: %w", tmpName, err)
-	}
-	if err := os.Rename(tmpName, c.path); err != nil {
-		return fmt.Errorf("replace %s: %w", c.path, err)
-	}
-	return nil
+	return writeJSONFile(c.path, "walkthrough", w)
 }
 
 // Clear discards the cached narrative.

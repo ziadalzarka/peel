@@ -143,6 +143,43 @@ func TestBackendRefusesToStageAReadOnlySession(t *testing.T) {
 	}
 }
 
+// Hiding the agent's review is written to peel's own state, so the next backend
+// over the same repository opens the diff the way the last one left it — and one
+// review's filter is not the next review's.
+func TestBackendRemembersHiddenAgentComments(t *testing.T) {
+	a, session, backend := openBackend(t)
+
+	hidden, err := backend.AgentCommentsHidden()
+	if err != nil {
+		t.Fatalf("AgentCommentsHidden: %v", err)
+	}
+	if hidden {
+		t.Fatal("a review nobody has filtered opens with the agent's notes hidden")
+	}
+
+	if err := backend.SetAgentCommentsHidden(true); err != nil {
+		t.Fatalf("SetAgentCommentsHidden: %v", err)
+	}
+
+	again := tui.NewBackend(a, session)
+	hidden, err = again.AgentCommentsHidden()
+	if err != nil {
+		t.Fatalf("AgentCommentsHidden: %v", err)
+	}
+	if !hidden {
+		t.Error("the working tree opened showing notes it was left without")
+	}
+
+	pr := tui.NewBackend(a, &app.Session{Target: "github:cli/cli#412", Title: "pr"})
+	hidden, err = pr.AgentCommentsHidden()
+	if err != nil {
+		t.Fatalf("AgentCommentsHidden: %v", err)
+	}
+	if hidden {
+		t.Error("the working tree's filter reached a pull request")
+	}
+}
+
 // Reloading a pull request would refetch a diff that cannot have changed, and
 // would lose the target the comments are scoped to.
 func TestBackendReloadOfAPullRequestIsAPassthrough(t *testing.T) {

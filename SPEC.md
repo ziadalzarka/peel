@@ -96,6 +96,7 @@ it doesn't get relitigated.
 | **Agent → index** | **Read-only. No flag, no escape hatch** | Claude Code can already run `git add` directly, so `peel hunks add` adds no capability — only a way for things to enter the index unreviewed |
 | **Comment store** | JSON at `.git/peel/comments.json` | Per-repo, survives restarts, invisible to `git status`, readable with no daemon running |
 | **Two reviews, one store** | every comment carries an author; `A` hides the agent's, `X` clears them, `peel comment clear --author agent` does the same from the CLI | Added 2026-07-30. An agent's pass and the reviewer's own notes land in the same file, and only the reviewer's are irreplaceable. Nothing an agent writes can overwrite one — `add` only ever appends — so deleting is the only way to lose one, and the agent's review is removable as a group without a key that can reach a note the reviewer wrote |
+| **Hiding the agent's review persists** | JSON at `.git/peel/view.json`, per target | Added 2026-08-05. `A` is a decision about what is worth looking at, and folds already establish that such a decision outlives the process: a diff read without the agent's notes had them back on the next run, which is the same startle as a pass that has forgotten every file already read. It is kept out of `folds.json` because it is not the same kind of record — a fold says what has been read and is dropped when the file leaves the diff, a view says what the diff is filtered down to and has nothing to go stale against. A review with no agent notes in it opens plain whatever is written down: there is nothing to take out, and `A` says as much rather than lifting a filter, so honouring one would leave a header claiming notes are hidden and no key to disagree with it |
 | **Agent hookup** | CLI + `SKILL.md` | Agent pulls on demand. Deliberately *not* hunk's live-daemon model — see §6 |
 | **Walkthrough** | pluggable CLI providers: `claude -p` or `codex exec` | Reuses existing Claude Code or Codex auth. Claude stays the default; `--provider` selects explicitly |
 | **Walkthrough shape** | grouped, numbered steps in reading order | A reviewer wants to be walked through the changed code, not handed a summary of the changeset they can already see |
@@ -128,7 +129,7 @@ peel/
   main.go              CLI entry — TUI by default, subcommands for the agent
   internal/git/        diff parse, hunk model, status, staging   ← UI-agnostic
   internal/tui/        bubbletea models and views
-  internal/store/      comments.json, folds.json + walkthrough cache
+  internal/store/      comments.json, folds.json, view.json + walkthrough cache
   internal/gh/         PR fetch and review submit, via `gh`
   internal/ai/         walkthrough via `claude -p`
   internal/update/     is a newer release out — the one thing that leaves the machine unasked

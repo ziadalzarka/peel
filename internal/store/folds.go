@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"sort"
 )
 
@@ -58,7 +57,8 @@ func (s *JSONFoldStore) Save(target string, files []string) error {
 		sort.Strings(sorted)
 		f.Folded[target] = sorted
 	}
-	return s.write(f)
+	f.Version = currentVersion
+	return writeJSONFile(s.path, "folds", f)
 }
 
 // read loads the file, treating a missing or unreadable one as no folds: a
@@ -82,38 +82,4 @@ func (s *JSONFoldStore) read() (foldFile, error) {
 		f.Folded = map[string][]string{}
 	}
 	return f, nil
-}
-
-// write persists the folds atomically, so a reader never sees a partial file.
-func (s *JSONFoldStore) write(f foldFile) error {
-	f.Version = currentVersion
-	b, err := json.MarshalIndent(f, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode folds: %w", err)
-	}
-	b = append(b, '\n')
-
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", dir, err)
-	}
-
-	tmp, err := os.CreateTemp(dir, ".folds-*.json")
-	if err != nil {
-		return fmt.Errorf("create temp file in %s: %w", dir, err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write %s: %w", tmpName, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close %s: %w", tmpName, err)
-	}
-	if err := os.Rename(tmpName, s.path); err != nil {
-		return fmt.Errorf("replace %s: %w", s.path, err)
-	}
-	return nil
 }

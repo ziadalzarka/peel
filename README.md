@@ -148,9 +148,15 @@ which copy of the file that number counts against.
 A comment says who wrote it: `user:` for yours, `agent:` for one Claude Code left
 through the skill. The two are kept apart because only one of them is yours to
 lose — `A` takes the agent's notes out of the diff and puts them back, a display
-change that writes nothing, and `X` deletes every one of them at once, after
+change that deletes nothing, and `X` deletes every one of them at once, after
 asking. Neither can reach a note you wrote, and nothing an agent writes replaces
 one: comments are only ever appended.
+
+Which of the two `A` was left on is remembered between runs, in
+`.git/peel/view.json` and per review, so a diff you read without the agent's
+review does not have it back the next morning. The header says `agent hidden`
+for as long as it is, and a review with no agent notes in it opens plain
+whatever was written down — there is nothing to take out.
 
 ### Opening a file
 
@@ -281,7 +287,7 @@ or `clip.exe`.
 
 ```
 internal/git       diff parsing, status, and whole-file staging
-internal/store     comments, folds, and the walkthrough cache, under .git/peel/
+internal/store     comments, folds, views, and the walkthrough cache, under .git/peel/
 internal/ai        walkthrough providers (claude-code, codex)
 internal/forge     pull request providers (github, via gh)
 internal/registry  provider lookup, shared by both

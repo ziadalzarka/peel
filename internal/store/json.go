@@ -248,35 +248,7 @@ func (s *JSONStore) write(comments []Comment) error {
 	}
 	sortComments(comments)
 
-	b, err := json.MarshalIndent(fileFormat{Version: currentVersion, Comments: comments}, "", "  ")
-	if err != nil {
-		return fmt.Errorf("encode comments: %w", err)
-	}
-	b = append(b, '\n')
-
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", dir, err)
-	}
-
-	tmp, err := os.CreateTemp(dir, ".comments-*.json")
-	if err != nil {
-		return fmt.Errorf("create temp file in %s: %w", dir, err)
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
-
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		return fmt.Errorf("write %s: %w", tmpName, err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("close %s: %w", tmpName, err)
-	}
-	if err := os.Rename(tmpName, s.path); err != nil {
-		return fmt.Errorf("replace %s: %w", s.path, err)
-	}
-	return nil
+	return writeJSONFile(s.path, "comments", fileFormat{Version: currentVersion, Comments: comments})
 }
 
 // lock takes an exclusive advisory lock via an O_EXCL lock file, which works

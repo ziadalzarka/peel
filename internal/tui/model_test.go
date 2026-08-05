@@ -1259,7 +1259,7 @@ func TestAHidesTheAgentsCommentsAndLeavesTheReviewersOwn(t *testing.T) {
 		t.Errorf("header = %q, want it to say the notes are hidden", m.headerView())
 	}
 	if len(backend.removed) != 0 {
-		t.Errorf("hiding removed %v — it must not write anything", backend.removed)
+		t.Errorf("hiding removed %v — it must not delete anything", backend.removed)
 	}
 
 	press(t, m, "A")
@@ -1267,6 +1267,67 @@ func TestAHidesTheAgentsCommentsAndLeavesTheReviewersOwn(t *testing.T) {
 		if m.doc.RowOfComment(id) < 0 {
 			t.Errorf("comment %s did not come back", id)
 		}
+	}
+}
+
+// A review read without the agent's notes is read that way for a reason, and
+// the reason outlasts the process: opening it again keeps them out of the diff
+// rather than putting a review back that has been dealt with already.
+func TestHiddenAgentCommentsAreRememberedAcrossSessions(t *testing.T) {
+	backend := reviewedByBoth(t)
+	m := newModel(t, backend)
+
+	press(t, m, "A")
+	if !backend.agentHidden {
+		t.Fatal("hiding the agent's notes was not written down")
+	}
+
+	again := newModel(t, backend)
+	for _, id := range []string{"a1", "a2"} {
+		if row := again.doc.RowOfComment(id); row >= 0 {
+			t.Errorf("agent comment %s came back on row %d, want it still hidden", id, row)
+		}
+	}
+	if !strings.Contains(again.headerView(), "agent hidden") {
+		t.Errorf("header = %q, want it to say the notes are hidden", again.headerView())
+	}
+
+	press(t, again, "A")
+	if backend.agentHidden {
+		t.Error("showing them again was not written down")
+	}
+}
+
+// The record is a filter, and a filter with nothing to filter is a header
+// claiming notes are hidden that `A` refuses to argue with — so a review with
+// no agent notes in it opens plain, whatever was written down.
+func TestARemembersNothingWhenThereAreNoAgentComments(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "u1", File: "alpha.go", Line: 4, Body: "mine, keep it", Author: store.AuthorUser},
+	}
+	backend.agentHidden = true
+
+	m := newModel(t, backend)
+	if m.agentCommentsOff {
+		t.Error("the review opened filtered with nothing to filter")
+	}
+	if strings.Contains(m.headerView(), "agent hidden") {
+		t.Errorf("header = %q, want no claim that notes are hidden", m.headerView())
+	}
+}
+
+// Deleting the notes says what hiding them said, and more, so the record of
+// hiding them goes with them.
+func TestDeletingTheAgentsCommentsForgetsThatTheyWereHidden(t *testing.T) {
+	backend := reviewedByBoth(t)
+	m := newModel(t, backend)
+
+	press(t, m, "A")
+	press(t, m, "X", "y")
+
+	if backend.agentHidden {
+		t.Error("the notes are deleted and still written down as hidden")
 	}
 }
 

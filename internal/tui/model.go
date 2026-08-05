@@ -204,6 +204,7 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 	}
 	m.fingerprint = fingerprintOf(session)
 	m.restoreFolds()
+	m.restoreAgentComments()
 	m.resize(cfg.width, cfg.height)
 	m.rebuild()
 	m.cursor = m.doc.FirstStop()
@@ -234,6 +235,23 @@ func (m *Model) restoreFolds() {
 			m.stagedFolds[path] = true
 		}
 	}
+}
+
+// restoreAgentComments opens the review with the agent's notes hidden if that
+// is how it was last left, so a diff read without them stays that way rather
+// than putting a review back that has been dealt with already.
+//
+// A review with no agent notes in it opens showing them whatever was written
+// down. There is nothing to take out, and `A` says so rather than lifting a
+// filter, so honouring one here would leave a header claiming notes are hidden
+// and no key to disagree with it.
+func (m *Model) restoreAgentComments() {
+	hidden, err := m.backend.AgentCommentsHidden()
+	if err != nil {
+		m.err = err
+		return
+	}
+	m.agentCommentsOff = hidden && len(agentComments(m.comments)) > 0
 }
 
 // draftMinHeight and draftMaxHeight bound the inline editor. It opens small, so
@@ -1237,13 +1255,29 @@ func (m *Model) toggleAgentComments() {
 		m.status = "no agent comments"
 		return
 	}
-	m.agentCommentsOff = !m.agentCommentsOff
+	m.setAgentCommentsHidden(!m.agentCommentsOff)
 	m.relayout()
 	if m.agentCommentsOff {
 		m.status = plural(n, "agent comment") + " hidden"
 		return
 	}
 	m.status = plural(n, "agent comment") + " shown"
+}
+
+// setAgentCommentsHidden takes the agent's notes out of the diff or puts them
+// back. It is the only place that changes, so it is also where the choice is
+// written down for the next reading of this review.
+//
+// A choice that fails to persist is worth saying but not worth undoing, the way
+// a fold is: the diff on screen is the one that was asked for either way.
+func (m *Model) setAgentCommentsHidden(hidden bool) {
+	if m.agentCommentsOff == hidden {
+		return
+	}
+	m.agentCommentsOff = hidden
+	if err := m.backend.SetAgentCommentsHidden(hidden); err != nil {
+		m.err = err
+	}
 }
 
 // askClearAgentComments puts the deletion to the reviewer before doing it. One
@@ -1269,7 +1303,7 @@ func (m *Model) clearAgentComments(ids []string) tea.Cmd {
 	backend := m.backend
 	return m.apply(func() {
 		m.comments = withoutComments(m.comments, ids)
-		m.agentCommentsOff = false
+		m.setAgentCommentsHidden(false)
 		m.status = "deleted " + plural(len(ids), "agent comment")
 		m.relayout()
 	}, func(context.Context) error {

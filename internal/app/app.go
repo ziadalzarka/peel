@@ -31,6 +31,8 @@ type App struct {
 	Walkthroughs store.WalkthroughCache
 	// Folds remembers which files have been folded away.
 	Folds store.FoldStore
+	// Views remembers how each review was last being looked at.
+	Views store.ViewStore
 	// AI holds the walkthrough providers, in preference order.
 	AI *ai.Registry
 	// Forges holds the pull request providers, in preference order.
@@ -243,6 +245,7 @@ func Open(ctx context.Context, dir string, opts ...Option) (*App, error) {
 		Comments:     store.NewJSONStore(filepath.Join(stateDir, "comments.json"), cfg.storeOp...),
 		Walkthroughs: store.NewJSONWalkthroughCache(filepath.Join(stateDir, "walkthrough.json")),
 		Folds:        store.NewJSONFoldStore(filepath.Join(stateDir, "folds.json")),
+		Views:        store.NewJSONViewStore(filepath.Join(stateDir, "view.json")),
 		AI:           aiRegistry,
 		Forges:       forgeRegistry,
 		Runner:       cfg.runner,

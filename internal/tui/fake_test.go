@@ -181,6 +181,11 @@ type fakeBackend struct {
 	foldErr     error
 	foldSaveErr error
 
+	// agentHidden is whether the agent's notes were left out of the diff.
+	agentHidden      bool
+	agentHiddenSaves int
+	agentHiddenErr   error
+
 	added    []store.Comment
 	removed  []string
 	resolved map[string]bool
@@ -310,6 +315,19 @@ func (f *fakeBackend) SetFolded(paths []string) error {
 	f.folded = paths
 	f.foldSaves++
 	return f.foldSaveErr
+}
+
+func (f *fakeBackend) AgentCommentsHidden() (bool, error) {
+	if f.agentHiddenErr != nil {
+		return false, f.agentHiddenErr
+	}
+	return f.agentHidden, nil
+}
+
+func (f *fakeBackend) SetAgentCommentsHidden(hidden bool) error {
+	f.agentHidden = hidden
+	f.agentHiddenSaves++
+	return nil
 }
 
 func (f *fakeBackend) OpenFile(_ context.Context, path string) error {
