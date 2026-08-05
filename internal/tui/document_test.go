@@ -532,6 +532,59 @@ func TestBuildSplitsMultiLineCommentBodiesIntoRows(t *testing.T) {
 	}
 }
 
+func TestBuildWrapsALongCommentLineToTheWidthItHas(t *testing.T) {
+	body := "this review comment is far too long to sit on one row of a narrow pane, so it has to run on"
+	comments := []store.Comment{
+		{ID: "c1", File: "alpha.go", Body: body, Author: store.AuthorUser},
+	}
+	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutUnified, WithCommentWidth(40))
+
+	head := doc.RowOfComment("c1")
+	if head < 0 {
+		t.Fatal("comment was not placed")
+	}
+	var rows []string
+	for i := head; i < len(doc.Rows) && doc.Rows[i].Kind == RowComment; i++ {
+		rows = append(rows, doc.Rows[i].Text)
+	}
+	if len(rows) < 3 {
+		t.Fatalf("comment took %d rows, want it wrapped across several: %q", len(rows), rows)
+	}
+	// The tag naming the author comes off the width, and every row is wrapped to
+	// what is left so the ones below line up under the first.
+	width := 40 - ansi.StringWidth(commentTag(comments[0]))
+	for i, row := range rows {
+		if got := ansi.StringWidth(row); got > width {
+			t.Errorf("row %d is %d wide, want no more than %d: %q", i, got, width, row)
+		}
+	}
+	if got := strings.Join(rows, " "); got != body {
+		t.Errorf("wrapped rows read as %q, want %q", got, body)
+	}
+	if !doc.Rows[head].Head || doc.Rows[head+1].Head {
+		t.Error("only the first row of a wrapped comment is its head")
+	}
+}
+
+// A comment is as likely to hold a list or a snippet as it is prose, so the
+// line breaks it was written with are its own — wrapping only adds to them.
+func TestBuildKeepsACommentsOwnLineBreaksWhenWrapping(t *testing.T) {
+	comments := []store.Comment{
+		{ID: "c1", File: "alpha.go", Body: "short\n\n- one\n- two", Author: store.AuthorUser},
+	}
+	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutUnified, WithCommentWidth(40))
+
+	head := doc.RowOfComment("c1")
+	if head < 0 {
+		t.Fatal("comment was not placed")
+	}
+	for i, want := range []string{"short", "", "- one", "- two"} {
+		if got := doc.Rows[head+i].Text; got != want {
+			t.Errorf("row %d = %q, want %q", i, got, want)
+		}
+	}
+}
+
 func TestNavigationStepsBetweenHunksAndFiles(t *testing.T) {
 	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
 

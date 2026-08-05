@@ -52,8 +52,15 @@ func (m *Model) bodyHeight() int {
 	return max(m.height-headerHeight-footerHeight, 1)
 }
 
+// filePaneWidth is how wide the list of files beside the diff is, and 0 when
+// there is no list.
+//
+// It is measured off the session rather than the laid-out document, because the
+// document is laid out to the width this leaves: a comment is wrapped to the
+// room the diff has, and asking the half-built document how wide it is would
+// wrap the first one to a pane that is about to appear.
 func (m *Model) filePaneWidth() int {
-	if m.filePaneOff || len(m.doc.Files) == 0 {
+	if m.filePaneOff || m.session == nil || len(m.session.Files) == 0 {
 		return 0
 	}
 	w := min(max(m.width/4, filePaneMin), filePaneMax)

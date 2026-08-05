@@ -1022,6 +1022,59 @@ func TestEscapeCancelsACommentAndLeavesTheCursorAlone(t *testing.T) {
 	}
 }
 
+// A comment long enough to overrun the pane used to be cut off with an
+// ellipsis, which lost most of what an agent had written about a line.
+func TestALongCommentIsWrappedOntoTheRowsBelowIt(t *testing.T) {
+	long := strings.Repeat("this note runs on and on about the line it was left on. ", 4)
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 4, Side: store.SideNew, Body: long, Author: store.AuthorAgent},
+	}
+	m := newModel(t, backend)
+
+	var rows []string
+	head := m.doc.RowOfComment("c1")
+	for i := head; i < len(m.doc.Rows) && m.doc.Rows[i].Kind == RowComment; i++ {
+		row := ansi.Strip(m.renderer.Row(m.doc, i, RowState{}))
+		if strings.Contains(row, "…") {
+			t.Errorf("row %d was truncated: %q", i-head, row)
+		}
+		rows = append(rows, strings.ReplaceAll(row, "┃", ""))
+	}
+
+	if got := strings.Join(strings.Fields(strings.Join(rows, " ")), " "); got != "agent: "+strings.TrimSpace(long) {
+		t.Errorf("the comment reads as %q on screen", got)
+	}
+}
+
+// The rows a comment takes up depend on how much room the pane has, so a resize
+// has to lay the document out again — not only when a walkthrough is on.
+func TestResizingRewrapsTheCommentsOnScreen(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 4, Side: store.SideNew,
+			Body: strings.Repeat("a wide note about a narrow line. ", 4), Author: store.AuthorUser},
+	}
+	m := newModel(t, backend)
+
+	wide := commentRows(m.doc, "c1")
+	send(t, m, tea.WindowSizeMsg{Width: 60, Height: 30})
+	narrow := commentRows(m.doc, "c1")
+
+	if narrow <= wide {
+		t.Errorf("the comment took %d rows at 100 columns and %d at 60, want more when narrower", wide, narrow)
+	}
+}
+
+// commentRows counts the rows one comment takes up.
+func commentRows(d Document, id string) int {
+	n := 0
+	for i := d.RowOfComment(id); i >= 0 && i < len(d.Rows) && d.Rows[i].Kind == RowComment; i++ {
+		n++
+	}
+	return n
+}
+
 func TestResolvingKeepsTheCursorOnTheComment(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	backend.comments = []store.Comment{

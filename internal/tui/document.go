@@ -179,6 +179,9 @@ type buildConfig struct {
 	// sides overrides the default fold of a file's index side, by path. A path
 	// with no entry takes the default.
 	sides map[string]bool
+	// commentWidth is the room a comment's text has beside its bar and tag.
+	// Zero leaves a comment's lines as they were written.
+	commentWidth int
 }
 
 // BuildOption customises how a document is laid out.
@@ -191,6 +194,12 @@ func WithDraft(d Draft) BuildOption { return func(c *buildConfig) { c.draft = d 
 // WithSideFolds overrides, by path, whether a file's index side opens folded.
 func WithSideFolds(folds map[string]bool) BuildOption {
 	return func(c *buildConfig) { c.sides = folds }
+}
+
+// WithCommentWidth wraps a comment's text to the room it has, so a long line
+// runs on to the next row instead of off the edge of the pane.
+func WithCommentWidth(w int) BuildOption {
+	return func(c *buildConfig) { c.commentWidth = w }
 }
 
 // Document is a session flattened into navigable rows.
@@ -216,6 +225,9 @@ type Document struct {
 	// DraftRow is the first row of the editor, and -1 when nothing is being
 	// written. The rest of the editor follows it, one row per line.
 	DraftRow int
+	// commentWidth is the room a comment's text is wrapped to, before its tag
+	// is taken off the first row.
+	commentWidth int
 }
 
 // Build flattens a session into rows. collapsed hides a file's body by path.
@@ -224,7 +236,8 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	doc := Document{Comments: comments, Layout: layout, Draft: cfg.draft, DraftRow: -1}
+	doc := Document{Comments: comments, Layout: layout, Draft: cfg.draft, DraftRow: -1,
+		commentWidth: cfg.commentWidth}
 	if s == nil {
 		return doc
 	}
@@ -337,22 +350,48 @@ func (d *Document) add(r Row) { d.Rows = append(d.Rows, r) }
 
 func (d *Document) addComments(file, hunk int, ids []int) {
 	for _, ci := range ids {
-		for n, text := range strings.Split(d.Comments[ci].Body, "\n") {
-			d.add(Row{
-				Kind:    RowComment,
-				File:    file,
-				Hunk:    hunk,
-				Left:    -1,
-				Right:   -1,
-				Comment: ci,
-				Step:    -1,
-				Side:    -1,
-				Text:    text,
-				Head:    n == 0,
-			})
+		row := Row{
+			Kind:    RowComment,
+			File:    file,
+			Hunk:    hunk,
+			Left:    -1,
+			Right:   -1,
+			Comment: ci,
+			Step:    -1,
+			Side:    -1,
+			Head:    true,
+		}
+		for _, text := range d.wrapComment(d.Comments[ci]) {
+			row.Text = text
+			d.add(row)
+			row.Head = false
 		}
 	}
 }
+
+// wrapComment breaks a comment's body into the rows it takes up. The lines it
+// was written with are kept — a review comment holds a list or a snippet as
+// often as it holds prose — and only a line with more in it than the pane can
+// hold runs on to the next row.
+//
+// Every row is wrapped to the same width: the tag naming the author takes room
+// on the first row, and the renderer indents the rest below it to match.
+func (d Document) wrapComment(c store.Comment) []string {
+	lines := strings.Split(c.Body, "\n")
+	if d.commentWidth <= 0 {
+		return lines
+	}
+	width := max(d.commentWidth-ansi.StringWidth(commentTag(c)), minCommentWidth)
+	var out []string
+	for _, line := range lines {
+		out = append(out, strings.Split(ansi.Wrap(expandTabs(line), width, " -"), "\n")...)
+	}
+	return out
+}
+
+// minCommentWidth keeps a comment readable in a pane too narrow to hold both
+// the tag and a useful amount of text, at the cost of running past the edge.
+const minCommentWidth = 20
 
 // addBody lays out a file's changes, the index's side first.
 //

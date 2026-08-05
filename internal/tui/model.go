@@ -999,6 +999,12 @@ func (m *Model) draft() Draft {
 // with the comment bar.
 func (m *Model) draftWidth() int { return max(m.diffWidth()-commentIndent, 20) }
 
+// commentWidth is the room a saved comment's text has: the indent it shares
+// with the editor, less the bar and the space after it.
+func (m *Model) commentWidth() int {
+	return max(m.diffWidth()-commentIndent-2, minCommentWidth)
+}
+
 // revealDraft scrolls the editor into view without taking the cursor off the
 // code the comment is about.
 func (m *Model) revealDraft() {
@@ -1541,13 +1547,12 @@ func (m *Model) currentPath() string {
 
 func (m *Model) rebuild() {
 	m.doc = Build(m.session, m.visibleComments(), m.collapsed, m.layout,
-		WithGroups(m.groups()), WithDraft(m.draft()), WithSideFolds(m.sideFolds))
+		WithGroups(m.groups()), WithDraft(m.draft()), WithSideFolds(m.sideFolds),
+		WithCommentWidth(m.commentWidth()))
 	m.fileRows = fileTree(m.doc.Files)
 	if m.cursor >= m.doc.Len() {
 		m.cursor = m.doc.LastStop()
 	}
-	// The file pane appears with the first file, so the diff's width is only
-	// settled once the document is.
 	m.renderer.SetWidth(m.diffWidth())
 	m.clampTop()
 	m.clampFileTop()
@@ -1813,9 +1818,9 @@ func (m *Model) resize(width, height int) {
 	if m.mode == modeComment {
 		m.input.SetWidth(m.draftWidth())
 	}
-	// A walkthrough's explanations are wrapped into rows, so a resize changes
-	// how many rows the document has.
-	if len(m.doc.Steps) > 0 {
+	// A walkthrough's explanations and a comment's text are both wrapped into
+	// rows, so a resize changes how many rows the document has.
+	if len(m.doc.Steps) > 0 || len(m.doc.Comments) > 0 {
 		m.relayout()
 	}
 	m.clampTop()
