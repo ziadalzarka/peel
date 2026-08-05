@@ -604,10 +604,10 @@ func TestRenderExpandRowCountsWhatIsHiddenAndPointsAtIt(t *testing.T) {
 
 	// Reading down from the hunk above points down; reading up from the one below
 	// points up. Both name the same thirty-eight lines.
-	if got, want := rows[ExpandDown], "           ▾ 38 lines hidden"; got != want {
+	if got, want := rows[ExpandDown], "       ▾ 38 lines hidden"; got != want {
 		t.Errorf("row below the hunk = %q, want %q", got, want)
 	}
-	if got, want := rows[ExpandUp], "           ▴ 38 lines hidden"; got != want {
+	if got, want := rows[ExpandUp], "       ▴ 38 lines hidden"; got != want {
 		t.Errorf("row above the hunk = %q, want %q", got, want)
 	}
 }
@@ -625,7 +625,7 @@ func TestRenderExpandRowOfAShortRunPointsBothWays(t *testing.T) {
 			got = strings.TrimRight(r.Row(doc, i, RowState{}), " ")
 		}
 	}
-	if want := "           ▴▾ 8 lines hidden"; got != want {
+	if want := "       ▴▾ 8 lines hidden"; got != want {
 		t.Errorf("row = %q, want %q", got, want)
 	}
 }
@@ -641,7 +641,7 @@ func TestRenderExpandRowCountsOneLineAsOne(t *testing.T) {
 			got = strings.TrimRight(r.Row(doc, i, RowState{}), " ")
 		}
 	}
-	if want := "           ▴ 1 line hidden"; got != want {
+	if want := "       ▴ 1 line hidden"; got != want {
 		t.Errorf("row = %q, want %q", got, want)
 	}
 }
