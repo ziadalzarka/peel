@@ -1938,6 +1938,27 @@ func TestReloadKeyRefreshes(t *testing.T) {
 	}
 }
 
+func TestReloadKeyLeavesTheCursorOnTheLineItWasReading(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	m := newModel(t, backend)
+
+	m.moveTo(lineRowOf(t, m, 0, 3))
+	ref, line, ok := m.doc.LineAt(m.cursor)
+	if !ok {
+		t.Fatal("the cursor is not on a diff line")
+	}
+
+	press(t, m, "r")
+
+	gotRef, gotLine, ok := m.doc.LineAt(m.cursor)
+	if !ok {
+		t.Fatalf("the reload put the cursor on a %v, want the line it was reading", m.doc.Rows[m.cursor].Kind)
+	}
+	if gotRef.ID != ref.ID || gotLine != line {
+		t.Errorf("cursor is on %v line %d, want %v line %d", gotRef.ID, gotLine, ref.ID, line)
+	}
+}
+
 func TestViewFillsTheTerminalAtEverySize(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	backend.comments = []store.Comment{

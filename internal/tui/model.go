@@ -1979,8 +1979,8 @@ func (m *Model) expandAt(at int) {
 	m.status = "showing " + plural(shown, "line") + " more of " + ref.Path
 }
 
-// applyLoaded swaps in a freshly read session, keeping the reviewer roughly
-// where they were rather than jumping back to the top.
+// applyLoaded swaps in a freshly read session, leaving the reviewer on the line
+// they were reading rather than jumping them back to the top.
 //
 // It hands back the read of the files behind it: the diff has moved on, so the
 // copies the revealed code came out of have to be taken as moved on too, and a
@@ -1995,7 +1995,7 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 	if msg.poll && !m.acceptPoll(msg) {
 		return nil
 	}
-	at, path := m.spot(), m.currentPath()
+	at := m.spot()
 	m.session = msg.session
 	m.comments = msg.comments
 	// The code read in around the hunks came out of files this load has just
@@ -2029,13 +2029,10 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 		reopened = m.reopenStagedChanged()
 	}
 	m.rebuild()
-	// A reconciling read-back is behind a change the reviewer has already seen
-	// and already moved on from, so the cursor stays exactly where they left it.
-	if msg.reconcile {
-		m.moveToSpot(at)
-	} else {
-		m.restoreCursor(path)
-	}
+	// A reload is not somewhere to be taken: it is the same review with newer
+	// text under it, so the cursor stays on the line it was on and falls back
+	// through the hunk and the file only when that line has gone.
+	m.moveToSpot(at)
 	if msg.note != "" {
 		m.status = msg.note
 	}

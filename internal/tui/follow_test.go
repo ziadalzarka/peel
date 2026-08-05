@@ -137,6 +137,27 @@ func TestFollowLeavesTheCursorAloneWhileCommenting(t *testing.T) {
 	}
 }
 
+func TestFollowLeavesTheCursorOnTheLineItWasReading(t *testing.T) {
+	repo, m := followModel(t)
+
+	m.moveTo(lineRowOf(t, m, 0, 3))
+	ref, line, ok := m.doc.LineAt(m.cursor)
+	if !ok {
+		t.Fatal("the cursor is not on a diff line")
+	}
+
+	repo.Write("added.txt", "hello\n")
+	poll(t, m)
+
+	gotRef, gotLine, ok := m.doc.LineAt(m.cursor)
+	if !ok {
+		t.Fatalf("a poll put the cursor on a %v, want the line it was reading", m.doc.Rows[m.cursor].Kind)
+	}
+	if gotRef.ID != ref.ID || gotLine != line {
+		t.Errorf("cursor is on %v line %d, want %v line %d", gotRef.ID, gotLine, ref.ID, line)
+	}
+}
+
 func TestTickSchedulesAnotherTickAndAPoll(t *testing.T) {
 	_, m := followModel(t)
 
