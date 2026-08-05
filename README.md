@@ -111,7 +111,7 @@ repository changes.
 | `j` / `k` | next / previous hunk, file or comment |
 | `]` / `[` | ten lines down / up, stopping short at any heading on the way |
 | `opt+↓` / `opt+↑` | next / previous file |
-| `ctrl+p` | go to a file by name — `cmd+p` too, where the terminal sends it |
+| `cmd+p` | go to a file by name, in the terminals that send `cmd` through |
 | `}` / `{` | scroll the file tree on its own |
 | `h` / `l` | scroll the code sideways, for a line too long for the pane |
 | `0` / `$` | back to the first column / out to the longest line's end |

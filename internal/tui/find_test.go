@@ -7,6 +7,14 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
+// openSearch presses the key the search opens on. cmd+p has no name in
+// bubbletea, so what a test sends is the bytes a terminal writes for it, the
+// same as a keyboard would.
+func openSearch(t *testing.T, m *Model) {
+	t.Helper()
+	send(t, m, csiSequenceMsg("\x1b[112;9u"))
+}
+
 // hitPaths is what the search matches, best fit first, which is the order the
 // panel lists them in.
 func hitPaths(hits []findHit) []string {
@@ -21,7 +29,7 @@ func TestGoingToAFileByName(t *testing.T) {
 	m := newModel(t, newFakeBackend(pathSession(t,
 		"internal/git/status.go", "internal/tui/view.go", "main.go")), WithSize(100, 14))
 
-	press(t, m, "ctrl+p")
+	openSearch(t, m)
 	if m.mode != modeFind {
 		t.Fatalf("mode = %v, want the file search", m.mode)
 	}
@@ -76,7 +84,8 @@ func TestTheSearchRanksANameOverThePathAroundIt(t *testing.T) {
 func TestTheSearchOpensOnTheFileBeingRead(t *testing.T) {
 	m := newModel(t, newFakeBackend(pathSession(t, "a.go", "b.go", "c.go")), WithSize(100, 14))
 
-	press(t, m, "alt+down", "ctrl+p")
+	press(t, m, "alt+down")
+	openSearch(t, m)
 	if got := hitPaths(m.findHits()); !equal(got, []string{"a.go", "b.go", "c.go"}) {
 		t.Errorf("an empty query lists %v, want every file in the diff's order", got)
 	}
@@ -89,7 +98,7 @@ func TestEscLeavesTheSearchWithoutMoving(t *testing.T) {
 	m := newModel(t, newFakeBackend(pathSession(t, "a.go", "b.go", "c.go")), WithSize(100, 14))
 
 	before := m.cursor
-	press(t, m, "ctrl+p")
+	openSearch(t, m)
 	typeText(t, m, "c")
 	press(t, m, "esc")
 
@@ -109,7 +118,7 @@ func TestEscLeavesTheSearchWithoutMoving(t *testing.T) {
 func TestTheQueryIsEditedAsItIsTyped(t *testing.T) {
 	m := newModel(t, newFakeBackend(pathSession(t, "alpha.go", "beta.go")), WithSize(100, 14))
 
-	press(t, m, "ctrl+p")
+	openSearch(t, m)
 	typeText(t, m, "beta")
 	if got := len(m.findHits()); got != 1 {
 		t.Fatalf("%q matches %d files, want beta.go on its own", m.find.query, got)
@@ -134,7 +143,7 @@ func TestGoingToAFileNothingMatchesSaysSo(t *testing.T) {
 	m := newModel(t, newFakeBackend(pathSession(t, "a.go", "b.go")), WithSize(100, 14))
 
 	before := m.cursor
-	press(t, m, "ctrl+p")
+	openSearch(t, m)
 	typeText(t, m, "zzz")
 	press(t, m, "enter")
 
@@ -157,7 +166,7 @@ func TestGoingToAFoldedFileSaysItIsFolded(t *testing.T) {
 		t.Fatal("space did not fold alpha.go away")
 	}
 
-	press(t, m, "ctrl+p")
+	openSearch(t, m)
 	typeText(t, m, "alpha")
 	press(t, m, "enter")
 
@@ -177,7 +186,7 @@ func TestGoingToAFoldedFileSaysItIsFolded(t *testing.T) {
 func TestTheSearchIsDrawnOverTheFootOfTheDiff(t *testing.T) {
 	m := newModel(t, newFakeBackend(pathSession(t, "alpha.go", "beta.go")), WithSize(60, 20))
 
-	press(t, m, "ctrl+p")
+	openSearch(t, m)
 	typeText(t, m, "beta")
 	lines := strings.Split(m.View(), "\n")
 
@@ -202,7 +211,7 @@ func TestTheSearchIsDrawnOverTheFootOfTheDiff(t *testing.T) {
 func TestTheSearchScrollsToTheChoice(t *testing.T) {
 	m := newModel(t, newFakeBackend(manyFileSession(t, 30)), WithSize(100, 20))
 
-	press(t, m, "ctrl+p")
+	openSearch(t, m)
 	for range 20 {
 		press(t, m, "down")
 	}
@@ -225,8 +234,8 @@ func TestTheSearchScrollsToTheChoice(t *testing.T) {
 	}
 }
 
-// cmd+p opens the search where the terminal reports the modifier, in either of
-// the two forms one writes it in. bubbletea has no name for the sequence, so
+// cmd+p opens the search wherever the terminal reports the modifier, in either
+// of the two forms one writes it in. bubbletea has no name for the sequence, so
 // what peel reads is the raw bytes — the same path cmd+↑ and cmd+↓ take.
 func TestCmdPOpensTheSearch(t *testing.T) {
 	for _, seq := range []string{"\x1b[112;9u", "\x1b[112;9:1u", "\x1b[112;33u", "\x1b[27;9;112~"} {
@@ -259,5 +268,16 @@ func TestCmdPBytesOpenTheSearch(t *testing.T) {
 
 	if final := runBytes(t, m, "\x1b[112;9u"); final.mode != modeFind {
 		t.Errorf("mode = %v, want the file search", final.mode)
+	}
+}
+
+// cmd is the modifier the search opens on and the only one: ctrl+p is a press
+// peel says nothing about, so a terminal that sends it reaches nothing.
+func TestCtrlPDoesNotOpenTheSearch(t *testing.T) {
+	m := newModel(t, newFakeBackend(pathSession(t, "a.go", "b.go")), WithSize(100, 14))
+
+	press(t, m, "ctrl+p")
+	if m.mode != modeBrowse {
+		t.Errorf("mode = %v, want ctrl+p left alone", m.mode)
 	}
 }

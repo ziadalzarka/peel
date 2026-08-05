@@ -361,10 +361,41 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m, m.key(msg)
 	}
-	if key, ok := unnamedKey(msg); ok {
+	seq, ok := rawBytes(msg)
+	if !ok {
+		return m, nil
+	}
+	if key, named := unnamedKey(seq); named {
 		return m, m.key(key)
 	}
+	if cmdLetter(seq) == 'p' {
+		return m, m.cmdFind()
+	}
 	return m, nil
+}
+
+// rawBytes is what a press bubbletea could not name carries: the bytes the
+// terminal sent for it.
+//
+// These arrive as bubbletea's own unexported message, so there is no type to
+// compare against — only the shape of what it holds, which is what this reads.
+func rawBytes(msg tea.Msg) (string, bool) {
+	v := reflect.ValueOf(msg)
+	if v.Kind() != reflect.Slice || v.Type().Elem().Kind() != reflect.Uint8 {
+		return "", false
+	}
+	return string(v.Bytes()), true
+}
+
+// cmdFind opens the file search, which is what cmd+p does and nothing else
+// does. There is no key of bubbletea's to turn the press into — no other key
+// peel binds means go to a file — so it is routed by hand from the bytes, and
+// says nothing while a comment, a question or the search itself is on screen.
+func (m *Model) cmdFind() tea.Cmd {
+	if m.mode == modeBrowse {
+		m.openFind()
+	}
+	return nil
 }
 
 // shiftEnterSeqs are what a terminal sends for shift+enter when it can say
@@ -410,24 +441,13 @@ const cmdBits = 8 | 32
 // unnamedKey turns a press bubbletea could not name into one peel already
 // handles, and reports whether it was one.
 //
-// These arrive as bubbletea's own unexported message, so there is no type to
-// compare against — only the bytes it carries, which is what this reads.
-//
 //   - shift+enter becomes the alt+enter the editor writes a new line on. A
 //     terminal that says nothing about the shift key sends a bare carriage
 //     return instead, and no program can tell that press from enter.
 //   - cmd+↑ and cmd+↓ become home and end, the first and last row. Whether they
 //     arrive at all is the terminal's to decide: several keep cmd to themselves
 //     for scrollback, and there is nothing an application can do about that.
-//   - cmd+p becomes the ctrl+p the file search opens on, for the terminals that
-//     do send it. ctrl+p is the one that always arrives.
-func unnamedKey(msg tea.Msg) (tea.KeyMsg, bool) {
-	v := reflect.ValueOf(msg)
-	if v.Kind() != reflect.Slice || v.Type().Elem().Kind() != reflect.Uint8 {
-		return tea.KeyMsg{}, false
-	}
-	seq := string(v.Bytes())
-
+func unnamedKey(seq string) (tea.KeyMsg, bool) {
 	if slices.Contains(shiftEnterSeqs, seq) {
 		return tea.KeyMsg{Type: tea.KeyEnter, Alt: true}, true
 	}
@@ -440,9 +460,6 @@ func unnamedKey(msg tea.Msg) (tea.KeyMsg, bool) {
 			return tea.KeyMsg{Type: tea.KeyHome}, true
 		}
 		return tea.KeyMsg{Type: tea.KeyEnd}, true
-	}
-	if cmdLetter(seq) == 'p' {
-		return tea.KeyMsg{Type: tea.KeyCtrlP}, true
 	}
 	return tea.KeyMsg{}, false
 }
@@ -570,8 +587,6 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 		m.showFile(m.doc.NextFile(m.cursor))
 	case "alt+up":
 		m.showFile(m.doc.PrevFile(m.cursor))
-	case "ctrl+p":
-		m.openFind()
 	case "}":
 		m.scrollFiles(1)
 	case "{":

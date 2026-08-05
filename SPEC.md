@@ -125,7 +125,7 @@ it doesn't get relitigated.
 
 | **peel says when it is out of date** | one line on the way out — the release and `brew upgrade ziadalzarka/tap/peel` — checked at most once a day, off with `PEEL_NO_UPDATE_CHECK` | Added 2026-08-05. Brew only upgrades what someone asks it to, so a reviewer who installed peel once stays on that version until they think to check, and nothing in a local tool ever prompts the thought. The cost has to be nothing: the request goes out while the review is open and is spoken about only after peel has quit, so it is never between the reviewer and the diff, and quitting waits a fraction of a second for it at most. It is the only thing peel sends anywhere without being asked, which is why it is one unauthenticated GET to the releases API, cached in the user's cache directory for a day — failures cached too, so a machine with no network asks once a day rather than every run — and silent about everything except a version newer than the running one. A build from a checkout is never checked: its version does not parse as a release, and whoever built it does not need telling about brew |
 
-| **Go to a file by name** | `ctrl+p`, and `cmd+p` where the terminal sends it, over the files already in the diff | Added 2026-08-05. A review knows which file it is about to look at more often than it knows how far down the diff that file is, and the tree on the left is a map to scroll against rather than a list to ask. So the search names what is under review and nothing else — not the repository — and goes to the file the way `opt+↓` does, leaving a folded one folded: the fold is what says a file was dealt with, and opening one quietly would put a diff back on screen that had been read. It draws over the foot of the diff rather than on a screen of its own, so what is being searched is still in front of the reviewer. `cmd+p` is the key an editor uses and the one to reach for, but whether it arrives at all is the terminal's to decide, the way `cmd`+`↑`/`↓` already is — so `ctrl+p` is the binding that always works |
+| **Go to a file by name** | `cmd+p`, in the terminals that report the key, over the files already in the diff | Added 2026-08-05. A review knows which file it is about to look at more often than it knows how far down the diff that file is, and the tree on the left is a map to scroll against rather than a list to ask. So the search names what is under review and nothing else — not the repository — and goes to the file the way `opt+↓` does, leaving a folded one folded: the fold is what says a file was dealt with, and opening one quietly would put a diff back on screen that had been read. It draws over the foot of the diff rather than on a screen of its own, so what is being searched is still in front of the reviewer. `ctrl+p` opened it too at first, as the binding that arrives whatever the terminal does — revised 2026-08-06 to `cmd+p` alone. It is the key an editor uses, which is the whole reason the search is worth having under a chord rather than a letter, and the hand goes to it without being told; a second key for the same thing is another row of the help screen saying what the first one said, and the one nobody presses. The cost is the same one `cmd`+`↑`/`↓` already pay: a terminal that keeps `cmd` to itself is a terminal with no way to open the search, where before there was one |
 
 Deferred, not rejected: jj/Sapling support; web frontend (keep `internal/git`
 UI-agnostic so it stays possible).
@@ -398,12 +398,14 @@ held sends a bare arrow no program can tell from `↓`. Where `cmd` does arrive 
 sequence has no name in bubbletea: the raw bytes are read, the same way
 `shift+enter` is.
 
-`ctrl+p` asks for a file by name instead of scrolling to it — `cmd+p` too, in the
-terminals that send it. The letters typed have to turn up in the path in order
-but not next to each other, so `tuivw` reaches `internal/tui/view.go`; a letter
-counts for more where it starts a directory or a name, and for more again where
-it follows the letter before it, so a query that reads like the name of a file
-beats the same letters scattered through a path that happens to hold them. The
+`cmd+p` asks for a file by name instead of scrolling to it, in the terminals that
+report the key — the sequence has no name in bubbletea, so it is read out of the
+raw bytes the way `cmd`+`↑`/`↓` and `shift+enter` are, and where `cmd` never
+arrives neither does the search. The letters typed have to turn up in the path
+in order but not next to each other, so `tuivw` reaches `internal/tui/view.go`;
+a letter counts for more where it starts a directory or a name, and for more
+again where it follows the letter before it, so a query that reads like the name
+of a file beats the same letters scattered through a path that holds them. The
 list is drawn over the foot of the diff rather than on a screen of its own, and
 opens on the file being read with every other file under it, so a search opened
 and dismissed leaves the reviewer exactly where they were. `enter` goes to the
@@ -430,7 +432,7 @@ that report one; `h`/`l` are the path that always works.
 | `j` / `k` | next / previous hunk, file or comment |
 | wheel | scroll the diff, dragging the cursor along |
 | `opt+↓` / `opt+↑` | next / previous file — from inside a file, to its header first; the window opens on the file |
-| `ctrl+p`, `cmd+p` | go to a file by name, over the paths already in the diff |
+| `cmd+p` | go to a file by name, over the paths already in the diff, in the terminals that report the key |
 | `}` / `{`, wheel over the pane | scroll the file tree |
 | `h` / `l`, horizontal wheel | scroll the code sideways, one indent per press |
 | `0` / `$` | back to the first column / out to the longest line's end |

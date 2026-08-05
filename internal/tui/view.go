@@ -147,7 +147,7 @@ func (m *Model) hints() string {
 	case modeFind:
 		return "type part of a path · ↓/↑ choose · enter go there · esc cancel"
 	default:
-		return `j/k hunk · ↓/↑ line · [/] ten lines · opt+↓/↑ file · ctrl+p go to file · shift+↓/↑ mark · s stage file · u unstage · space fold · c comment · b files · \ layout · w walkthrough · ? help · q quit`
+		return `j/k hunk · ↓/↑ line · [/] ten lines · opt+↓/↑ file · cmd+p go to file · shift+↓/↑ mark · s stage file · u unstage · space fold · c comment · b files · \ layout · w walkthrough · ? help · q quit`
 	}
 }
 
@@ -283,7 +283,7 @@ var helpBindings = []struct{ keys, action string }{
 	{"↓ / ↑", "move the cursor one line (the wheel scrolls the diff)"},
 	{"] / [", "ten lines down / up, stopping short at any heading or ▴/▾ row on the way"},
 	{"opt+↓ / opt+↑", "next / previous file"},
-	{"ctrl+p", "go to a file by name — cmd+p too, where the terminal sends it"},
+	{"cmd+p", "go to a file by name, in the terminals that report the key"},
 	{"} / {", "scroll the file tree on its own"},
 	{"h / l", "scroll the code sideways, for a line too long for the pane"},
 	{"0 / $", "back to the first column / out to the longest line's end"},
