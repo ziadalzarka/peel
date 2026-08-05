@@ -28,11 +28,8 @@ func TestHandoffGroupsTheNotesByFile(t *testing.T) {
 	if !strings.HasSuffix(got, want) {
 		t.Errorf("handoff =\n%s\nwant it to end with\n%s", got, want)
 	}
-	if !strings.HasPrefix(got, "Review comments copied from peel.") {
-		t.Errorf("handoff opens with %q, want it to say where the notes came from", firstLineOf(got))
-	}
-	if !strings.Contains(got, handoffPreamble) {
-		t.Error("the handoff does not say how to read the anchors")
+	if firstLineOf(got) != "Review comments copied from peel. Review them one by one." {
+		t.Errorf("handoff opens with %q, want it to say where the notes came from and what to do with them", firstLineOf(got))
 	}
 }
 

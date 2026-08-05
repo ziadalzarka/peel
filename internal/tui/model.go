@@ -1190,20 +1190,25 @@ func (m *Model) deleteComment() tea.Cmd {
 // copyComments puts the review on the clipboard as text to paste into an agent.
 //
 // An agent working in this repository reads the store instead, so what this is
-// for is the one that cannot: a browser tab, or another machine. It copies the
-// notes on screen, so hiding the agent's with `A` leaves the reviewer's own to
-// hand over, and it leaves the resolved ones out — those have been dealt with,
-// and an agent asked to address them would only redo work already done.
+// for is the one that cannot: a browser tab, or another machine. What it hands
+// over is the review the person wrote — an agent's notes are what a review was
+// already given for, not something to send back out to be addressed — and the
+// resolved ones stay behind, since those have been dealt with and an agent asked
+// to address them would only redo work already done.
 //
 // Nothing about the review changes, so there is nothing to queue: the copy is
 // reported as done straight away, and only comes back if there was nothing on
 // PATH to copy with.
 func (m *Model) copyComments() tea.Cmd {
-	open, resolved := stillOpen(m.visibleComments())
+	open, resolved := stillOpen(userComments(m.comments))
 	if len(open) == 0 {
-		m.status = "no comments to copy"
-		if resolved > 0 {
-			m.status = "every comment is resolved — nothing to copy"
+		switch {
+		case resolved > 0:
+			m.status = "every comment of your own is resolved — nothing to copy"
+		case len(agentComments(m.comments)) > 0:
+			m.status = "no comments of your own to copy — the agent's are left out"
+		default:
+			m.status = "no comments to copy"
 		}
 		return nil
 	}
@@ -1289,19 +1294,25 @@ func agentComments(comments []store.Comment) []store.Comment {
 	return out
 }
 
+// userComments picks out the reviewer's own notes — what `C` hands over, and
+// what is left on screen once `A` hides the rest.
+func userComments(comments []store.Comment) []store.Comment {
+	out := make([]store.Comment, 0, len(comments))
+	for _, c := range comments {
+		if c.Author != store.AuthorAgent {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // visibleComments is the list the document is built from: all of them, until
 // the agent's are hidden.
 func (m *Model) visibleComments() []store.Comment {
 	if !m.agentCommentsOff {
 		return m.comments
 	}
-	out := make([]store.Comment, 0, len(m.comments))
-	for _, c := range m.comments {
-		if c.Author != store.AuthorAgent {
-			out = append(out, c)
-		}
-	}
-	return out
+	return userComments(m.comments)
 }
 
 // savedIDs collects the ids of comments the store knows about, leaving out any

@@ -1358,24 +1358,32 @@ func TestCCopiesTheReviewAsTextToPaste(t *testing.T) {
 	}
 }
 
-// Hiding the agent's notes with `A` takes them out of the handoff too: what `C`
-// copies is the review on screen.
-func TestCCopiesOnlyTheNotesOnScreen(t *testing.T) {
-	backend := reviewedByBoth(t)
-	m := newModel(t, backend)
+// What `C` hands an agent is the review the person wrote: the agent's own notes
+// are left out whether or not they are on screen.
+func TestCCopiesOnlyTheReviewersOwnNotes(t *testing.T) {
+	for _, showing := range []bool{true, false} {
+		backend := reviewedByBoth(t)
+		m := newModel(t, backend)
+		if !showing {
+			press(t, m, "A")
+		}
 
-	press(t, m, "A", "C")
+		press(t, m, "C")
 
-	if len(backend.copied) != 1 {
-		t.Fatalf("Copy called %d times, want 1", len(backend.copied))
-	}
-	text := backend.copied[0]
-	if !strings.Contains(text, "mine, keep it") {
-		t.Errorf("the reviewer's own note was left out:\n%s", text)
-	}
-	for _, agent := range []string{"this drops the error", "and this one moved"} {
-		if strings.Contains(text, agent) {
-			t.Errorf("a hidden agent note was copied:\n%s", text)
+		if len(backend.copied) != 1 {
+			t.Fatalf("agent notes showing = %v: Copy called %d times, want 1", showing, len(backend.copied))
+		}
+		text := backend.copied[0]
+		if !strings.Contains(text, "mine, keep it") {
+			t.Errorf("agent notes showing = %v: the reviewer's own note was left out:\n%s", showing, text)
+		}
+		for _, agent := range []string{"this drops the error", "and this one moved"} {
+			if strings.Contains(text, agent) {
+				t.Errorf("agent notes showing = %v: an agent note was copied:\n%s", showing, text)
+			}
+		}
+		if !strings.Contains(m.status, "copied 1 comment") {
+			t.Errorf("agent notes showing = %v: status = %q, want the reviewer's one note counted", showing, m.status)
 		}
 	}
 }
@@ -1401,8 +1409,26 @@ func TestCSaysWhenThereIsNothingToHandOver(t *testing.T) {
 	if len(backend.copied) != 0 {
 		t.Fatalf("a resolved review was copied: %q", backend.copied)
 	}
-	if !strings.Contains(m.status, "every comment is resolved") {
+	if !strings.Contains(m.status, "every comment of your own is resolved") {
 		t.Errorf("status = %q, want the resolved review distinguished from an empty one", m.status)
+	}
+}
+
+// A screen full of the agent's notes and none of your own is not an empty
+// review, and saying "no comments to copy" over one reads like a bug.
+func TestCSaysTheAgentsNotesAreNotTheReviewToHandOver(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "a1", File: "alpha.go", Line: 3, Body: "this drops the error", Author: store.AuthorAgent},
+	}
+	m := newModel(t, backend)
+
+	press(t, m, "C")
+	if len(backend.copied) != 0 {
+		t.Fatalf("an agent's own notes were copied: %q", backend.copied)
+	}
+	if !strings.Contains(m.status, "no comments of your own to copy") {
+		t.Errorf("status = %q, want it to say whose notes were left out", m.status)
 	}
 }
 

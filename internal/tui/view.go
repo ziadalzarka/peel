@@ -285,7 +285,7 @@ var helpBindings = []struct{ keys, action string }{
 	{"enter / shift+enter", "in the editor: save the comment / write another line"},
 	{"x", "resolve or reopen the comment at the cursor"},
 	{"D", "delete the comment at the cursor"},
-	{"C", "copy the comments as text, to paste into an agent"},
+	{"C", "copy your own comments as text, to paste into an agent"},
 	{"A", "hide or show the comments an agent left, leaving your own"},
 	{"X", "delete every agent comment — it asks first"},
 	{`\`, "toggle unified and side-by-side"},

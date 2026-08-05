@@ -26,7 +26,7 @@ keymap.
   after staging it and it opens again, on the new work alone.
 - **Notes an agent can read.** Comments go to `.git/peel/comments.json`, which
   Claude Code reads through the bundled skill, so "address my review comments"
-  needs no copy-paste. `C` copies them as text for an agent that cannot.
+  needs no copy-paste. `C` copies your own as text for an agent that cannot.
 - **A walkthrough in the diff.** `w` reorders the diff into the steps an AI
   narrative reads it in, each explanation above the code it covers.
 - **It keeps up.** Follow mode re-reads the repository as it changes, and the
@@ -117,7 +117,7 @@ repository changes.
 | `c` | comment at the cursor, changed line or not |
 | `enter` / `shift+enter` | in the editor: save the comment / write another line |
 | `x` / `D` | resolve / delete the comment at the cursor |
-| `C` | copy the comments as text, to paste into an agent |
+| `C` | copy your own comments as text, to paste into an agent |
 | `A` / `X` | hide the comments an agent left / delete every one of them |
 | `\` | toggle unified and side-by-side |
 | `w` / `W` | walkthrough on-off / regenerate it |
@@ -270,11 +270,12 @@ daemon and no session to attach to: review, quit, *then* ask Claude.
 
 For an agent that cannot read that file — a browser tab, or one on another
 machine — `C` puts the review on the clipboard as text to paste into it: one
-block per note, saying which file and line it was left on and what it says.
-Resolved notes are left out, since those have been dealt with, and the footer says
-how many. `A` narrows it further: what `C` copies is the review on screen, so the
-agent's own notes go with them when they are hidden. Copying needs a clipboard
-tool on `PATH` — `pbcopy`, `wl-copy`, `xclip`, `xsel` or `clip.exe`.
+block per note, saying which file and line it was left on and what it says. What
+it hands over is the review *you* wrote — an agent's own notes are what a review
+was already given for, so they are never copied, hidden or not. Resolved notes
+are left out too, since those have been dealt with, and the footer says how many.
+Copying needs a clipboard tool on `PATH` — `pbcopy`, `wl-copy`, `xclip`, `xsel`
+or `clip.exe`.
 
 ## Layout
 

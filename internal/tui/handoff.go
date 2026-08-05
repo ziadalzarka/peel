@@ -16,17 +16,13 @@ import (
 // into a conversation: what the paste is, where each note was left, and the note
 // itself. No IDs, no timestamps, nothing that only means something inside peel.
 
-// handoffPreamble tells the agent how to read the anchors that follow. It is
-// written once, above the notes, rather than annotated onto each one.
+// handoffHeader says what the paste is and what to do with it, in one line above
+// the notes.
 //
-// What a line number counts lines in is said on the note that needs it rather
-// than explained here in the abstract: "old side" means nothing to a reader who
-// has not been told what the two sides are, and most notes are on neither of the
-// awkward ones.
-const handoffPreamble = `Address each one. The line above each note says where it was left: a path and a
-line number, or a path on its own when the note is about the whole file. Line
-numbers count lines in the file as it is on disk now, unless the note says
-otherwise in brackets.`
+// How to read an anchor is left to the anchor: what a line number counts lines
+// in is said in brackets on the note that needs it, and "old side" would mean
+// nothing to a reader who has not been told what the two sides are.
+const handoffHeader = "Review comments copied from peel. Review them one by one."
 
 // commentHandoff renders review notes as text to hand an agent.
 //
@@ -35,8 +31,7 @@ otherwise in brackets.`
 // of being sent back and forth in the order they happened to be written.
 func commentHandoff(comments []store.Comment) string {
 	var b strings.Builder
-	b.WriteString("Review comments copied from peel.\n\n")
-	b.WriteString(handoffPreamble)
+	b.WriteString(handoffHeader)
 	b.WriteString("\n")
 	for _, c := range inReadingOrder(comments) {
 		fmt.Fprintf(&b, "\n%s\n", handoffAnchor(c))

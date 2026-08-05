@@ -257,9 +257,7 @@ another machine, has no store to read — so `C` renders the same notes as text 
 puts them on the system clipboard:
 
 ```
-Review comments copied from peel.
-
-Address each one. The path and line say where the note was left: …
+Review comments copied from peel. Review them one by one.
 
 internal/tui/model.go:412
   this leaks the tx
@@ -268,8 +266,9 @@ internal/tui/model.go:412
 Written to be pasted into a conversation, not parsed: one block per note, the
 anchor in the `file:line` form every tool prints, the side named only when it is
 the old one, and no IDs or timestamps — they mean nothing to a reader that cannot
-look them up. It copies the notes *on screen*, so `A` narrows the handoff to the
-reviewer's own, and it leaves the resolved ones out with a count in the footer:
+look them up. It copies the reviewer's own notes, never the agent's, on screen or
+not: an agent's notes are what a review was already given for, not a review to
+hand back out. Resolved notes are left out too, with a count in the footer:
 sending an agent after work already done is worse than sending it after less.
 
 Reaching the clipboard means shelling out, the way `o` does — `pbcopy`, `wl-copy`,
@@ -369,7 +368,7 @@ that report one; `h`/`l` are the path that always works.
 | `enter` / `alt+enter` | in the editor: save the comment / write another line |
 | `x` | resolve or reopen the comment at the cursor |
 | `D` | delete the comment at the cursor |
-| `C` | copy the comments on screen as text, to paste into an agent |
+| `C` | copy your own comments as text, to paste into an agent |
 | `A` | hide or show the comments an agent left, leaving the reviewer's own |
 | `X` | delete every agent comment, after asking |
 | `\` | toggle unified ↔ side-by-side |
