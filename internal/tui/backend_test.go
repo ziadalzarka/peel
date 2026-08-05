@@ -251,7 +251,7 @@ func TestBackendReloadOfARevisionFollowsTheWorkingTree(t *testing.T) {
 func TestBackendCommentsAreScopedToTheSession(t *testing.T) {
 	a, session, backend := openBackend(t)
 
-	if _, err := backend.AddComment(store.Comment{
+	if _, err := backend.AddComment(t.Context(), store.Comment{
 		File:   "main.go",
 		Line:   3,
 		Side:   store.SideNew,
@@ -272,7 +272,7 @@ func TestBackendCommentsAreScopedToTheSession(t *testing.T) {
 		t.Fatalf("Add on another target: %v", err)
 	}
 
-	got, err := backend.Comments()
+	got, err := backend.Comments(t.Context())
 	if err != nil {
 		t.Fatalf("Comments: %v", err)
 	}
@@ -292,7 +292,7 @@ func TestBackendStampsTheSessionTargetOnNewComments(t *testing.T) {
 
 	// A caller that forgets the target, or sets the wrong one, must not be able
 	// to file a comment against another review.
-	got, err := backend.AddComment(store.Comment{File: "main.go", Body: "note", Target: "somewhere-else"})
+	got, err := backend.AddComment(t.Context(), store.Comment{File: "main.go", Body: "note", Target: "somewhere-else"})
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestBackendStampsTheSessionTargetOnNewComments(t *testing.T) {
 func TestBackendResolveAndRemoveComments(t *testing.T) {
 	_, _, backend := openBackend(t)
 
-	created, err := backend.AddComment(store.Comment{File: "main.go", Body: "look", Author: store.AuthorUser})
+	created, err := backend.AddComment(t.Context(), store.Comment{File: "main.go", Body: "look", Author: store.AuthorUser})
 	if err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestBackendResolveAndRemoveComments(t *testing.T) {
 	if err := backend.SetResolved(created.ID, true); err != nil {
 		t.Fatalf("SetResolved: %v", err)
 	}
-	got, err := backend.Comments()
+	got, err := backend.Comments(t.Context())
 	if err != nil {
 		t.Fatalf("Comments: %v", err)
 	}
@@ -320,10 +320,10 @@ func TestBackendResolveAndRemoveComments(t *testing.T) {
 		t.Fatalf("comments = %+v, want one resolved", got)
 	}
 
-	if err := backend.RemoveComment(created.ID); err != nil {
+	if err := backend.RemoveComment(t.Context(), created.ID); err != nil {
 		t.Fatalf("RemoveComment: %v", err)
 	}
-	got, err = backend.Comments()
+	got, err = backend.Comments(t.Context())
 	if err != nil {
 		t.Fatalf("Comments: %v", err)
 	}

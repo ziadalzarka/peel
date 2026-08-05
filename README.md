@@ -20,6 +20,11 @@ keymap.
   nothing here can write the wrong lines into your index.
 - **Comment where the code is.** `c` anywhere — changed line or not — opens the
   editor inline, in the diff, at the spot the note will sit.
+- **Notes keep up with the code.** Each note freezes the file it was written
+  against as a git object, so when an agent edits above it the note moves with
+  its line instead of staying on a number. Code that has been rewritten out from
+  under a note is not guessed at: the note says `outdated` and shows where it
+  was.
 - **Half staged reads as half staged.** A file git holds in the index *and* the
   working tree is drawn as two halves under their own headings, the staged one
   folded away, so what you scroll is what you have not reviewed. Change a file

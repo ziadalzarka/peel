@@ -14,10 +14,11 @@ import (
 type Backend interface {
 	// Reload re-reads the session being reviewed.
 	Reload(ctx context.Context) (*app.Session, error)
-	// Comments returns the comments scoped to this session.
-	Comments() ([]store.Comment, error)
-	AddComment(c store.Comment) (store.Comment, error)
-	RemoveComment(id string) error
+	// Comments returns the comments scoped to this session, each moved on to the
+	// line its code sits on now.
+	Comments(ctx context.Context) ([]store.Comment, error)
+	AddComment(ctx context.Context, c store.Comment) (store.Comment, error)
+	RemoveComment(ctx context.Context, id string) error
 	SetResolved(id string, resolved bool) error
 
 	StageFile(ctx context.Context, path string) error
@@ -80,17 +81,38 @@ func (b *appBackend) Reload(ctx context.Context) (*app.Session, error) {
 	return s, nil
 }
 
-func (b *appBackend) Comments() ([]store.Comment, error) {
-	return b.app.Comments.List(b.session.CommentFilter())
+func (b *appBackend) Comments(ctx context.Context) ([]store.Comment, error) {
+	all, err := b.app.Comments.List(b.session.CommentFilter())
+	if err != nil {
+		return nil, err
+	}
+	return b.app.Relocate(ctx, b.session, all), nil
 }
 
-func (b *appBackend) AddComment(c store.Comment) (store.Comment, error) {
+// AddComment freezes the file the note is about before storing it, so the line
+// number going into the store has a version of the file to be a number in.
+//
+// A snapshot that fails is not worth losing the note over: the comment is stored
+// without one and behaves as notes did before anchors existed.
+func (b *appBackend) AddComment(ctx context.Context, c store.Comment) (store.Comment, error) {
 	c.Target = b.session.Target
-	return b.app.Comments.Add(c)
+	if c.Blob == "" {
+		if blob, err := b.app.Snapshot(ctx, b.session, c); err == nil {
+			c.Blob = blob
+		}
+	}
+	created, err := b.app.Comments.Add(c)
+	if err != nil {
+		return store.Comment{}, err
+	}
+	return created, b.app.KeepAnchors(ctx)
 }
 
-func (b *appBackend) RemoveComment(id string) error {
-	return b.app.Comments.Remove(id)
+func (b *appBackend) RemoveComment(ctx context.Context, id string) error {
+	if err := b.app.Comments.Remove(id); err != nil {
+		return err
+	}
+	return b.app.KeepAnchors(ctx)
 }
 
 func (b *appBackend) SetResolved(id string, resolved bool) error {

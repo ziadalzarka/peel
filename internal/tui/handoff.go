@@ -64,8 +64,13 @@ func handoffAnchor(c store.Comment) string {
 //
 // A note on a removed line is numbered against the file before the change, and a
 // note on the staged half of a part-staged file is numbered against the copy in
-// the index — neither of which is what the agent will read off disk.
+// the index — neither of which is what the agent will read off disk. Neither is
+// a line whose code has since been rewritten: that one names nothing at all now,
+// and an agent sent to it would edit whatever took its place.
 func lineNumberNote(c store.Comment) string {
+	if c.Outdated {
+		return "the code this was written on has since changed; the line number is where it was"
+	}
 	old, staged := c.Side == store.SideOld, c.Origin == store.OriginIndex
 	switch {
 	case old && staged:

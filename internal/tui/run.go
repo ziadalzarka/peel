@@ -15,7 +15,7 @@ func Run(ctx context.Context, a *app.App, s *app.Session, opts ...Option) error 
 		opt(&cfg)
 	}
 	backend := NewBackend(a, s, cfg.provider)
-	comments, err := backend.Comments()
+	comments, err := backend.Comments(ctx)
 	if err != nil {
 		return fmt.Errorf("load comments: %w", err)
 	}

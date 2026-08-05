@@ -405,6 +405,12 @@ func commentTag(c store.Comment) string {
 	if c.Resolved {
 		tag = "✓ " + tag
 	}
+	// A note whose code was rewritten out from under it says where it was
+	// written. Without the number it is a note under a file with no way to tell
+	// what it was ever about.
+	if c.Outdated {
+		tag = fmt.Sprintf("%s (outdated · was :%d)", tag, c.Line)
+	}
 	return tag + ": "
 }
 

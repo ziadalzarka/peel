@@ -223,7 +223,7 @@ func (f *fakeBackend) Reload(context.Context) (*app.Session, error) {
 	return f.session, nil
 }
 
-func (f *fakeBackend) Comments() ([]store.Comment, error) {
+func (f *fakeBackend) Comments(context.Context) ([]store.Comment, error) {
 	if f.nextComments != nil {
 		f.comments = f.nextComments
 		f.nextComments = nil
@@ -231,7 +231,7 @@ func (f *fakeBackend) Comments() ([]store.Comment, error) {
 	return f.comments, nil
 }
 
-func (f *fakeBackend) AddComment(c store.Comment) (store.Comment, error) {
+func (f *fakeBackend) AddComment(_ context.Context, c store.Comment) (store.Comment, error) {
 	if err := f.take(); err != nil {
 		return store.Comment{}, err
 	}
@@ -243,7 +243,7 @@ func (f *fakeBackend) AddComment(c store.Comment) (store.Comment, error) {
 	return c, nil
 }
 
-func (f *fakeBackend) RemoveComment(id string) error {
+func (f *fakeBackend) RemoveComment(_ context.Context, id string) error {
 	if err := f.take(); err != nil {
 		return err
 	}

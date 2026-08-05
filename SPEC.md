@@ -89,6 +89,9 @@ it doesn't get relitigated.
 | **Folding is the same decision without the index** | `space` folds a file away and moves on exactly as `s` does | Not every file read is a file to stage — a read-only session has none, and a working tree has files you have looked at and left alone. Folding is how a pass records what has been read, so it moves on the way staging does |
 | **A part-staged file reads as two halves** | a heading rules across the pane above each one — `staged · already in the index` and `unstaged · not in the index yet` — and the index's half opens folded, `space` on the heading showing it | Added 2026-08-05. git can put one file in both places at once, and peel drew the two changes as one run of hunks with the word `index` or `worktree` at the end of each hunk header. Fifty green `+` lines that are already staged, then four that are not, read as one change of fifty-four: the new work is at the bottom of something that looks reviewed, and nothing on screen says where the reviewed part stopped. The heading is a break rather than a label because that is the actual question — where does one change end — and the fold answers it by removing the reviewed half from the pass, which is the same rule `s` follows on a whole file. A fully staged file keeps its diff on screen: folding the only thing in it would leave a header with nothing under it. The file header carries the split too (`index +47 -0  worktree +4 -0`), since a folded file shows nothing else |
 | **A note records which diff it is numbered against** | `origin`: `index` or `worktree`, on the comment | Added 2026-08-05. The two halves of a part-staged file are measured against different files, so both have a line 12 and they are not the same line. Anchoring on `file:line:side` alone put every note written on the working tree onto whatever the index happened to hold at that number — several lines away, in code the reviewer had not been reading. The old anchor is not narrowed, it is completed: a note with no origin is one written before the distinction existed, and still lands where it always did |
+| **A note is anchored to the file, not to a number in it** | `blob`: the git object the note's line counts lines in, frozen when the note is written. Where that line is now is `git diff` between that blob and the file as it stands | Added 2026-08-05. peel reviews a working tree an editor and an agent both write to while the review is open, so the code under a note moves and the note does not: two lines added above line 42 left the note hanging on whatever slid into 42, silently, reading as a review of code nobody had reviewed. GitHub never loses a line because a review comment there is pinned to a commit — `original_commit_id` plus `original_line` — and re-found by diffing that commit against head. A working tree has no commit to name, so peel makes the missing half: `git hash-object -w` freezes the content, and the note's number becomes a number *in that*. Finding it again is then git's own diff rather than a search for something that looks similar, which is what makes it exact where a text search has to guess — twenty identical `}` included |
+| **A note whose code is gone says so rather than moving** | `outdated`, worked out on every read; the note is drawn under its file with the line it was written on | Added 2026-08-05. The half of GitHub's design worth copying is not the object store, it is the refusal to guess: when the mapping fails GitHub nulls `position` and shows the comment outdated beside the diff it was written against, and never relocates it. A line that was rewritten has no successor, and putting the note on the nearest thing would be the original bug wearing a fix. So the note claims no line at all, falls through to where peel already puts notes it cannot place, and keeps its original number — the only true thing left to say about it. The CLI says `(outdated)` and sets `"outdated": true`, because what an agent does with a line number is go and edit that line |
+| **peel's objects are held by refs, and let go with the note** | one `refs/peel/anchors/<blob>` per snapshot; the ref set is made equal to the blobs the stored notes name after every write | Added 2026-08-05. A blob nothing points at is what `git gc` exists to delete, so an unreferenced snapshot is an anchor that rots — the same bug arriving later and harder to explain. One ref per blob fixes that and is also the whole cleanup story, in the same mechanism: what peel costs the repository is one blob per file version somebody commented on, deduplicated by content, and removing the last note naming one drops the ref and hands the object straight back. peel never runs `gc` in someone else's repository; it only stops holding on. Reading a review writes nothing at all — the working tree is compared by streaming the blob to a temporary file, because follow mode re-reads continuously and hashing on every read would litter the repository being reviewed. The refs sit outside `refs/heads` and `refs/tags`, so `status`, `branch`, `tag`, `log --all` and a default `push` never see them |
 | **A file changed after it was staged opens again** | a fold made by `s` reopens on the reload that finds working-tree changes in it; a fold made by `space` does not | Added 2026-08-05. Staging says "done with this file" about the changes that went into the index and nothing about the ones that arrive afterwards — and a `✓` in the tree is the one place a change can hide from a pass, since the pass skips what is folded. What opens is the new work alone: the index's half stays folded, so the file shows exactly what arrived. A file put away with `space` was put away deliberately and stays that way, which is the difference between the two keys that otherwise do the same thing |
 | **Folds persist** | JSON at `.git/peel/folds.json`, per target | A pass through a large diff rarely finishes in one sitting, and reopening to a diff that has forgotten every file already read starts the pass again. Folds of files no longer in the diff are dropped, so the next change to a file is not hidden by a fold left from the last one |
 | **Changes are drawn before they are written** | optimistic, with rollback: the screen moves on the keypress, git is asked behind it | Added 2026-07-30. A stage is `git add` plus a full re-read — 50ms in a small repository, several hundred in a large one — and the answer is never in doubt, only slow. Waiting for it before redrawing makes a decision that has already been made look like peel thinking about it, and staging is a key pressed file after file. The guess is a prediction of a whole-file stage and nothing cleverer; the re-read behind it stays authoritative, and a write that fails restores the screen it was drawn over. Two rules keep the guess from being seen: writes are queued, so peel's own git calls cannot race for the index lock, and a read-back landing while another write is out is dropped rather than undrawing it. `q` waits for the writes it has already reported |
@@ -130,6 +133,7 @@ peel/
   internal/git/        diff parse, hunk model, status, staging   ← UI-agnostic
   internal/tui/        bubbletea models and views
   internal/store/      comments.json, folds.json, view.json + walkthrough cache
+  refs/peel/anchors/   one ref per commented-on file version, so gc keeps it
   internal/gh/         PR fetch and review submit, via `gh`
   internal/ai/         walkthrough via `claude -p`
   internal/update/     is a newer release out — the one thing that leaves the machine unasked
@@ -250,6 +254,29 @@ you (TUI):  c → "this leaks the tx"      s → stage the good files
 you (CC):   "address my review comments"
 agent:      peel comment list --json  →  fixes  →  peel comment rm <id>
 ```
+
+### Line numbers an agent can act on
+
+That loop edits the file it is reading notes about, which is the loop that used
+to break the notes: every fix shifts the lines under every note below it, and the
+next `comment list` handed out numbers measured against a file that no longer
+existed. So `list` reports where the code *is*, not where it was written:
+
+```
+  a1b2c3d4   internal/db/tx.go:58         this leaks the tx      ← written at :42
+  e5f6a7b8   internal/db/tx.go:9 (outdated)   drop this import   ← that line is gone
+```
+
+```json
+{ "line": 58, "movedFrom": 42 }
+{ "line": 9,  "outdated": true }
+```
+
+`movedFrom` is present only when the note moved, and `outdated` only when the
+code it was written on has been rewritten or deleted — where `line` is then where
+it *was*, and there is nothing at that number to go and fix. An agent that treats
+`outdated` as "re-read this file before acting" and everything else as a live
+line number is doing the right thing in both cases.
 
 ### The paste path
 

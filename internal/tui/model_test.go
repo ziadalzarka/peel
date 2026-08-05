@@ -18,7 +18,7 @@ import (
 // output is plain text.
 func newModel(t *testing.T, backend *fakeBackend, opts ...Option) *Model {
 	t.Helper()
-	comments, err := backend.Comments()
+	comments, err := backend.Comments(t.Context())
 	if err != nil {
 		t.Fatalf("Comments: %v", err)
 	}

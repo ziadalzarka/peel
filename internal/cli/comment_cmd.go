@@ -62,6 +62,11 @@ func commentList(ctx context.Context, c *CLI, args []string) error {
 	if err != nil {
 		return err
 	}
+	// What an agent does with this is go and edit the line, so the line it is
+	// handed has to be where the code is now and not where it was when the note
+	// was written.
+	comments = a.Relocate(ctx, s, comments)
+
 	if *asJSON {
 		return writeJSON(c.Stdout, commentsToJSON(comments))
 	}
@@ -116,8 +121,19 @@ func commentAdd(ctx context.Context, c *CLI, args []string) error {
 		Hunk:   *hunk,
 		Target: s.Target,
 	}
+	// Freeze the file the note is about, so the line number stored with it stays
+	// findable once the code moves. A snapshot that fails is not worth losing a
+	// note over — it is stored without one and lands by its number, as notes did
+	// before anchors existed.
+	if blob, err := a.Snapshot(ctx, s, comment); err == nil {
+		comment.Blob = blob
+	}
+
 	created, err := a.Comments.Add(comment)
 	if err != nil {
+		return err
+	}
+	if err := a.KeepAnchors(ctx); err != nil {
 		return err
 	}
 
@@ -142,7 +158,7 @@ func commentRemove(ctx context.Context, c *CLI, args []string) error {
 		}
 		fmt.Fprintf(c.Stdout, "removed %s\n", id)
 	}
-	return nil
+	return a.KeepAnchors(ctx)
 }
 
 func commentResolve(ctx context.Context, c *CLI, args []string) error {
@@ -200,7 +216,10 @@ func commentClear(ctx context.Context, c *CLI, args []string) error {
 
 	// Clear has no "resolved only" filter of its own, so select the ids first.
 	if *resolved {
-		return clearResolved(c, a, filter)
+		if err := clearResolved(c, a, filter); err != nil {
+			return err
+		}
+		return a.KeepAnchors(ctx)
 	}
 
 	n, err := a.Comments.Clear(filter)
@@ -208,7 +227,7 @@ func commentClear(ctx context.Context, c *CLI, args []string) error {
 		return err
 	}
 	fmt.Fprintf(c.Stdout, "cleared %s\n", plural(n, "comment"))
-	return nil
+	return a.KeepAnchors(ctx)
 }
 
 // narrowToAuthor restricts a filter to one author, so `--author agent` clears
@@ -254,9 +273,16 @@ type commentJSON struct {
 	Side string `json:"side"`
 	// Origin says which diff Line counts lines in — "index" or "worktree" — on a
 	// file git holds in both places at once. Empty where the note named neither.
-	Origin   string `json:"origin,omitempty"`
-	Body     string `json:"body"`
-	Hunk     string `json:"hunk,omitempty"`
+	Origin string `json:"origin,omitempty"`
+	Body   string `json:"body"`
+	Hunk   string `json:"hunk,omitempty"`
+	// Outdated says the code this note was written on has been rewritten or
+	// deleted since. Line is then where it was written, not where anything is
+	// now, and there is nothing at that number to go and fix.
+	Outdated bool `json:"outdated,omitempty"`
+	// Moved is where the note was written, when Line has been carried on to
+	// where that code sits now. Absent when it has not moved.
+	Moved    int    `json:"movedFrom,omitempty"`
 	Author   string `json:"author"`
 	Resolved bool   `json:"resolved"`
 	Created  string `json:"createdAt"`
@@ -272,6 +298,8 @@ func commentToJSON(c store.Comment) commentJSON {
 		Origin:   string(c.Origin),
 		Body:     c.Body,
 		Hunk:     c.Hunk,
+		Outdated: c.Outdated,
+		Moved:    c.MovedFrom,
 		Author:   string(c.Author),
 		Resolved: c.Resolved,
 		Created:  c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
@@ -298,12 +326,22 @@ func writeCommentTable(w io.Writer, comments []store.Comment) error {
 		if c.Resolved {
 			marker = "✓"
 		}
-		fmt.Fprintf(w, "%s %-10s %-28s %s\n", marker, c.ID, c.Location(), firstLine(c.Body))
+		fmt.Fprintf(w, "%s %-10s %-28s %s\n", marker, c.ID, location(c), firstLine(c.Body))
 		for _, line := range strings.Split(c.Body, "\n")[1:] {
 			fmt.Fprintf(w, "  %-10s %-28s %s\n", "", "", line)
 		}
 	}
 	return nil
+}
+
+// location renders where a note sits, saying so when that is no longer anywhere.
+// A reader sent to a line that has been rewritten will edit whatever is there
+// now, so the one thing the anchor must never do is stay quiet about it.
+func location(c store.Comment) string {
+	if c.Outdated {
+		return c.Location() + " (outdated)"
+	}
+	return c.Location()
 }
 
 func firstLine(s string) string {

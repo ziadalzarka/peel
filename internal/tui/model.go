@@ -1166,8 +1166,8 @@ func (m *Model) submitComment() tea.Cmd {
 		m.comments = withComment(m.comments, shown)
 		m.status = "commented on " + got.location()
 		m.relayout()
-	}, func(context.Context) error {
-		_, err := m.backend.AddComment(comment)
+	}, func(ctx context.Context) error {
+		_, err := m.backend.AddComment(ctx, comment)
 		return err
 	})
 }
@@ -1200,8 +1200,8 @@ func (m *Model) deleteComment() tea.Cmd {
 		m.comments = withoutComment(m.comments, c.ID)
 		m.status = "deleted comment on " + c.Location()
 		m.relayout()
-	}, func(context.Context) error {
-		return m.backend.RemoveComment(c.ID)
+	}, func(ctx context.Context) error {
+		return m.backend.RemoveComment(ctx, c.ID)
 	})
 }
 
@@ -1306,9 +1306,9 @@ func (m *Model) clearAgentComments(ids []string) tea.Cmd {
 		m.setAgentCommentsHidden(false)
 		m.status = "deleted " + plural(len(ids), "agent comment")
 		m.relayout()
-	}, func(context.Context) error {
+	}, func(ctx context.Context) error {
 		for _, id := range ids {
-			if err := backend.RemoveComment(id); err != nil {
+			if err := backend.RemoveComment(ctx, id); err != nil {
 				return err
 			}
 		}
@@ -1445,7 +1445,7 @@ func load(ctx context.Context, backend Backend, note string) tea.Msg {
 	if err != nil {
 		return errMsg{err}
 	}
-	comments, err := backend.Comments()
+	comments, err := backend.Comments(ctx)
 	if err != nil {
 		return errMsg{err}
 	}

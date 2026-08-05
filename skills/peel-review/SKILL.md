@@ -63,12 +63,31 @@ peel providers
 - Binary files get one entry with `"binary": true` and no line counts.
 
 `comment list --json` returns `id`, `file`, `line`, `side`, `origin`, `body`,
-`hunk`, `author`, `resolved`, `createdAt`, `target`.
+`hunk`, `author`, `resolved`, `createdAt`, `target`, and — when they apply —
+`movedFrom` and `outdated`.
 
 `origin` is only on a note left on a file git holds in both places at once: it
 says which of the two diffs `line` counts lines in. `"worktree"` — or no `origin`
 at all — means the file on disk, which is what you read. `"index"` means the
 staged copy, so find the code by what the note says rather than by the number.
+
+### `line` is where the code is now
+
+Your own edits move the lines under every note below them, so `line` is worked
+out fresh on every call rather than being the number the note was written with.
+**Re-run `comment list` after you edit a file**, and use the numbers from that
+run — the ones you read before the edit are stale.
+
+- `"movedFrom": 42` means the note was written on line 42 and its code now sits
+  at `line`. Nothing to do: `line` is correct, and this is only there to explain
+  the move.
+- `"outdated": true` means the code the note was written on has been **rewritten
+  or deleted**. `line` is then where it *was*, and something unrelated is sitting
+  at that number now. Never edit that line on the strength of the note. Read the
+  file, work out whether the note still applies, and say so rather than guessing
+  — often it has already been addressed, in which case `peel comment resolve
+  <id>` is the honest answer.
+- A note with neither field is on exactly the line it says.
 
 By default both commands are scoped to what is being reviewed: the working tree,
 or the pull request named by `--pr`. `comment list --all` ignores that scope.
@@ -120,6 +139,10 @@ peel comment clear [--file <path>] [--resolved] [--author user|agent] [--all]
   TUI. Don't pass `--author user`.
 - Pass `--hunk <id>` when you have it: the TUI can still show the comment in
   context after line numbers move.
+- `--line` is read against the file as it is at that moment, and peel freezes
+  that version so the note follows its code afterwards. Add the note *before*
+  editing the file, or re-read the file and use its current line numbers — a
+  number from before an edit anchors the note to the wrong code.
 - The body can come from stdin instead of `--body`, which is easier for anything
   multi-line or containing quotes:
 

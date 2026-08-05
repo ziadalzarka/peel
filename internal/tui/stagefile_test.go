@@ -29,7 +29,7 @@ func realModel(t *testing.T, repo *gittest.Repo) *Model {
 		t.Fatalf("LoadWorkingTree: %v", err)
 	}
 	backend := NewBackend(a, session)
-	comments, err := backend.Comments()
+	comments, err := backend.Comments(t.Context())
 	if err != nil {
 		t.Fatalf("Comments: %v", err)
 	}

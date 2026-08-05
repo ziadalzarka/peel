@@ -68,10 +68,31 @@ type Comment struct {
 	Body   string `json:"body"`
 	// Hunk optionally records the hunk the comment was written against, so the
 	// TUI can still show it after line numbers move.
-	Hunk      string    `json:"hunk,omitempty"`
+	Hunk string `json:"hunk,omitempty"`
+	// Blob is the git object holding the exact file content Line counts lines
+	// in: the version that was on screen when the note was written.
+	//
+	// A line number alone does not survive the file changing, and peel reviews a
+	// working tree an editor and an agent both write to while the review is
+	// open. The file has no commit of its own to name, so peel makes one thing
+	// that cannot move — the content, frozen in git's object store — and the
+	// number becomes a number *in that*. Where it is now is then a diff between
+	// two immutable blobs, which is git's own answer rather than a guess.
+	//
+	// Empty on a note written before peel recorded one, which still lands by its
+	// number alone.
+	Blob      string    `json:"blob,omitempty"`
 	Author    Author    `json:"author"`
 	Resolved  bool      `json:"resolved"`
 	CreatedAt time.Time `json:"createdAt"`
+	// MovedFrom is where the note was written, kept when Line has been moved on to
+	// where that code sits now. Zero when it has not moved. Worked out on read
+	// and never stored.
+	MovedFrom int `json:"-"`
+	// Outdated reports that the code the note was written on is not in the file
+	// any more — rewritten or deleted out from under it. Worked out on read and
+	// never stored: a note is current again the moment its code comes back.
+	Outdated bool `json:"-"`
 	// Target scopes the comment to what was being reviewed: empty for the
 	// working tree, or a pull request reference such as "github:cli/cli#123".
 	Target string `json:"target,omitempty"`

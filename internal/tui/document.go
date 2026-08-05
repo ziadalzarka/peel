@@ -1023,9 +1023,14 @@ func (x *commentIndex) takeFile(path string) []int {
 }
 
 // takeLine returns comments anchored to either line of a displayed pair.
+//
+// A note whose code is gone claims no line at all. Its number still names a line
+// — some line, whatever moved into the gap — and hanging the note there would be
+// the failure the anchor exists to prevent, dressed up as a placement. It falls
+// through to rest and is drawn under its file instead, saying so.
 func (x *commentIndex) takeLine(ref HunkRef, pair linePair) []int {
 	return x.take(ref.Path, func(c store.Comment) bool {
-		if c.Line <= 0 || !sameOrigin(c.Origin, ref) {
+		if c.Line <= 0 || c.Outdated || !sameOrigin(c.Origin, ref) {
 			return false
 		}
 		for _, i := range []int{pair.left, pair.right} {
