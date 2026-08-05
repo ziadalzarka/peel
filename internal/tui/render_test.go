@@ -115,10 +115,7 @@ func TestRenderCursorGetsAMarker(t *testing.T) {
 }
 
 func TestRenderHunkHeaderNamesWhereTheChangeLives(t *testing.T) {
-	entries := parseFiles(t, twoFileDiff)
-	staged := *entries[0].Unstaged
-	entries[0].Staged = &staged
-	doc := Build(sessionOf(entries[:1]), nil, nil, LayoutUnified)
+	doc := Build(partStagedSession(t), nil, nil, LayoutUnified, WithSideFolds(map[string]bool{"alpha.go": false}))
 	r := plainRenderer(80)
 
 	first := r.Row(doc, doc.RowOfHunk(0), RowState{})
@@ -528,5 +525,61 @@ func TestCodeColumnsLeavesLessRoomSideBySide(t *testing.T) {
 	}
 	if split < 1 {
 		t.Errorf("split fits %d columns, want at least one", split)
+	}
+}
+
+// The two halves of a part-staged file are the same run of green lines one after
+// the other, so where one ends and the other begins is drawn as a break across
+// the pane rather than said in a word at the end of a line.
+func TestRenderSideHeadingBreaksTheDiffInTwo(t *testing.T) {
+	doc := Build(sessionOf([]git.FileEntry{partStagedFile(t, "notes.txt")}), nil, nil, LayoutUnified)
+	r := plainRenderer(70)
+
+	staged := r.Row(doc, doc.Sides[0].Row, RowState{})
+	work := r.Row(doc, doc.Sides[1].Row, RowState{})
+
+	if !strings.Contains(staged, "staged") || !strings.Contains(staged, "index") {
+		t.Errorf("staged heading = %q, want it to say what is in the index", staged)
+	}
+	if !strings.Contains(staged, "+4 -0") {
+		t.Errorf("staged heading = %q, want the counts of the half it heads", staged)
+	}
+	if !strings.Contains(staged, "▸") {
+		t.Errorf("staged heading = %q, want a folded arrow — it opens hidden", staged)
+	}
+	if !strings.Contains(work, "unstaged") || strings.Contains(work, "▸") || strings.Contains(work, "▾") {
+		t.Errorf("working-tree heading = %q, want it named and unfoldable", work)
+	}
+	for _, row := range []string{staged, work} {
+		if !strings.Contains(row, "──") {
+			t.Errorf("heading = %q, want a rule across the pane", row)
+		}
+		if got := ansi.StringWidth(row); got != 70 {
+			t.Errorf("heading is %d columns wide, want the pane's 70", got)
+		}
+	}
+}
+
+// A folded part-staged file shows nothing but its header, so the header is where
+// the split has to be readable: four lines staged and one new is not one change
+// of five lines.
+func TestRenderFileHeaderSplitsAPartStagedCount(t *testing.T) {
+	doc := Build(sessionOf([]git.FileEntry{partStagedFile(t, "notes.txt")}), nil, nil, LayoutUnified)
+	r := plainRenderer(70)
+
+	got := r.Row(doc, doc.RowOfFile(0), RowState{})
+	if !strings.Contains(got, "index +4 -0") || !strings.Contains(got, "worktree +1 -0") {
+		t.Errorf("file header = %q, want each half counted", got)
+	}
+}
+
+// An ordinary file has one half, and a word naming it on every hunk says
+// nothing.
+func TestRenderHunkHeaderOfAnUnstagedFileNamesNoHalf(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+	r := plainRenderer(70)
+
+	if got := r.Row(doc, doc.RowOfHunk(0), RowState{}); strings.Contains(got, "worktree") {
+		t.Errorf("hunk header = %q, want no half named where there is only one", got)
 	}
 }

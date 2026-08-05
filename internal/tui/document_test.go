@@ -104,12 +104,7 @@ func TestBuildShowsAFileNamedTwiceOnce(t *testing.T) {
 }
 
 func TestBuildOrdersStagedSideBeforeWorkingTree(t *testing.T) {
-	entries := parseFiles(t, twoFileDiff)
-	// Give alpha.go changes on both sides, as a partially staged file has.
-	staged := *entries[0].Unstaged
-	entries[0].Staged = &staged
-
-	doc := Build(&app.Session{Files: entries[:1], Stageable: true}, nil, nil, LayoutUnified)
+	doc := Build(partStagedSession(t), nil, nil, LayoutUnified, WithSideFolds(map[string]bool{"alpha.go": false}))
 
 	if len(doc.Hunks) != 2 {
 		t.Fatalf("hunks = %d, want 2", len(doc.Hunks))
@@ -120,6 +115,88 @@ func TestBuildOrdersStagedSideBeforeWorkingTree(t *testing.T) {
 	if doc.Hunks[1].Staged {
 		t.Error("second hunk should be the working-tree side")
 	}
+}
+
+// A file git holds in both places at once is drawn as two labelled halves, so
+// the change already reviewed and the change still to read do not run together.
+func TestBuildHeadsBothHalvesOfAPartStagedFile(t *testing.T) {
+	doc := Build(partStagedSession(t), nil, nil, LayoutUnified, WithSideFolds(map[string]bool{"alpha.go": false}))
+
+	if len(doc.Sides) != 2 {
+		t.Fatalf("sides = %d, want the index's and the working tree's", len(doc.Sides))
+	}
+	if !doc.Sides[0].Staged || doc.Sides[1].Staged {
+		t.Errorf("sides = %v, want the index's first", doc.Sides)
+	}
+	for i, side := range doc.Sides {
+		if got := doc.Rows[side.Row].Kind; got != RowSide {
+			t.Errorf("side %d heads row kind %v, want RowSide", i, got)
+		}
+		if len(side.Hunks) != 1 {
+			t.Errorf("side %d has %d hunks, want 1", i, len(side.Hunks))
+		}
+	}
+	if got := doc.RowOfSide("alpha.go", store.OriginIndex); got != doc.Sides[0].Row {
+		t.Errorf("RowOfSide(index) = %d, want %d", got, doc.Sides[0].Row)
+	}
+}
+
+// The half already in the index opens folded: it has been reviewed and put away,
+// so what a part-staged file shows is what is left to read.
+func TestBuildFoldsTheStagedHalfOfAPartStagedFile(t *testing.T) {
+	doc := Build(partStagedSession(t), nil, nil, LayoutUnified)
+
+	if !doc.Sides[0].Folded {
+		t.Error("the index's half should open folded")
+	}
+	if doc.Sides[1].Folded {
+		t.Error("the working tree's half should be open — it is what is left to review")
+	}
+	if len(doc.Hunks) != 1 || doc.Hunks[0].Staged {
+		t.Fatalf("hunks = %d, want only the working tree's", len(doc.Hunks))
+	}
+	if got := doc.SideAt(doc.Sides[0].Row); got != 0 {
+		t.Errorf("SideAt(heading) = %d, want 0", got)
+	}
+	if got := doc.SideAt(doc.RowOfHunk(0)); got != -1 {
+		t.Errorf("SideAt(a hunk header) = %d, want -1", got)
+	}
+}
+
+// A file whose changes are all in the index keeps its diff on screen: folding
+// the only thing in it would leave a header with nothing under it.
+func TestBuildKeepsAFullyStagedFileOpen(t *testing.T) {
+	entries := parseFiles(t, twoFileDiff)
+	entries[0].Staged, entries[0].Unstaged = entries[0].Unstaged, nil
+
+	doc := Build(sessionOf(entries[:1]), nil, nil, LayoutUnified)
+
+	if len(doc.Sides) != 1 || doc.Sides[0].Folded {
+		t.Fatalf("sides = %v, want one open heading", doc.Sides)
+	}
+	if len(doc.Hunks) != 1 {
+		t.Errorf("hunks = %d, want the staged one shown", len(doc.Hunks))
+	}
+}
+
+// An ordinary file — everything still in the working tree — is left as the plain
+// run of hunks it has always been. A heading over every file says nothing.
+func TestBuildDoesNotHeadSidesOfAnUnstagedFile(t *testing.T) {
+	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
+
+	if len(doc.Sides) != 0 {
+		t.Errorf("sides = %v, want none where there is nothing to tell apart", doc.Sides)
+	}
+}
+
+// partStagedSession gives alpha.go changes in both places at once, which is the
+// shape git can produce and peel has to read.
+func partStagedSession(t *testing.T) *app.Session {
+	t.Helper()
+	entries := parseFiles(t, twoFileDiff)
+	staged := *entries[0].Unstaged
+	entries[0].Staged = &staged
+	return sessionOf(entries[:1])
 }
 
 func TestBuildCollapsedFileHidesItsBody(t *testing.T) {
@@ -297,6 +374,68 @@ func TestBuildPlacesEachCommentOnceAcrossBothSides(t *testing.T) {
 	}
 	if seen != 1 {
 		t.Errorf("comment rows = %d, want 1 even though the line appears on both sides", seen)
+	}
+}
+
+// A part-staged file puts two line 3s on screen — "three" in the index, and
+// "inserted" on disk — and a note has to land on the one it was written on.
+// Placing it by line number alone put every working-tree note on whatever the
+// index happened to hold at that number, several lines and one file away from
+// the code it was about.
+func TestBuildPlacesANoteOnTheHalfItWasWrittenOn(t *testing.T) {
+	comments := []store.Comment{
+		{ID: "disk", File: "notes.txt", Line: 3, Side: store.SideNew, Origin: store.OriginWorktree,
+			Body: "about the inserted line", Author: store.AuthorUser},
+		{ID: "index", File: "notes.txt", Line: 3, Side: store.SideNew, Origin: store.OriginIndex,
+			Body: "about what was staged", Author: store.AuthorUser},
+	}
+	doc := Build(sessionOf([]git.FileEntry{partStagedFile(t, "notes.txt")}), comments, nil, LayoutUnified,
+		WithSideFolds(map[string]bool{"notes.txt": false}))
+
+	text, staged := codeUnder(t, doc, "disk")
+	if text != "inserted" || staged {
+		t.Errorf("the working-tree note sits under %q (staged=%v), want \"inserted\" on disk", text, staged)
+	}
+	text, staged = codeUnder(t, doc, "index")
+	if text != "three" || !staged {
+		t.Errorf("the index note sits under %q (staged=%v), want \"three\" in the index", text, staged)
+	}
+}
+
+// A note from an older peel, or from an agent that named no half, still lands:
+// it goes where it always went, on the first line matching its number.
+func TestBuildPlacesANoteThatNamesNoHalf(t *testing.T) {
+	comments := []store.Comment{
+		{ID: "old", File: "notes.txt", Line: 3, Side: store.SideNew, Body: "no origin", Author: store.AuthorUser},
+	}
+	doc := Build(sessionOf([]git.FileEntry{partStagedFile(t, "notes.txt")}), comments, nil, LayoutUnified,
+		WithSideFolds(map[string]bool{"notes.txt": false}))
+
+	if text, _ := codeUnder(t, doc, "old"); text != "three" {
+		t.Errorf("a note naming no half sits under %q, want the first line 3 in the document", text)
+	}
+}
+
+// The editor for a note being written opens where the note will end up, so it
+// has to tell the two halves apart the same way.
+func TestBuildOpensTheEditorOnTheHalfBeingCommentedOn(t *testing.T) {
+	draft := Draft{
+		anchor: anchor{path: "notes.txt", line: 3, side: store.SideNew, origin: store.OriginWorktree},
+		Height: 3,
+	}
+	doc := Build(sessionOf([]git.FileEntry{partStagedFile(t, "notes.txt")}), nil, nil, LayoutUnified,
+		WithDraft(draft), WithSideFolds(map[string]bool{"notes.txt": false}))
+
+	if doc.DraftRow < 0 {
+		t.Fatal("the editor was not placed")
+	}
+	prev := doc.Rows[doc.DraftRow-1]
+	if prev.Kind != RowLine {
+		t.Fatalf("the editor follows a %v, want the line it comments on", prev.Kind)
+	}
+	ref := doc.Hunks[prev.Hunk]
+	if got := ref.Hunk.Lines[prev.Left].Text; got != "inserted" || ref.Staged {
+		t.Errorf("the editor opened under %q (staged=%v), want \"inserted\" on disk", got, ref.Staged)
 	}
 }
 

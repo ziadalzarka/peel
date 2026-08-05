@@ -1060,3 +1060,39 @@ func itoa(n int) string {
 	}
 	return string(digits)
 }
+
+// A note on a file git holds in both places at once has to say which of the two
+// diffs its line number is from, and hand that back to whoever reads the store.
+func TestCommentCarriesTheDiffItsLineIsFrom(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+	h.mustRun("comment", "add", "--file", "a.txt", "--line", "2", "--body", "staged half", "--origin", "index")
+
+	var got []map[string]any
+	mustJSON(t, h.mustRun("comment", "list", "--json"), &got)
+	if got[0]["origin"] != "index" {
+		t.Errorf("origin = %v, want index", got[0]["origin"])
+	}
+}
+
+// Most notes are about the file on disk and say nothing extra, so the field is
+// left off rather than filled in with a guess.
+func TestCommentWithoutAnOriginOmitsIt(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+	h.mustRun("comment", "add", "--file", "a.txt", "--line", "2", "--body", "plain")
+
+	var got []map[string]any
+	mustJSON(t, h.mustRun("comment", "list", "--json"), &got)
+	if _, ok := got[0]["origin"]; ok {
+		t.Errorf("origin = %v, want it left out", got[0]["origin"])
+	}
+}
+
+func TestCommentRejectsAnUnknownOrigin(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+	if code := h.run("comment", "add", "--file", "a.txt", "--line", "2", "--body", "x", "--origin", "elsewhere"); code == 0 {
+		t.Fatal("an unknown origin was accepted")
+	}
+}

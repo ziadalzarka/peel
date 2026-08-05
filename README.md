@@ -20,6 +20,10 @@ keymap.
   nothing here can write the wrong lines into your index.
 - **Comment where the code is.** `c` anywhere — changed line or not — opens the
   editor inline, in the diff, at the spot the note will sit.
+- **Half staged reads as half staged.** A file git holds in the index *and* the
+  working tree is drawn as two halves under their own headings, the staged one
+  folded away, so what you scroll is what you have not reviewed. Change a file
+  after staging it and it opens again, on the new work alone.
 - **Notes an agent can read.** Comments go to `.git/peel/comments.json`, which
   Claude Code reads through the bundled skill, so "address my review comments"
   needs no copy-paste. `C` copies them as text for an agent that cannot.
@@ -93,7 +97,7 @@ repository changes.
 | `h` / `l` | scroll the code sideways, for a line too long for the pane |
 | `0` / `$` | back to the first column / out to the longest line's end |
 | `b` | hide or show the file tree, giving the diff the whole width |
-| `space` | fold the file away and move on, or expand it again — and folds a walkthrough note away |
+| `space` | fold away the file, the half already staged, or a walkthrough note — or open it again |
 | `s` | stage the file the cursor is in, folding it away and moving to the next |
 | `u` | unstage that file, opening it again |
 | `a` / `U` | stage everything / unstage everything |
@@ -121,6 +125,11 @@ it is saved — the code stays on screen while you write about it, and the curso
 is still on it afterwards. `enter` saves it; `alt+enter` writes another line.
 
 ![writing a comment inline, in the diff](docs/screenshots/comment.png)
+
+A note on a file that is half staged records which half it was left on as well as
+which line, so it comes back where you wrote it instead of on the same number in
+the other diff — and what an agent reads, through the skill or through `C`, says
+which copy of the file that number counts against.
 
 A comment says who wrote it: `user:` for yours, `agent:` for one Claude Code left
 through the skill. The two are kept apart because only one of them is yours to
@@ -169,6 +178,14 @@ A file is the unit a review decision is actually made in, so that is the unit
 peel stages: `git add` and `git restore --staged`, one path at a time. If you
 want to split a file, `git add -p` already does that well.
 
+A file staged in part elsewhere — `git add -p`, or an edit made after `s` — is in
+both of git's diffs at once, and peel draws it as both: two halves under their own
+headings, with the file header counting each one separately. The staged half opens
+folded, because it has been read already, so what is left on screen is what is left
+to review; `space` on its heading reads it back. Edit a file after staging it and
+it unfolds on its own, on the new work alone — which happens only to a file folded
+because it was staged, never to one you folded by hand.
+
 Staging collapses the file and moves the cursor to the next one still open, never
 back to find where you were. Folded files are passed over on the way, since they
 have been read already; a file staged elsewhere but never folded here is not, its
@@ -188,12 +205,16 @@ off and the footer says why. `q` straight after `s` waits for that stage to land
 `space` does the same thing without the index. Not every file you read is a file
 to stage — a `--rev` or pull request session cannot stage at all, and a working
 tree has files you look at and leave alone — so folding one away moves you on to
-the next exactly as staging does. What is left open is what is left to read.
+the next exactly as staging does. What is left open is what is left to read. On the
+heading of a half it folds that half instead, leaving the rest of the file where it
+is.
 
 Folds are remembered between runs, in `.git/peel/folds.json` and per review, so a
 pass through a large diff picks up where you left it instead of starting again
 from the top. A file whose change has been committed away loses its fold: the
-next change to it is a new thing to read, not something to hide.
+next change to it is a new thing to read, not something to hide. A half's fold is
+not written down — the staged one starts folded every session, since being in the
+index already says it has been reviewed.
 
 ### Walkthrough
 

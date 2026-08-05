@@ -1964,3 +1964,127 @@ func TestTheHeaderNamesTheColumnTheCodeStartsAt(t *testing.T) {
 }
 
 func header(m *Model) string { return strings.SplitN(m.View(), "\n", 2)[0] }
+
+// The two halves of a part-staged file both hold a line 3, and a note has to
+// record which one it was written on — or it comes back on the other.
+func TestCommentOnAPartStagedFileRecordsWhichHalf(t *testing.T) {
+	backend := newFakeBackend(sessionOf([]git.FileEntry{partStagedFile(t, "notes.txt")}))
+	m := newModel(t, backend)
+
+	m.moveTo(rowOfCode(t, m, "inserted"))
+	press(t, m, "c")
+	typeText(t, m, "why insert this")
+	press(t, m, "enter")
+
+	if len(backend.added) != 1 {
+		t.Fatalf("AddComment called %d times, want 1", len(backend.added))
+	}
+	got := backend.added[0]
+	if got.Line != 3 || got.Origin != store.OriginWorktree {
+		t.Errorf("note anchored at line %d of %q, want line 3 of the working tree", got.Line, got.Origin)
+	}
+	if text, staged := codeUnder(t, m.doc, got.ID); text != "inserted" || staged {
+		t.Errorf("the note was drawn under %q (staged=%v), want it under the line it was written on", text, staged)
+	}
+}
+
+// The index's half opens folded, and `space` on its heading shows it — the
+// reviewer can always read what they staged.
+func TestSpaceOnTheStagedHeadingShowsWhatIsAlreadyStaged(t *testing.T) {
+	m := newModel(t, newFakeBackend(sessionOf([]git.FileEntry{partStagedFile(t, "notes.txt")})))
+
+	if !m.doc.Sides[0].Folded {
+		t.Fatal("the index's half should open folded")
+	}
+	m.moveTo(m.doc.Sides[0].Row)
+	press(t, m, "space")
+
+	if m.doc.Sides[0].Folded {
+		t.Error("space on the heading did not show the staged half")
+	}
+	if got := m.doc.SideAt(m.cursor); got != 0 {
+		t.Errorf("the cursor left the heading it was pressed on, and is on side %d", got)
+	}
+
+	press(t, m, "space")
+	if !m.doc.Sides[0].Folded {
+		t.Error("space did not put the staged half away again")
+	}
+}
+
+// `space` on the working tree's heading is refused: folding away what is left to
+// review would leave a file that says it changed and shows nothing.
+func TestSpaceOnTheWorkingTreeHeadingKeepsItOpen(t *testing.T) {
+	m := newModel(t, newFakeBackend(sessionOf([]git.FileEntry{partStagedFile(t, "notes.txt")})))
+
+	m.moveTo(m.doc.Sides[1].Row)
+	press(t, m, "space")
+
+	if m.doc.Sides[1].Folded {
+		t.Error("the working tree's half folded away")
+	}
+	if m.status == "" {
+		t.Error("nothing was said about why it did not fold")
+	}
+}
+
+// A file folded away by staging is a file the pass is finished with — until
+// something lands in it. What arrives is unreviewed, and a `✓` in the tree is
+// the one place a change could hide from the pass, so the file opens again.
+func TestAFileChangedAfterStagingOpensAgain(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	m := newModel(t, backend)
+
+	press(t, m, "s")
+	if !m.doc.Files[0].Collapsed {
+		t.Fatal("staging alpha.go did not fold it away")
+	}
+
+	backend.nextSession = sessionOf([]git.FileEntry{partStagedFile(t, "alpha.go")})
+	press(t, m, "r")
+
+	if m.doc.Files[0].Collapsed {
+		t.Fatal("alpha.go stayed folded after changing under a staged file")
+	}
+	if !strings.Contains(m.status, "reopened") {
+		t.Errorf("status = %q, want it to say the file was opened again", m.status)
+	}
+	// What it opens on is the new work: the half already in the index stays put
+	// away, so the file shows exactly what arrived.
+	if !m.doc.Sides[0].Folded || m.doc.Sides[1].Folded {
+		t.Errorf("sides = %+v, want only the working tree's half open", m.doc.Sides)
+	}
+}
+
+// A file put away by hand was put away on purpose, and stays that way.
+func TestAFileFoldedByHandStaysFoldedWhenItChanges(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	m := newModel(t, backend)
+
+	press(t, m, "space")
+	if !m.doc.Files[0].Collapsed {
+		t.Fatal("space did not fold alpha.go away")
+	}
+
+	backend.nextSession = sessionOf([]git.FileEntry{partStagedFile(t, "alpha.go")})
+	press(t, m, "r")
+
+	if !m.doc.Files[0].Collapsed {
+		t.Error("a file folded by hand opened again when it changed")
+	}
+}
+
+// rowOfCode finds the row showing a line of code, by its text.
+func rowOfCode(t *testing.T, m *Model, text string) int {
+	t.Helper()
+	for i, r := range m.doc.Rows {
+		if r.Kind != RowLine {
+			continue
+		}
+		if m.doc.Hunks[r.Hunk].Hunk.Lines[max(r.Left, r.Right)].Text == text {
+			return i
+		}
+	}
+	t.Fatalf("no row shows %q", text)
+	return -1
+}

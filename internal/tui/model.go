@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -41,6 +42,15 @@ type Model struct {
 	agentCommentsOff bool
 	doc              Document
 	collapsed        map[string]bool
+	// stagedFolds are the files folded away because they were staged, as opposed
+	// to put away by hand. A change arriving in one of those is unreviewed work
+	// in a file the reviewer was finished with, so it opens again; a file folded
+	// deliberately was closed on purpose and stays closed.
+	stagedFolds map[string]bool
+	// sideFolds overrides, by path, whether a part-staged file's index half is
+	// hidden. It holds only what the reviewer has said with `space`; everything
+	// else takes the default.
+	sideFolds map[string]bool
 
 	cursor int
 	top    int
@@ -172,18 +182,20 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 	}
 
 	m := &Model{
-		ctx:        ctx,
-		backend:    backend,
-		session:    session,
-		comments:   comments,
-		collapsed:  map[string]bool{},
-		layout:     cfg.layout,
-		theme:      cfg.theme,
-		renderer:   NewRenderer(cfg.theme, cfg.syntax),
-		input:      newInput(cfg.theme),
-		walkFolded: map[int]bool{},
-		follow:     cfg.follow,
-		pollEvery:  cfg.pollEvery,
+		ctx:         ctx,
+		backend:     backend,
+		session:     session,
+		comments:    comments,
+		collapsed:   map[string]bool{},
+		stagedFolds: map[string]bool{},
+		sideFolds:   map[string]bool{},
+		layout:      cfg.layout,
+		theme:       cfg.theme,
+		renderer:    NewRenderer(cfg.theme, cfg.syntax),
+		input:       newInput(cfg.theme),
+		walkFolded:  map[int]bool{},
+		follow:      cfg.follow,
+		pollEvery:   cfg.pollEvery,
 	}
 	if m.pollEvery <= 0 {
 		m.pollEvery = defaultPollEvery
@@ -199,6 +211,11 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 // restoreFolds opens the review with the files folded away that were folded
 // when it was last read, so a pass carried over from yesterday still shows what
 // is left rather than starting again from the top.
+//
+// Why each one was folded is not written down, but it does not have to be: a
+// folded file with all its changes in the index was folded by staging, since
+// that is the only way a file ends up in both of those states. So a change
+// landing in it tomorrow still opens it, the way it would have today.
 func (m *Model) restoreFolds() {
 	folded, err := m.backend.Folded()
 	if err != nil {
@@ -206,8 +223,13 @@ func (m *Model) restoreFolds() {
 		return
 	}
 	for _, path := range folded {
-		if _, ok := m.session.Entry(path); ok {
-			m.collapsed[path] = true
+		entry, ok := m.session.Entry(path)
+		if !ok {
+			continue
+		}
+		m.collapsed[path] = true
+		if entry.State() == git.StateStaged {
+			m.stagedFolds[path] = true
 		}
 	}
 }
@@ -529,6 +551,9 @@ type spot struct {
 	// one. Hunk IDs carry the hunk header, so a hunk that kept its ID kept its
 	// lines too and the index still names the same code.
 	line int
+	// side names the half of the file the cursor is heading, when it is on one
+	// of the two headings rather than in the diff under them.
+	side store.Origin
 }
 
 // spot records where the cursor is, so a rebuild can put it back.
@@ -536,6 +561,10 @@ func (m *Model) spot() spot {
 	at := spot{path: m.currentPath(), line: -1}
 	if c, ok := m.doc.CommentAt(m.cursor); ok {
 		at.comment = c.ID
+		return at
+	}
+	if side := m.doc.SideAt(m.cursor); side >= 0 {
+		at.side = m.doc.Sides[side].Origin()
 		return at
 	}
 	switch target := m.doc.TargetAt(m.cursor); target.Kind {
@@ -555,6 +584,12 @@ func (m *Model) moveToSpot(at spot) {
 	if row := m.doc.RowOfComment(at.comment); row >= 0 {
 		m.moveTo(row)
 		return
+	}
+	if at.side != "" {
+		if row := m.doc.RowOfSide(at.path, at.side); row >= 0 {
+			m.moveTo(row)
+			return
+		}
 	}
 	hunk := m.findHunk(at.hunk)
 	if row := m.doc.RowOfLine(hunk, at.line); row >= 0 {
@@ -640,7 +675,7 @@ func (m *Model) stageAt() tea.Cmd {
 		// reopened with `space` folds again, and moves on, without a pointless git
 		// call.
 		m.status = path + " is already staged"
-		m.foldNow(path)
+		m.foldStaged(path)
 		return nil
 	}
 	if !m.canStage() {
@@ -649,7 +684,7 @@ func (m *Model) stageAt() tea.Cmd {
 	return m.apply(func() {
 		m.session = restaged(m.session, true, only(path))
 		m.status = "staged " + path
-		m.foldNow(path)
+		m.foldStaged(path)
 	}, func(ctx context.Context) error {
 		return m.backend.StageFile(ctx, path)
 	})
@@ -689,7 +724,11 @@ func (m *Model) stageEverything() tea.Cmd {
 	}
 	return m.apply(func() {
 		m.session = restaged(m.session, true, every)
-		m.setCollapsed(m.foldEvery(true))
+		folds := m.foldEvery(true)
+		m.setCollapsed(folds)
+		for path := range folds {
+			m.stagedFolds[path] = true
+		}
 		m.status = "staged everything"
 		m.relayout()
 	}, m.backend.StageAll)
@@ -758,6 +797,8 @@ func (m *Model) setCollapsed(collapse map[string]bool) {
 			m.collapsed[path] = true
 		} else {
 			delete(m.collapsed, path)
+			// An open file is not folded for any reason, staging included.
+			delete(m.stagedFolds, path)
 		}
 		changed = true
 	}
@@ -794,6 +835,46 @@ func (m *Model) foldNow(path string) {
 	m.setCollapsed(fold(path))
 	m.rebuild()
 	m.advanceFrom(path)
+}
+
+// foldStaged folds a file away because it has just been staged, and records
+// that that is why.
+//
+// The distinction is what a change arriving in the file later turns on: staging
+// says "this file is dealt with" about the changes that went into the index, and
+// nothing about the ones that turn up afterwards — so those open the file again.
+// A file put away by hand was put away deliberately and stays that way.
+func (m *Model) foldStaged(path string) {
+	m.stagedFolds[path] = true
+	m.foldNow(path)
+}
+
+// reopenStagedChanged opens the files that were folded away by staging and have
+// since picked up working-tree changes, and returns them.
+//
+// What arrived is unreviewed, and it arrived in a file whose header says `✓` —
+// the one place a change can hide from a pass through the diff. Its index half
+// stays folded, so what the file opens on is exactly what is new.
+func (m *Model) reopenStagedChanged() []string {
+	var opened []string
+	for path := range m.stagedFolds {
+		entry, ok := m.session.Entry(path)
+		if !ok {
+			// The change was committed away. What is left is not a fold of this
+			// review's, and the next change to that file is a new thing to read.
+			delete(m.stagedFolds, path)
+			continue
+		}
+		if entry.Unstaged == nil || !m.collapsed[path] {
+			continue
+		}
+		opened = append(opened, path)
+	}
+	sort.Strings(opened)
+	for _, path := range opened {
+		m.setCollapsed(unfold(path))
+	}
+	return opened
 }
 
 // advanceFrom moves the cursor on to the next file left open below, which is
@@ -857,7 +938,11 @@ type anchor struct {
 	path string
 	line int
 	side store.Side
-	hunk string
+	// origin is which of the two diffs line counts lines in. A part-staged file
+	// has both on screen at once, and the same number names a different line in
+	// each, so the note has to record which one it was written on.
+	origin store.Origin
+	hunk   string
 }
 
 func (a anchor) location() string {
@@ -934,7 +1019,7 @@ func (m *Model) draftLines() []string {
 // the untouched code a change breaks.
 func (m *Model) anchorAt() (anchor, bool) {
 	if c, ok := m.doc.CommentAt(m.cursor); ok {
-		return anchor{path: c.File, line: c.Line, side: sideOr(c.Side), hunk: c.Hunk}, true
+		return anchor{path: c.File, line: c.Line, side: sideOr(c.Side), origin: c.Origin, hunk: c.Hunk}, true
 	}
 
 	target := m.doc.TargetAt(m.cursor)
@@ -950,7 +1035,7 @@ func (m *Model) anchorAt() (anchor, bool) {
 		if i, ok := headlineIndex(ref.Hunk); ok {
 			return lineAnchor(ref, ref.Hunk.Lines[i]), true
 		}
-		return anchor{path: ref.Path, side: store.SideNew, hunk: ref.ID.String()}, true
+		return anchor{path: ref.Path, side: store.SideNew, origin: ref.Origin(), hunk: ref.ID.String()}, true
 	case TargetFile:
 		return anchor{path: target.Path, side: store.SideNew}, true
 	default:
@@ -975,12 +1060,14 @@ func headlineIndex(h git.Hunk) (int, bool) {
 }
 
 // lineAnchor anchors to whichever side of the diff the line exists on, so a
-// comment on a deletion lands on the old file.
+// comment on a deletion lands on the old file. The diff the line was read from
+// is recorded with it: in a part-staged file the index and the working tree both
+// have a line 12, and they are not the same line.
 func lineAnchor(ref HunkRef, l git.Line) anchor {
 	if l.Kind == git.LineRemoved {
-		return anchor{path: ref.Path, line: l.OldLine, side: store.SideOld, hunk: ref.ID.String()}
+		return anchor{path: ref.Path, line: l.OldLine, side: store.SideOld, origin: ref.Origin(), hunk: ref.ID.String()}
 	}
-	return anchor{path: ref.Path, line: l.NewLine, side: store.SideNew, hunk: ref.ID.String()}
+	return anchor{path: ref.Path, line: l.NewLine, side: store.SideNew, origin: ref.Origin(), hunk: ref.ID.String()}
 }
 
 func sideOr(s store.Side) store.Side {
@@ -1003,6 +1090,7 @@ func (m *Model) submitComment() tea.Cmd {
 		File:   got.path,
 		Line:   got.line,
 		Side:   got.side,
+		Origin: got.origin,
 		Body:   body,
 		Hunk:   got.hunk,
 		Author: store.AuthorUser,
@@ -1326,6 +1414,13 @@ func (m *Model) applyLoaded(msg loadedMsg) {
 	m.walkStale = m.walkStale || (m.walkLoaded && codeFingerprintOf(msg.session) != m.walkCode)
 
 	m.fingerprint = fingerprintOf(msg.session)
+	// Not on a reconciling read-back: that is the reviewer's own stage coming
+	// back from git, and a file folded a moment ago by pressing `s` is not a file
+	// that has changed since it was staged.
+	var reopened []string
+	if !msg.reconcile {
+		reopened = m.reopenStagedChanged()
+	}
 	m.rebuild()
 	// A reconciling read-back is behind a change the reviewer has already seen
 	// and already moved on from, so the cursor stays exactly where they left it.
@@ -1339,6 +1434,11 @@ func (m *Model) applyLoaded(msg loadedMsg) {
 	}
 	if msg.poll {
 		m.status = "reloaded — the working tree changed"
+	}
+	// A file that had been dealt with is open again, which is a change to the
+	// screen nobody asked for: it is worth saying which file, and why.
+	if len(reopened) > 0 {
+		m.status = "reopened " + strings.Join(reopened, ", ") + " — changed since it was staged"
 	}
 }
 
@@ -1434,7 +1534,8 @@ func (m *Model) currentPath() string {
 }
 
 func (m *Model) rebuild() {
-	m.doc = Build(m.session, m.visibleComments(), m.collapsed, m.layout, WithGroups(m.groups()), WithDraft(m.draft()))
+	m.doc = Build(m.session, m.visibleComments(), m.collapsed, m.layout,
+		WithGroups(m.groups()), WithDraft(m.draft()), WithSideFolds(m.sideFolds))
 	m.fileRows = fileTree(m.doc.Files)
 	if m.cursor >= m.doc.Len() {
 		m.cursor = m.doc.LastStop()
@@ -1480,7 +1581,7 @@ func (m *Model) fileIndex(path string) int {
 }
 
 // toggleCollapse folds whatever the cursor is on out of the way: a walkthrough
-// step's explanation, or a file's body.
+// step's explanation, one half of a part-staged file, or a file's body.
 //
 // Folding a file means the same thing staging one does — done with it — so the
 // cursor moves on to the next file still open. Opening one again leaves the
@@ -1490,18 +1591,49 @@ func (m *Model) toggleCollapse() {
 		m.foldStep(step)
 		return
 	}
+	if side := m.doc.SideAt(m.cursor); side >= 0 {
+		m.foldSide(side)
+		return
+	}
 	file := m.doc.FileAt(m.cursor)
 	if file < 0 || file >= len(m.doc.Files) {
 		return
 	}
 	path := m.doc.Files[file].Entry.Path
 	if !m.collapsed[path] {
+		// A file put away by hand is put away for good: it was read and closed,
+		// where a file folded by staging opens again when something lands in it.
+		delete(m.stagedFolds, path)
 		m.foldNow(path)
 		return
 	}
 	m.setCollapsed(unfold(path))
 	m.rebuild()
 	m.moveTo(m.doc.RowOfFile(file))
+}
+
+// foldSide hides or shows one half of a part-staged file, leaving the cursor on
+// the heading it was pressed on.
+//
+// Only the index half can be hidden: the working tree's is the change still to
+// be reviewed, and folding that away would leave a file that says it has changes
+// and shows none.
+func (m *Model) foldSide(side int) {
+	ref := m.doc.Sides[side]
+	if !ref.Staged {
+		m.status = "only the staged half folds — this is what is left to review"
+		return
+	}
+	m.sideFolds[ref.Path] = !ref.Folded
+	m.rebuild()
+	if row := m.doc.RowOfSide(ref.Path, ref.Origin()); row >= 0 {
+		m.moveTo(row)
+	}
+	if ref.Folded {
+		m.status = "showing what is already staged in " + ref.Path
+	} else {
+		m.status = "hiding what is already staged in " + ref.Path
+	}
 }
 
 // showFile moves to the top of a file — its walkthrough note, where it has one —

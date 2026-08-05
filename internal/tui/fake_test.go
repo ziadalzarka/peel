@@ -49,6 +49,67 @@ index 5555555..6666666 100644
 +second
 `
 
+// stagedNotes and changedNotes are the two halves of one file git holds in both
+// places at once: four lines put in the index, and a fifth inserted on disk
+// afterwards.
+//
+// Line 3 is "three" in the index and "inserted" in the working tree, which is
+// the shape a note has to be able to tell apart — the same number, two different
+// lines, both on screen at once.
+const stagedNotes = `diff --git a/notes.txt b/notes.txt
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/notes.txt
+@@ -0,0 +1,4 @@
++one
++two
++three
++four
+`
+
+const changedNotes = `diff --git a/notes.txt b/notes.txt
+index 1111111..2222222 100644
+--- a/notes.txt
++++ b/notes.txt
+@@ -1,4 +1,5 @@
+ one
+ two
++inserted
+ three
+ four
+`
+
+// partStagedFile is one file with changes in the index and more on disk, under
+// whatever path the test needs it at.
+func partStagedFile(t *testing.T, path string) git.FileEntry {
+	t.Helper()
+	at := func(diff string) *git.FileDiff {
+		return parseFiles(t, strings.ReplaceAll(diff, "notes.txt", path))[0].Unstaged
+	}
+	return git.FileEntry{Path: path, Staged: at(stagedNotes), Unstaged: at(changedNotes)}
+}
+
+// codeUnder returns the line of code a comment was laid out beneath, and
+// whether that line is in the index's half of the file.
+func codeUnder(t *testing.T, doc Document, id string) (text string, staged bool) {
+	t.Helper()
+	row := doc.RowOfComment(id)
+	if row < 0 {
+		t.Fatalf("comment %s is not in the document", id)
+	}
+	for i := row - 1; i >= 0; i-- {
+		r := doc.Rows[i]
+		if r.Kind != RowLine {
+			continue
+		}
+		ref := doc.Hunks[r.Hunk]
+		return ref.Hunk.Lines[max(r.Left, r.Right)].Text, ref.Staged
+	}
+	t.Fatalf("comment %s is not under any line", id)
+	return "", false
+}
+
 // wideLine is far wider than any pane the tests open, so reading its tail means
 // scrolling sideways.
 var wideLine = "var long = " + strconv.Quote(strings.Repeat("0123456789", 12))

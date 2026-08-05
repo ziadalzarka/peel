@@ -61,6 +61,9 @@ const (
 	RowStep
 	// RowStepText is one wrapped line of a step's explanation.
 	RowStepText
+	// RowSide heads one of a file's two changes, the index's or the working
+	// tree's, above the hunks that belong to it.
+	RowSide
 	// RowBlank separates files.
 	RowBlank
 )
@@ -84,6 +87,9 @@ type Row struct {
 	// Step indexes into Document.Steps on a walkthrough row, and is -1 on every
 	// other row.
 	Step int
+	// Side indexes into Document.Sides on a side heading, and is -1 on every
+	// other row.
+	Side int
 	Text string
 	Head bool
 }
@@ -99,6 +105,39 @@ type HunkRef struct {
 	ID     git.HunkID
 	Hunk   git.Hunk
 }
+
+// Origin names the diff this hunk was read from, which is what a note left on
+// one of its lines has to record: the same line number means a different line in
+// the other diff.
+func (h HunkRef) Origin() store.Origin { return originOf(h.Staged) }
+
+// originOf names the diff a staged or unstaged side was read from.
+func originOf(staged bool) store.Origin {
+	if staged {
+		return store.OriginIndex
+	}
+	return store.OriginWorktree
+}
+
+// SideRef is one of a file's two changes — what the index holds, or what the
+// working tree has on top of it — as the document lays it out.
+type SideRef struct {
+	File int
+	Path string
+	// Staged marks the index's side of the file, HEAD→index.
+	Staged bool
+	// Hunks indexes into Document.Hunks, and is empty while the side is folded.
+	Hunks []int
+	// Row is the position of the side's heading.
+	Row int
+	// Folded hides the side's hunks, leaving the heading. Only the index side
+	// folds: the working tree's is what there is to review.
+	Folded         bool
+	Added, Removed int
+}
+
+// Origin names the diff this side is.
+func (s SideRef) Origin() store.Origin { return originOf(s.Staged) }
 
 // FileRef is one file within the document.
 type FileRef struct {
@@ -137,6 +176,9 @@ type Draft struct {
 type buildConfig struct {
 	groups Groups
 	draft  Draft
+	// sides overrides the default fold of a file's index side, by path. A path
+	// with no entry takes the default.
+	sides map[string]bool
 }
 
 // BuildOption customises how a document is laid out.
@@ -146,10 +188,19 @@ type BuildOption func(*buildConfig)
 // attach to.
 func WithDraft(d Draft) BuildOption { return func(c *buildConfig) { c.draft = d } }
 
+// WithSideFolds overrides, by path, whether a file's index side opens folded.
+func WithSideFolds(folds map[string]bool) BuildOption {
+	return func(c *buildConfig) { c.sides = folds }
+}
+
 // Document is a session flattened into navigable rows.
 type Document struct {
 	Files []FileRef
 	Hunks []HunkRef
+	// Sides are the labelled halves of the part-staged files, in layout order.
+	// A file whose changes are all in one place has none: there is nothing to
+	// tell apart.
+	Sides []SideRef
 	Rows  []Row
 	// Steps are the walkthrough groups the files are laid out under, in reading
 	// order. It is empty when there is no walkthrough on screen.
@@ -186,19 +237,19 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 			fi := len(doc.Files)
 			hidden := collapsed[entry.Path]
 			doc.Files = append(doc.Files, FileRef{Entry: entry, Row: len(doc.Rows), Collapsed: hidden})
-			doc.add(Row{Kind: RowFile, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1})
+			doc.add(Row{Kind: RowFile, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1})
 			doc.addComments(fi, -1, idx.takeFile(entry.Path))
 			doc.addDraft(fi, -1, doc.draftOnFile(entry.Path))
 
 			if !hidden {
-				doc.addBody(fi, entry, idx)
+				doc.addBody(fi, entry, idx, cfg.sides)
 			}
 			doc.addComments(fi, -1, idx.rest(entry.Path))
 			// A draft whose line is not on screen — a collapsed file, or a line
 			// the diff no longer holds — still has to be somewhere, and it goes
 			// where the comments in the same position go: under its file.
 			doc.addDraft(fi, -1, doc.Draft.path == entry.Path)
-			doc.add(Row{Kind: RowBlank, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1})
+			doc.add(Row{Kind: RowBlank, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1})
 		}
 	}
 	return doc
@@ -212,7 +263,7 @@ func (d *Document) addDraft(file, hunk int, here bool) {
 	}
 	d.DraftRow = len(d.Rows)
 	for range d.Draft.Height {
-		d.add(Row{Kind: RowDraft, File: file, Hunk: hunk, Left: -1, Right: -1, Step: -1})
+		d.add(Row{Kind: RowDraft, File: file, Hunk: hunk, Left: -1, Right: -1, Step: -1, Side: -1})
 	}
 }
 
@@ -230,15 +281,15 @@ func (d Document) draftOnHunk(ref HunkRef) bool {
 
 // draftOnLine reports that the comment being written anchors to either line of a
 // displayed pair.
-func (d Document) draftOnLine(path string, lines []git.Line, pair linePair) bool {
-	if d.Draft.path != path || d.Draft.line <= 0 {
+func (d Document) draftOnLine(ref HunkRef, pair linePair) bool {
+	if d.Draft.path != ref.Path || d.Draft.line <= 0 || !sameOrigin(d.Draft.origin, ref) {
 		return false
 	}
 	for _, i := range []int{pair.left, pair.right} {
-		if i < 0 || i >= len(lines) {
+		if i < 0 || i >= len(ref.Hunk.Lines) {
 			continue
 		}
-		if anchors(lines[i], d.Draft.side, d.Draft.line) {
+		if anchors(ref.Hunk.Lines[i], d.Draft.side, d.Draft.line) {
 			return true
 		}
 	}
@@ -266,7 +317,7 @@ func (d *Document) addStep(group fileGroup, groups Groups) {
 	if len(ref.Files) > 0 {
 		file = ref.Files[0]
 	}
-	row := Row{Kind: RowStep, File: file, Hunk: -1, Left: -1, Right: -1, Step: index}
+	row := Row{Kind: RowStep, File: file, Hunk: -1, Left: -1, Right: -1, Step: index, Side: -1}
 	d.add(row)
 
 	row.Kind = RowStepText
@@ -295,6 +346,7 @@ func (d *Document) addComments(file, hunk int, ids []int) {
 				Right:   -1,
 				Comment: ci,
 				Step:    -1,
+				Side:    -1,
 				Text:    text,
 				Head:    n == 0,
 			})
@@ -302,38 +354,101 @@ func (d *Document) addComments(file, hunk int, ids []int) {
 	}
 }
 
-func (d *Document) addBody(fi int, entry git.FileEntry, idx *commentIndex) {
+// addBody lays out a file's changes, the index's side first.
+//
+// A file git holds in both places at once is drawn as two labelled halves rather
+// than one run of hunks. They are separate changes measured against separate
+// files — the same line number means a different line in each — and telling
+// where the reviewed half ends and the new one begins is the whole difficulty of
+// reading a part-staged file.
+func (d *Document) addBody(fi int, entry git.FileEntry, idx *commentIndex, folds map[string]bool) {
 	if entry.IsBinary() {
-		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1,
+		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1,
 			Text: "binary file — no diff to show"})
 		return
 	}
 
+	// Only a file with something in the index has two halves to tell apart. The
+	// ordinary file — everything still in the working tree — is left as the plain
+	// run of hunks it has always been, and a heading saying "unstaged" over every
+	// file in an ordinary review says nothing.
+	labelled, folded := entry.Staged != nil, false
 	for _, side := range sidesOf(entry) {
-		for _, h := range side.diff.Hunks {
-			hi := len(d.Hunks)
-			d.Hunks = append(d.Hunks, HunkRef{
-				File:   fi,
-				Path:   entry.Path,
-				Staged: side.staged,
-				ID:     side.diff.ID(h),
-				Hunk:   h,
-			})
-			d.Files[fi].Hunks = append(d.Files[fi].Hunks, hi)
-			d.add(Row{Kind: RowHunk, File: fi, Hunk: hi, Left: -1, Right: -1, Step: -1})
-			d.addDraft(fi, hi, d.draftOnHunk(d.Hunks[hi]))
-			d.measure(h.Lines)
-
-			for _, pair := range pairLines(h.Lines, d.Layout) {
-				d.add(Row{Kind: RowLine, File: fi, Hunk: hi, Left: pair.left, Right: pair.right, Step: -1})
-				d.addComments(fi, hi, idx.takeLine(entry.Path, h.Lines, pair))
-				d.addDraft(fi, hi, d.draftOnLine(entry.Path, h.Lines, pair))
+		si := -1
+		if labelled {
+			si = d.addSide(fi, entry, side, folds)
+			if d.Sides[si].Folded {
+				folded = true
+				continue
 			}
 		}
+		d.addHunks(fi, entry, side, si, idx)
 	}
 
-	if len(d.Files[fi].Hunks) == 0 {
-		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Text: emptyNote(entry)})
+	// A file with nothing to show says so — unless what it has is only hidden,
+	// where the heading above already says where it went.
+	if len(d.Files[fi].Hunks) == 0 && !folded {
+		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Text: emptyNote(entry)})
+	}
+}
+
+// addSide heads one half of a part-staged file, and returns its index.
+func (d *Document) addSide(fi int, entry git.FileEntry, s side, folds map[string]bool) int {
+	si := len(d.Sides)
+	added, removed := s.diff.Stats()
+	d.Sides = append(d.Sides, SideRef{
+		File:    fi,
+		Path:    entry.Path,
+		Staged:  s.staged,
+		Row:     len(d.Rows),
+		Folded:  sideFolded(entry, s, folds),
+		Added:   added,
+		Removed: removed,
+	})
+	d.add(Row{Kind: RowSide, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: si})
+	return si
+}
+
+// sideFolded reports whether a side opens hidden.
+//
+// The index's half of a part-staged file does: it has been reviewed and put away
+// already, so what is left open is what is left to read — the same rule staging
+// a whole file follows. A file whose changes are all in the index keeps its diff
+// on screen, since folding the only thing in it would leave a header with
+// nothing under it. Either way `space` on the heading has the last word.
+func sideFolded(e git.FileEntry, s side, folds map[string]bool) bool {
+	if !s.staged {
+		return false
+	}
+	if folded, set := folds[e.Path]; set {
+		return folded
+	}
+	return e.Unstaged != nil
+}
+
+func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *commentIndex) {
+	for _, h := range s.diff.Hunks {
+		hi := len(d.Hunks)
+		d.Hunks = append(d.Hunks, HunkRef{
+			File:   fi,
+			Path:   entry.Path,
+			Staged: s.staged,
+			ID:     s.diff.ID(h),
+			Hunk:   h,
+		})
+		d.Files[fi].Hunks = append(d.Files[fi].Hunks, hi)
+		if si >= 0 {
+			d.Sides[si].Hunks = append(d.Sides[si].Hunks, hi)
+		}
+		d.add(Row{Kind: RowHunk, File: fi, Hunk: hi, Left: -1, Right: -1, Step: -1, Side: -1})
+		d.addDraft(fi, hi, d.draftOnHunk(d.Hunks[hi]))
+		d.measure(h.Lines)
+
+		for _, pair := range pairLines(h.Lines, d.Layout) {
+			d.add(Row{Kind: RowLine, File: fi, Hunk: hi, Left: pair.left, Right: pair.right, Step: -1, Side: -1})
+			d.addComments(fi, hi, idx.takeLine(d.Hunks[hi], pair))
+			d.addDraft(fi, hi, d.draftOnLine(d.Hunks[hi], pair))
+		}
 	}
 }
 
@@ -473,15 +588,15 @@ func (d Document) IsStop(i int) bool {
 	}
 }
 
-// IsMark reports whether row i heads something whole: a file, a hunk, a comment,
-// or a walkthrough group. These are what j and k jump between, while the arrows
-// step row by row.
+// IsMark reports whether row i heads something whole: a file, one of its two
+// changes, a hunk, a comment, or a walkthrough group. These are what j and k jump
+// between, while the arrows step row by row.
 func (d Document) IsMark(i int) bool {
 	if i < 0 || i >= len(d.Rows) {
 		return false
 	}
 	switch d.Rows[i].Kind {
-	case RowFile, RowHunk, RowStep:
+	case RowFile, RowHunk, RowStep, RowSide:
 		return true
 	case RowComment:
 		return d.Rows[i].Head
@@ -649,6 +764,30 @@ func (d Document) StepAt(row int) int {
 		return -1
 	}
 	return step
+}
+
+// SideAt returns the change a side heading belongs to, and -1 on every other
+// row.
+func (d Document) SideAt(row int) int {
+	if row < 0 || row >= len(d.Rows) {
+		return -1
+	}
+	side := d.Rows[row].Side
+	if side < 0 || side >= len(d.Sides) {
+		return -1
+	}
+	return side
+}
+
+// RowOfSide returns the heading row of one file's index or working-tree change,
+// or -1.
+func (d Document) RowOfSide(path string, origin store.Origin) int {
+	for _, s := range d.Sides {
+		if s.Path == path && s.Origin() == origin {
+			return s.Row
+		}
+	}
+	return -1
 }
 
 // RowOfFile returns the header row of a file, or -1.
@@ -832,21 +971,33 @@ func (x *commentIndex) takeFile(path string) []int {
 }
 
 // takeLine returns comments anchored to either line of a displayed pair.
-func (x *commentIndex) takeLine(path string, lines []git.Line, pair linePair) []int {
-	return x.take(path, func(c store.Comment) bool {
-		if c.Line <= 0 {
+func (x *commentIndex) takeLine(ref HunkRef, pair linePair) []int {
+	return x.take(ref.Path, func(c store.Comment) bool {
+		if c.Line <= 0 || !sameOrigin(c.Origin, ref) {
 			return false
 		}
 		for _, i := range []int{pair.left, pair.right} {
-			if i < 0 || i >= len(lines) {
+			if i < 0 || i >= len(ref.Hunk.Lines) {
 				continue
 			}
-			if anchors(lines[i], c.Side, c.Line) {
+			if anchors(ref.Hunk.Lines[i], c.Side, c.Line) {
 				return true
 			}
 		}
 		return false
 	})
+}
+
+// sameOrigin reports that a note numbered against one of the two diffs belongs
+// to this one.
+//
+// A file can be part staged and part modified, and then line 12 of the index is
+// a different line from line 12 of the working tree — so a note that names its
+// diff is only ever placed on that one. A note that does not name one is older
+// than the distinction, or came from a caller that did not draw it, and goes
+// where it always went: the first line that matches its number.
+func sameOrigin(o store.Origin, ref HunkRef) bool {
+	return o == "" || o == ref.Origin()
 }
 
 // rest returns the comments for a path that nothing claimed, so a comment whose

@@ -75,6 +75,7 @@ func commentAdd(ctx context.Context, c *CLI, args []string) error {
 	body := fs.String("body", "", "comment text; omit to read from stdin")
 	summary := fs.String("summary", "", "alias for --body")
 	side := fs.String("side", string(store.SideNew), "which side the line is on: new or old")
+	origin := fs.String("origin", "", "which diff the line number is from: index or worktree")
 	author := fs.String("author", string(store.AuthorAgent), "who is writing: user or agent")
 	hunk := fs.String("hunk", "", "hunk id the comment was written against")
 	asJSON := fs.Bool("json", false, "emit the created comment as JSON")
@@ -110,6 +111,7 @@ func commentAdd(ctx context.Context, c *CLI, args []string) error {
 		Line:   *line,
 		Body:   text,
 		Side:   store.Side(*side),
+		Origin: store.Origin(*origin),
 		Author: store.Author(*author),
 		Hunk:   *hunk,
 		Target: s.Target,
@@ -246,10 +248,13 @@ func clearResolved(c *CLI, a *app.App, filter store.Filter) error {
 // commentJSON is the wire shape agents consume. It is defined separately from
 // store.Comment so the on-disk format can change without breaking the contract.
 type commentJSON struct {
-	ID       string `json:"id"`
-	File     string `json:"file"`
-	Line     int    `json:"line"`
-	Side     string `json:"side"`
+	ID   string `json:"id"`
+	File string `json:"file"`
+	Line int    `json:"line"`
+	Side string `json:"side"`
+	// Origin says which diff Line counts lines in — "index" or "worktree" — on a
+	// file git holds in both places at once. Empty where the note named neither.
+	Origin   string `json:"origin,omitempty"`
 	Body     string `json:"body"`
 	Hunk     string `json:"hunk,omitempty"`
 	Author   string `json:"author"`
@@ -264,6 +269,7 @@ func commentToJSON(c store.Comment) commentJSON {
 		File:     c.File,
 		Line:     c.Line,
 		Side:     string(c.Side),
+		Origin:   string(c.Origin),
 		Body:     c.Body,
 		Hunk:     c.Hunk,
 		Author:   string(c.Author),

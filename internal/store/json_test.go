@@ -86,6 +86,7 @@ func TestAddValidation(t *testing.T) {
 		{"blank body", Comment{File: "f.go", Body: "  "}},
 		{"negative line", Comment{File: "f.go", Body: "x", Line: -1}},
 		{"bad side", Comment{File: "f.go", Body: "x", Side: "sideways"}},
+		{"bad origin", Comment{File: "f.go", Body: "x", Origin: "somewhere"}},
 		{"bad author", Comment{File: "f.go", Body: "x", Author: "robot"}},
 	}
 

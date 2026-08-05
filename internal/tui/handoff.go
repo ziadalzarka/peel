@@ -18,9 +18,15 @@ import (
 
 // handoffPreamble tells the agent how to read the anchors that follow. It is
 // written once, above the notes, rather than annotated onto each one.
-const handoffPreamble = `Address each one. The path and line say where the note was left: a note with no
-line is about the file as a whole, and "old side" means the line number is from
-the file before the change.`
+//
+// What a line number counts lines in is said on the note that needs it rather
+// than explained here in the abstract: "old side" means nothing to a reader who
+// has not been told what the two sides are, and most notes are on neither of the
+// awkward ones.
+const handoffPreamble = `Address each one. The line above each note says where it was left: a path and a
+line number, or a path on its own when the note is about the whole file. Line
+numbers count lines in the file as it is on disk now, unless the note says
+otherwise in brackets.`
 
 // commentHandoff renders review notes as text to hand an agent.
 //
@@ -46,15 +52,35 @@ func commentHandoff(comments []store.Comment) string {
 }
 
 // handoffAnchor names where a note was left, in the file:line form every tool
-// prints paths in — the side only when it is the one that needs saying.
+// prints paths in, saying what the number counts lines in when that is not the
+// file the agent is about to open.
 func handoffAnchor(c store.Comment) string {
 	if c.Line <= 0 {
 		return c.File
 	}
-	if c.Side == store.SideOld {
-		return fmt.Sprintf("%s:%d (old side)", c.File, c.Line)
+	anchor := fmt.Sprintf("%s:%d", c.File, c.Line)
+	if note := lineNumberNote(c); note != "" {
+		return anchor + " (" + note + ")"
 	}
-	return fmt.Sprintf("%s:%d", c.File, c.Line)
+	return anchor
+}
+
+// lineNumberNote explains a line number the agent cannot take at face value.
+//
+// A note on a removed line is numbered against the file before the change, and a
+// note on the staged half of a part-staged file is numbered against the copy in
+// the index — neither of which is what the agent will read off disk.
+func lineNumberNote(c store.Comment) string {
+	old, staged := c.Side == store.SideOld, c.Origin == store.OriginIndex
+	switch {
+	case old && staged:
+		return "line number from the committed file, before anything was staged"
+	case old:
+		return "line number from the file before this change"
+	case staged:
+		return "line number from the staged copy, not the file on disk"
+	}
+	return ""
 }
 
 // inReadingOrder groups the notes by file and orders each file's by line,

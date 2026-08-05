@@ -62,8 +62,13 @@ peel providers
   earlier call.
 - Binary files get one entry with `"binary": true` and no line counts.
 
-`comment list --json` returns `id`, `file`, `line`, `side`, `body`, `hunk`,
-`author`, `resolved`, `createdAt`, `target`.
+`comment list --json` returns `id`, `file`, `line`, `side`, `origin`, `body`,
+`hunk`, `author`, `resolved`, `createdAt`, `target`.
+
+`origin` is only on a note left on a file git holds in both places at once: it
+says which of the two diffs `line` counts lines in. `"worktree"` — or no `origin`
+at all — means the file on disk, which is what you read. `"index"` means the
+staged copy, so find the code by what the note says rather than by the number.
 
 By default both commands are scoped to what is being reviewed: the working tree,
 or the pull request named by `--pr`. `comment list --all` ignores that scope.
@@ -96,7 +101,7 @@ things behave differently in these sessions:
 ## Comment
 
 ```bash
-peel comment add --file <path> --line <n> --body "..." [--side new|old] [--hunk <id>] [--json]
+peel comment add --file <path> --line <n> --body "..." [--side new|old] [--origin index|worktree] [--hunk <id>] [--json]
 peel comment add --file <path> --body "..."                       # file-level note
 peel comment resolve <id>... [--undo]
 peel comment rm <id>...
@@ -107,6 +112,10 @@ peel comment clear [--file <path>] [--resolved] [--author user|agent] [--all]
   the file as a whole.
 - `--side new` (the default) anchors to the changed file. Use `--side old` to
   comment on a line being deleted — the new file has no line number for it.
+- `--origin worktree` (what you want in almost every case) says the line number
+  is the file on disk. Pass `--origin index` only for a note about the staged
+  half of a file `hunks list` reports twice: the two halves both have a line 12,
+  and a note that names neither lands on whichever the TUI draws first.
 - `--author` defaults to `agent`, which is what marks the note as yours in the
   TUI. Don't pass `--author user`.
 - Pass `--hunk <id>` when you have it: the TUI can still show the comment in

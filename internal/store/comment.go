@@ -22,6 +22,24 @@ const (
 // Valid reports whether s is a recognised side.
 func (s Side) Valid() bool { return s == SideNew || s == SideOld }
 
+// Origin names which of the two diffs a comment's line number was read from.
+//
+// A working tree has two — HEAD→index and index→worktree — and a file can carry
+// both at once. Line 12 is a different line in each, so a note that does not say
+// which one it was written on lands on whatever happens to sit at that number in
+// the other.
+type Origin string
+
+const (
+	// OriginIndex anchors to the staged change: the file as the index holds it.
+	OriginIndex Origin = "index"
+	// OriginWorktree anchors to the unstaged change: the file on disk.
+	OriginWorktree Origin = "worktree"
+)
+
+// Valid reports whether o is a recognised origin.
+func (o Origin) Valid() bool { return o == OriginIndex || o == OriginWorktree }
+
 // Author distinguishes notes the user wrote from notes an agent left.
 type Author string
 
@@ -41,9 +59,13 @@ type Comment struct {
 	File string `json:"file"`
 	// Line is the 1-based line number on Side. Zero means the comment applies
 	// to the file as a whole rather than a specific line.
-	Line int    `json:"line"`
-	Side Side   `json:"side"`
-	Body string `json:"body"`
+	Line int  `json:"line"`
+	Side Side `json:"side"`
+	// Origin is which of the two diffs Line was read from. Empty means the note
+	// predates the distinction, or came from a caller that did not make it, and
+	// is placed on whichever side claims it first.
+	Origin Origin `json:"origin,omitempty"`
+	Body   string `json:"body"`
 	// Hunk optionally records the hunk the comment was written against, so the
 	// TUI can still show it after line numbers move.
 	Hunk      string    `json:"hunk,omitempty"`
@@ -68,6 +90,9 @@ func (c Comment) Validate() error {
 	}
 	if c.Side != "" && !c.Side.Valid() {
 		return fmt.Errorf("comment: unknown side %q", c.Side)
+	}
+	if c.Origin != "" && !c.Origin.Valid() {
+		return fmt.Errorf("comment: unknown origin %q", c.Origin)
 	}
 	if c.Author != "" && !c.Author.Valid() {
 		return fmt.Errorf("comment: unknown author %q", c.Author)

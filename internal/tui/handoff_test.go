@@ -36,9 +36,9 @@ func TestHandoffGroupsTheNotesByFile(t *testing.T) {
 	}
 }
 
-// An old-side note's line number is from the file before the change, which is
-// worth saying; a new-side one is the usual case and says nothing extra. A note
-// with no line is about the file as a whole.
+// A line number the agent cannot read off disk is explained where it is used.
+// The ordinary note — the new side of the working tree's change — is the file
+// the agent is about to open, and says nothing extra.
 func TestHandoffAnchorsSayWhichSideAndWhichLine(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -46,7 +46,26 @@ func TestHandoffAnchorsSayWhichSideAndWhichLine(t *testing.T) {
 		want    string
 	}{
 		{"new side", store.Comment{File: "alpha.go", Line: 9, Side: store.SideNew}, "alpha.go:9"},
-		{"old side", store.Comment{File: "alpha.go", Line: 9, Side: store.SideOld}, "alpha.go:9 (old side)"},
+		{
+			"working tree",
+			store.Comment{File: "alpha.go", Line: 9, Side: store.SideNew, Origin: store.OriginWorktree},
+			"alpha.go:9",
+		},
+		{
+			"old side",
+			store.Comment{File: "alpha.go", Line: 9, Side: store.SideOld},
+			"alpha.go:9 (line number from the file before this change)",
+		},
+		{
+			"staged half",
+			store.Comment{File: "alpha.go", Line: 9, Side: store.SideNew, Origin: store.OriginIndex},
+			"alpha.go:9 (line number from the staged copy, not the file on disk)",
+		},
+		{
+			"old side of the staged half",
+			store.Comment{File: "alpha.go", Line: 9, Side: store.SideOld, Origin: store.OriginIndex},
+			"alpha.go:9 (line number from the committed file, before anything was staged)",
+		},
 		{"whole file", store.Comment{File: "alpha.go", Side: store.SideNew}, "alpha.go"},
 	}
 	for _, c := range cases {

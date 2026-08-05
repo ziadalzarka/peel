@@ -269,7 +269,7 @@ var helpBindings = []struct{ keys, action string }{
 	{"b", "hide or show the file tree, giving the diff the whole width"},
 	{"g / G", "first / last row"},
 	{"ctrl+d / ctrl+u", "half a page down / up"},
-	{"space", "fold the file away and move on, or fold a walkthrough note away"},
+	{"space", "fold away the file, the half already staged, or a walkthrough note"},
 	{"s", "stage the file the cursor is in — it folds away and the next one opens"},
 	{"u", "unstage that file, opening it again"},
 	{"a / U", "stage everything / unstage everything"},

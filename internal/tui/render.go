@@ -102,6 +102,8 @@ func (r *Renderer) Row(d Document, i int, st RowState) string {
 		return r.hunk(d, row, st)
 	case RowLine:
 		return r.line(d, row, st)
+	case RowSide:
+		return r.side(d, row, st)
 	case RowNote:
 		return r.note(row, st)
 	case RowComment:
@@ -135,14 +137,71 @@ func (r *Renderer) file(d Document, row Row, st RowState) string {
 		name = r.theme.FileHead.Render(name)
 	}
 
-	summary := fmt.Sprintf("%s +%d -%d", fileLabel(entry), added, removed)
 	return r.fit(strings.Join([]string{
 		" ",
 		r.stateSymbol(entry.State()),
 		r.theme.Dim.Render(arrow),
 		name,
-		r.theme.Dim.Render(summary),
+		r.fileSummary(entry, added, removed),
 	}, " "))
+}
+
+// fileSummary counts what changed, split in two when the file is in both places
+// at once.
+//
+// A folded part-staged file shows nothing but this line, so this is where the
+// split has to be said: `+51 -0` on a file that is 47 lines staged and 4 lines
+// new reads as one change of 51 lines, and the reviewer has no way to tell that
+// only four of them are theirs to look at.
+func (r *Renderer) fileSummary(e git.FileEntry, added, removed int) string {
+	label := fileLabel(e)
+	if e.State() != git.StatePartial {
+		return r.theme.Dim.Render(fmt.Sprintf("%s +%d -%d", label, added, removed))
+	}
+	staged, stagedGone := e.Staged.Stats()
+	work, workGone := e.Unstaged.Stats()
+	return r.theme.Dim.Render(label) +
+		"  " + r.theme.Staged.Render(fmt.Sprintf("index +%d -%d", staged, stagedGone)) +
+		"  " + r.theme.Partial.Render(fmt.Sprintf("worktree +%d -%d", work, workGone))
+}
+
+// side heads one half of a part-staged file.
+//
+// It is drawn as a rule across the pane rather than a word at the end of a line:
+// the two halves are the same green `+` lines one after the other, and what the
+// reviewer needs is not a label to read but a place where one change visibly
+// stops and the other starts.
+func (r *Renderer) side(d Document, row Row, st RowState) string {
+	ref := d.Sides[row.Side]
+	style, label := r.theme.Partial, "unstaged · not in the index yet"
+	arrow := "  "
+	if ref.Staged {
+		style, label = r.theme.Staged, "staged · already in the index"
+		arrow = "▾ "
+		if ref.Folded {
+			arrow = "▸ "
+		}
+	}
+	if st.Cursor {
+		style = r.theme.Cursor
+	}
+	head := strings.Repeat(" ", sideIndent) + r.theme.Dim.Render(arrow) +
+		style.Render(label) + "  " + r.theme.Dim.Render(fmt.Sprintf("+%d -%d", ref.Added, ref.Removed))
+	return r.rule(r.marker(st) + head)
+}
+
+// sideIndent lines a side's arrow up under the file's own, so the two halves
+// read as belonging to the header above them.
+const sideIndent = 3
+
+// rule fills the rest of the row with a horizontal line, making a heading read
+// as a break in the diff rather than another line of it.
+func (r *Renderer) rule(head string) string {
+	used := ansi.StringWidth(head)
+	if used+2 >= r.width {
+		return r.fit(head)
+	}
+	return head + " " + r.theme.Dim.Render(strings.Repeat("─", r.width-used-1))
 }
 
 func (r *Renderer) hunk(d Document, row Row, st RowState) string {
@@ -151,15 +210,31 @@ func (r *Renderer) hunk(d Document, row Row, st RowState) string {
 	if st.Cursor {
 		style = r.theme.Cursor
 	}
-	origin := r.theme.Dim.Render("worktree")
-	if ref.Staged {
-		origin = r.theme.Staged.Render("index")
-	}
 	title := ref.Hunk.Section
 	if title == "" {
 		title = "⋯"
 	}
-	return r.fit(r.marker(st) + codeIndent(d.Layout) + style.Render(title) + "  " + origin)
+	head := r.marker(st) + codeIndent(d.Layout) + style.Render(title)
+	// Which half this hunk is in is named here as well as on the heading above
+	// it, since the heading scrolls off and a hunk halfway down a long staged
+	// change has to say what it is on its own.
+	if origin := r.hunkOrigin(d, ref); origin != "" {
+		head += "  " + origin
+	}
+	return r.fit(head)
+}
+
+// hunkOrigin names the half of the file a hunk is in, and is empty for a file
+// with only one — where every hunk would carry the same word and it would say
+// nothing.
+func (r *Renderer) hunkOrigin(d Document, ref HunkRef) string {
+	if ref.File < 0 || ref.File >= len(d.Files) || d.Files[ref.File].Entry.Staged == nil {
+		return ""
+	}
+	if ref.Staged {
+		return r.theme.Staged.Render("index")
+	}
+	return r.theme.Partial.Render("worktree")
 }
 
 func codeIndent(l Layout) string {
