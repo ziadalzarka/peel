@@ -489,6 +489,25 @@ func (r *Renderer) stateSymbol(s git.StageState) string {
 	}
 }
 
+// dirSymbol is a directory's state, said quietly. A directory only reports what
+// is under it, and a tree is mostly directories: drawn in the same colours as
+// the files, every changed path down to a file is a bright mark, and the row
+// that is actually staged or half-staged is the hardest one to pick out. So a
+// directory keeps the tick that says a whole directory is done — the one thing
+// a tree can say that a list cannot — dimmed to the weight of the guides beside
+// it, and reports part-way as a dot small enough to read as a trace of the
+// files below rather than a state of its own.
+func (r *Renderer) dirSymbol(s git.StageState) string {
+	switch s {
+	case git.StateStaged:
+		return r.theme.Dim.Render("✓")
+	case git.StatePartial:
+		return r.theme.Dim.Render("·")
+	default:
+		return " "
+	}
+}
+
 func lineNumberOf(l git.Line) int {
 	if l.Kind == git.LineRemoved {
 		return l.OldLine

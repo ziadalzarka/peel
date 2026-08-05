@@ -219,7 +219,6 @@ func (m *Model) fileLines(height int) []string {
 func (m *Model) paneLine(row paneRow, marked string, width int) string {
 	guides := strings.Repeat(treeGuide, row.Depth)
 	indent := m.theme.Dim.Render(guides)
-	symbol := m.renderer.stateSymbol(row.State)
 	room := width - filePaneGutter - ansi.StringWidth(guides)
 
 	if row.File < 0 {
@@ -232,7 +231,7 @@ func (m *Model) paneLine(row paneRow, marked string, width int) string {
 			style = m.theme.FileHead
 		}
 		name := shorten(row.Name+"/", max(room, 2))
-		return fit(" "+symbol+" "+indent+style.Render(name), width)
+		return fit(" "+m.renderer.dirSymbol(row.State)+" "+indent+style.Render(name), width)
 	}
 
 	added, removed := m.doc.Files[row.File].Entry.Stats()
@@ -255,7 +254,7 @@ func (m *Model) paneLine(row paneRow, marked string, width int) string {
 		marker = m.theme.Cursor.Render("▌")
 		styled = m.theme.Cursor.Render(name)
 	}
-	line := marker + symbol + " " + indent + styled
+	line := marker + m.renderer.stateSymbol(row.State) + " " + indent + styled
 	if counts == "" {
 		return fit(line, width)
 	}

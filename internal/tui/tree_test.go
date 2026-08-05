@@ -166,6 +166,28 @@ func TestTheFilePaneDrawsTheTree(t *testing.T) {
 	}
 }
 
+// A directory says what is under it quietly. The dot belongs to the file that
+// is half staged: a tree is mostly directories, and one bright mark per
+// directory above a change buries the row that carries the state.
+func TestThePaneDrawsADirectorysStateQuietly(t *testing.T) {
+	session := pathSession(t, "internal/tui/view.go")
+	staged := *session.Files[0].Unstaged
+	session.Files[0].Staged = &staged
+
+	m := newModel(t, newFakeBackend(session), WithSize(100, 20))
+	rows := paneLines(t, m)
+
+	if strings.Contains(rows[0], "●") {
+		t.Errorf("the directory row is %q, want it without the file's own ●", rows[0])
+	}
+	if !strings.Contains(rows[0], "·") {
+		t.Errorf("the directory row is %q, want the quiet · of a part-staged file below it", rows[0])
+	}
+	if !strings.Contains(rows[1], "●") {
+		t.Errorf("the file row is %q, want the ● that says it is staged and unstaged at once", rows[1])
+	}
+}
+
 // The pane scrolls to the row the marked file is on, which is past its own
 // index once the directories above it have rows of their own.
 func TestThePaneScrollsToTheMarkedFilesRow(t *testing.T) {
