@@ -1098,6 +1098,56 @@ func TestResolveAndDeleteActOnTheCommentAtTheCursor(t *testing.T) {
 	}
 }
 
+// TestDeletingACommentLeavesTheCursorOnItsLine holds `D` to the line it was
+// pressed on. The comment named by the cursor is gone by the time the rebuild
+// looks for it, and falling back to the top of the file would throw away the
+// reviewer's place in the diff.
+func TestDeletingACommentLeavesTheCursorOnItsLine(t *testing.T) {
+	backend := reviewedByBoth(t)
+	m := newModel(t, backend)
+
+	row := m.doc.RowOfComment("a1")
+	if row < 0 {
+		t.Fatal("the comment was not placed")
+	}
+	want, wantLine, ok := m.doc.LineAt(m.doc.AnchorOf(row))
+	if !ok {
+		t.Fatal("the comment is not anchored to a line")
+	}
+	m.moveTo(row)
+
+	press(t, m, "D")
+
+	got, gotLine, ok := m.doc.LineAt(m.cursor)
+	if !ok {
+		t.Fatalf("cursor is on a %v, want the line the comment was on", m.doc.Rows[m.cursor].Kind)
+	}
+	if got.ID != want.ID || gotLine != wantLine {
+		t.Errorf("cursor on %v line %d, want %v line %d", got.ID, gotLine, want.ID, wantLine)
+	}
+}
+
+// TestHidingTheAgentsCommentsLeavesTheCursorOnTheLine is the same rule for `A`:
+// the comment under the cursor goes away without being deleted, and the reviewer
+// stays where they were reading.
+func TestHidingTheAgentsCommentsLeavesTheCursorOnTheLine(t *testing.T) {
+	m := newModel(t, reviewedByBoth(t))
+
+	row := m.doc.RowOfComment("a1")
+	want, wantLine, ok := m.doc.LineAt(m.doc.AnchorOf(row))
+	if !ok {
+		t.Fatal("the comment is not anchored to a line")
+	}
+	m.moveTo(row)
+
+	press(t, m, "A")
+
+	got, gotLine, ok := m.doc.LineAt(m.cursor)
+	if !ok || got.ID != want.ID || gotLine != wantLine {
+		t.Errorf("cursor on %v line %d, want %v line %d", got.ID, gotLine, want.ID, wantLine)
+	}
+}
+
 // reviewedByBoth is a diff commented on by an agent and by the reviewer, which
 // is what `A` and `X` have to tell apart.
 func reviewedByBoth(t *testing.T) *fakeBackend {

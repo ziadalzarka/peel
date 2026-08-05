@@ -557,21 +557,27 @@ type spot struct {
 }
 
 // spot records where the cursor is, so a rebuild can put it back.
+//
+// A comment records the line it hangs off as well as its own ID, since the
+// rebuild that follows deleting or hiding one is the rebuild where the ID names
+// nothing: the cursor belongs on the code the comment was about, not at the top
+// of the file.
 func (m *Model) spot() spot {
 	at := spot{path: m.currentPath(), line: -1}
-	if c, ok := m.doc.CommentAt(m.cursor); ok {
+	row := m.cursor
+	if c, ok := m.doc.CommentAt(row); ok {
 		at.comment = c.ID
-		return at
+		row = m.doc.AnchorOf(row)
 	}
-	if side := m.doc.SideAt(m.cursor); side >= 0 {
+	if side := m.doc.SideAt(row); side >= 0 {
 		at.side = m.doc.Sides[side].Origin()
 		return at
 	}
-	switch target := m.doc.TargetAt(m.cursor); target.Kind {
+	switch target := m.doc.TargetAt(row); target.Kind {
 	case TargetHunk:
 		at.hunk = m.doc.Hunks[target.Hunk].ID
 	case TargetLine:
-		if ref, index, ok := m.doc.LineAt(m.cursor); ok {
+		if ref, index, ok := m.doc.LineAt(row); ok {
 			at.hunk, at.line = ref.ID, index
 		}
 	}
@@ -579,7 +585,7 @@ func (m *Model) spot() spot {
 }
 
 // moveToSpot puts the cursor back on what spot named, falling back through the
-// hunk and then the file when the exact line has gone.
+// line, the hunk and then the file when the comment or the exact line has gone.
 func (m *Model) moveToSpot(at spot) {
 	if row := m.doc.RowOfComment(at.comment); row >= 0 {
 		m.moveTo(row)

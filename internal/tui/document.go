@@ -948,6 +948,19 @@ func (d Document) CommentAt(row int) (store.Comment, bool) {
 	return d.Comments[r.Comment], true
 }
 
+// AnchorOf returns the row a comment hangs off: the line it was written on, or
+// the file header when it is a note on the file as a whole. Every other row is
+// its own anchor.
+func (d Document) AnchorOf(row int) int {
+	if row < 0 || row >= len(d.Rows) {
+		return row
+	}
+	for row > 0 && d.Rows[row].Kind == RowComment {
+		row--
+	}
+	return row
+}
+
 // commentIndex places comments at the rows they anchor to, using each comment
 // at most once so a line appearing on both the staged and unstaged side does
 // not duplicate it.
