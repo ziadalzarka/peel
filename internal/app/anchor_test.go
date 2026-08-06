@@ -44,7 +44,7 @@ func note(t *testing.T, a *app.App, s *app.Session, line int, body string) store
 		t.Fatalf("Snapshot: %v", err)
 	}
 	c.Blob = blob
-	created, err := a.Comments.Add(c)
+	created, err := a.Local.Comments.Add(c)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestRelocateFollowsTheStagedHalfWithoutReadingTheDisk(t *testing.T) {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	c.Blob = blob
-	if _, err := a.Comments.Add(c); err != nil {
+	if _, err := a.Local.Comments.Add(c); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -161,7 +161,7 @@ func TestRelocateFollowsTheStagedHalfWithoutReadingTheDisk(t *testing.T) {
 	repo.Write("svc.go", "on disk\nb\nc\nd\n")
 
 	s, _ = a.LoadWorkingTree(ctx)
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	got := a.Relocate(ctx, s, all)
 	if got[0].Outdated {
 		t.Fatal("the staged c is still there; the note must not read as outdated")
@@ -192,7 +192,7 @@ func TestRelocateTellsTwoSnapshotsOfOneFileApart(t *testing.T) {
 	repo.Write("svc.go", "NEWER\nNEW\na\nb\nc\nd\n")
 	s, _ = a.LoadWorkingTree(ctx)
 
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	got := a.Relocate(ctx, s, all)
 	byID := map[string]store.Comment{}
 	for _, c := range got {
@@ -217,7 +217,7 @@ func TestRelocateFollowsALineThatShiftedUp(t *testing.T) {
 	repo.Write("svc.go", "a\nd\ne\nCHANGED\n")
 	s, _ = a.LoadWorkingTree(ctx)
 
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	got := a.Relocate(ctx, s, all)
 	if got[0].Outdated {
 		t.Fatal("e is still there; the note must not read as outdated")
@@ -244,7 +244,7 @@ func TestRelocateFollowsANoteLeftOnARemovedLine(t *testing.T) {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	c.Blob = blob
-	if _, err := a.Comments.Add(c); err != nil {
+	if _, err := a.Local.Comments.Add(c); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
@@ -254,7 +254,7 @@ func TestRelocateFollowsANoteLeftOnARemovedLine(t *testing.T) {
 	repo.Write("svc.go", "a\nEXTRA\nb\nd\n")
 
 	s, _ = a.LoadWorkingTree(ctx)
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	got := a.Relocate(ctx, s, all)
 	if got[0].Outdated {
 		t.Fatal("GONE is still in the index; the note must not read as outdated")
@@ -300,13 +300,13 @@ func TestSnapshotAnchorsAFileGitIsNotTrackingYet(t *testing.T) {
 		t.Fatalf("Snapshot on an untracked file: %v", err)
 	}
 	c.Blob = blob
-	if _, err := a.Comments.Add(c); err != nil {
+	if _, err := a.Local.Comments.Add(c); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 
 	repo.Write("brand-new.go", "zero\none\ntwo\nthree\n")
 	s, _ = a.LoadWorkingTree(ctx)
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	got := a.Relocate(ctx, s, all)
 	if got[0].Line != 3 {
 		t.Errorf("line = %d, want 3 — an untracked file's lines move like any other", got[0].Line)
@@ -324,7 +324,7 @@ func TestRelocateLeavesANoteAloneWhenTheFileHasGone(t *testing.T) {
 	repo.Remove("svc.go")
 	s, _ = a.LoadWorkingTree(ctx)
 
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	got := a.Relocate(ctx, s, all)
 	if len(got) != 1 {
 		t.Fatalf("comments = %d, want the note kept", len(got))
@@ -343,7 +343,7 @@ func TestRelocateIsStableWhenRunTwice(t *testing.T) {
 	repo.Write("svc.go", "NEW\na\nb\nc\nCHANGED\n")
 	s, _ = a.LoadWorkingTree(ctx)
 
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	// Relocating is worked out from what is stored, never from the last answer,
 	// so repeating it must not walk the line further each time.
 	first := a.Relocate(ctx, s, all)
@@ -356,7 +356,7 @@ func TestRelocateIsStableWhenRunTwice(t *testing.T) {
 		t.Errorf("relocating an already-relocated note gave %d, want 4 — it must not drift",
 			third[0].Line)
 	}
-	if stored, _ := a.Comments.List(store.Filter{}); stored[0].Line != 3 {
+	if stored, _ := a.Local.Comments.List(store.Filter{}); stored[0].Line != 3 {
 		t.Errorf("stored line = %d, want the original 3 left on disk", stored[0].Line)
 	}
 }
@@ -381,7 +381,7 @@ func TestRelocateFollowsALineThatShiftedDown(t *testing.T) {
 		t.Fatalf("reload: %v", err)
 	}
 
-	all, err := a.Comments.List(store.Filter{})
+	all, err := a.Local.Comments.List(store.Filter{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -420,7 +420,7 @@ func TestRelocateMarksARewrittenLineOutdatedRatherThanMovingIt(t *testing.T) {
 		t.Fatalf("reload: %v", err)
 	}
 
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	got := a.Relocate(ctx, s, all)
 	if !got[0].Outdated {
 		t.Fatal("outdated = false, want the note to admit its code is gone")
@@ -439,7 +439,7 @@ func TestRelocateLeavesAnUnchangedFileAlone(t *testing.T) {
 	s, _ := a.LoadWorkingTree(ctx)
 	note(t, a, s, 4, "pass a real ctx")
 
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	got := a.Relocate(ctx, s, all)
 	if got[0].Outdated || got[0].Line != 4 || got[0].MovedFrom != 0 {
 		t.Errorf("comment = line %d, from %d, outdated %v; want it left at 4",
@@ -455,7 +455,7 @@ func TestRelocateLeavesANoteWithNoAnchorWhereItWas(t *testing.T) {
 
 	s, _ := a.LoadWorkingTree(ctx)
 	// A note written before peel took snapshots has no blob to measure from.
-	if _, err := a.Comments.Add(store.Comment{
+	if _, err := a.Local.Comments.Add(store.Comment{
 		File: "svc.go", Line: 4, Side: store.SideNew,
 		Origin: store.OriginWorktree, Body: "old note", Author: store.AuthorUser,
 	}); err != nil {
@@ -465,7 +465,7 @@ func TestRelocateLeavesANoteWithNoAnchorWhereItWas(t *testing.T) {
 	repo.Write("svc.go", "package svc\n\nimport \"context\"\n\nfunc Run() {\n\tdoWork(ctx)\n}\n")
 	s, _ = a.LoadWorkingTree(ctx)
 
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	got := a.Relocate(ctx, s, all)
 	if got[0].Line != 4 || got[0].Outdated {
 		t.Errorf("comment = line %d, outdated %v; want it left exactly as stored",
@@ -508,7 +508,7 @@ func TestKeepAnchorsReleasesSnapshotsWhenTheNoteGoes(t *testing.T) {
 		t.Fatalf("KeepAnchors: %v", err)
 	}
 
-	if err := a.Comments.Remove(created.ID); err != nil {
+	if err := a.Local.Comments.Remove(created.ID); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	if err := a.KeepAnchors(ctx); err != nil {
@@ -546,7 +546,7 @@ func TestRelocateReadsWithoutWritingObjects(t *testing.T) {
 	repo.Write("svc.go", "package svc\n\nimport \"context\"\n\nfunc Run() {\n\tdoWork(ctx)\n}\n")
 	for range 5 {
 		s, _ = a.LoadWorkingTree(ctx)
-		all, _ := a.Comments.List(store.Filter{})
+		all, _ := a.Local.Comments.List(store.Filter{})
 		if got := a.Relocate(ctx, s, all); got[0].Line != 6 {
 			t.Fatalf("line = %d, want 6", got[0].Line)
 		}
@@ -569,7 +569,7 @@ func runNote(t *testing.T, a *app.App, s *app.Session, line, end int, body strin
 		t.Fatalf("Snapshot: %v", err)
 	}
 	c.Blob = blob
-	created, err := a.Comments.Add(c)
+	created, err := a.Local.Comments.Add(c)
 	if err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -589,7 +589,7 @@ func TestRelocateCarriesBothEndsOfARun(t *testing.T) {
 	repo.Write("svc.go", "X\nY\na\nb\nc\nd\ne\n")
 	s, _ = a.LoadWorkingTree(ctx)
 
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	got := a.Relocate(ctx, s, all)
 	if got[0].Outdated {
 		t.Fatal("c and d are both still there; the note must not read as outdated")
@@ -613,7 +613,7 @@ func TestARunWithCodeInsertedInsideItIsOutdated(t *testing.T) {
 	repo.Write("svc.go", "a\nb\nc\nBETWEEN\nd\ne\n")
 	s, _ = a.LoadWorkingTree(ctx)
 
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	got := a.Relocate(ctx, s, all)
 	if !got[0].Outdated {
 		t.Error("the note reads as current, and now covers a line nobody wrote about")
@@ -634,7 +634,7 @@ func TestARunWithALineTakenOutOfItIsOutdated(t *testing.T) {
 	repo.Write("svc.go", "a\nb\nc\ne\nf\n")
 	s, _ = a.LoadWorkingTree(ctx)
 
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	got := a.Relocate(ctx, s, all)
 	if !got[0].Outdated {
 		t.Error("the note reads as current, with a line out of the middle of what it covers")
@@ -653,7 +653,7 @@ func TestARunWithOneEndRewrittenIsOutdated(t *testing.T) {
 	repo.Write("svc.go", "a\nb\nc\nREWRITTEN\ne\n")
 	s, _ = a.LoadWorkingTree(ctx)
 
-	all, _ := a.Comments.List(store.Filter{})
+	all, _ := a.Local.Comments.List(store.Filter{})
 	got := a.Relocate(ctx, s, all)
 	if !got[0].Outdated {
 		t.Error("the note reads as current, with half the run it covers gone")

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ziadalzarka/peel/internal/app"
+	"github.com/ziadalzarka/peel/internal/forge"
 	"github.com/ziadalzarka/peel/internal/git"
 	"github.com/ziadalzarka/peel/internal/store"
 )
@@ -207,6 +208,15 @@ type fakeBackend struct {
 	regenerate bool
 	walkBody   string
 
+	// posted is every review handed to the code host, in order, and payloads is
+	// every one that was only built to be asked about.
+	posted   []forge.Review
+	payloads []forge.Review
+	// postErr fails the post itself, leaving the question already answered.
+	postErr error
+	// payloadErr fails building the payload, as an empty review does.
+	payloadErr error
+
 	// opErr fails the next mutation.
 	opErr error
 	// reloadErr fails Reload.
@@ -389,6 +399,46 @@ func (f *fakeBackend) Walkthrough(_ context.Context, regenerate bool) (string, e
 		return "", err
 	}
 	return f.walkBody, nil
+}
+
+// ReviewPayload builds what posting would send out of the comments the fake is
+// holding, the way the real backend builds it out of the store: the unresolved
+// ones that have a line to sit on.
+func (f *fakeBackend) ReviewPayload(body string, event forge.ReviewEvent) (forge.Review, error) {
+	if f.payloadErr != nil {
+		return forge.Review{}, f.payloadErr
+	}
+	review := forge.Review{Body: body, Event: event}
+	for _, c := range f.comments {
+		if c.Resolved || c.Line <= 0 {
+			continue
+		}
+		review.Comments = append(review.Comments, forge.ReviewComment{
+			Path: c.File, Line: c.Line, Side: "RIGHT", Body: c.Body,
+		})
+	}
+	if err := review.Validate(); err != nil {
+		return forge.Review{}, err
+	}
+	f.payloads = append(f.payloads, review)
+	return review, nil
+}
+
+func (f *fakeBackend) SubmitReview(_ context.Context, body string, event forge.ReviewEvent) (forge.Review, error) {
+	review, err := f.ReviewPayload(body, event)
+	if err != nil {
+		return forge.Review{}, err
+	}
+	if f.postErr != nil {
+		return forge.Review{}, f.postErr
+	}
+	f.posted = append(f.posted, review)
+	for i := range f.comments {
+		if f.comments[i].Line > 0 {
+			f.comments[i].Resolved = true
+		}
+	}
+	return review, nil
 }
 
 // take consumes a one-shot error, so a test can fail exactly one operation.

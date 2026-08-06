@@ -286,7 +286,9 @@ Flags:
   --rev <ref>      review everything since a commit — HEAD~2, a hash, a branch.
                    Commits made since it and uncommitted work alike. Read-only:
                    staging only means something against HEAD
-  --pr <ref>       review a pull request: a number, owner/repo#number, or a URL
+  --pr <ref>       review a pull request: a number, owner/repo#number, or a URL.
+                   Its review is filed under the pull request rather than in a
+                   checkout, so owner/repo#number works from any directory
   --forge <name>   forge provider to use (default: first available)
   --provider <name>
                    AI provider to use for walkthroughs (default: first available)

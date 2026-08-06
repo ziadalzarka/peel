@@ -29,15 +29,20 @@ keymap.
   working tree is drawn as two halves under their own headings, the staged one
   folded away, so what you scroll is what you have not reviewed. Change a file
   after staging it and it opens again, on the new work alone.
-- **Notes an agent can read.** Comments go to `.git/peel/comments.json`, which
-  Claude Code reads through the bundled skill, so "address my review comments"
-  needs no copy-paste. `C` copies your own as text for an agent that cannot.
+- **Notes an agent can read.** Comments go to a JSON file — `.git/peel/comments.json`
+  for the working tree — which Claude Code reads through the bundled skill, so
+  "address my review comments" needs no copy-paste. `C` copies your own as text
+  for an agent that cannot.
 - **A walkthrough in the diff.** `w` reorders the diff into the steps an AI
   narrative reads it in, each explanation above the code it covers.
 - **It keeps up.** Follow mode re-reads the repository as it changes, and the
   screen moves on the keypress rather than waiting for git.
 - **Read-only bases.** `--rev` reviews further back than HEAD, `--pr` reviews a
-  GitHub pull request.
+  GitHub pull request — from any checkout, or none at all.
+- **A pull request's review follows the pull request.** Its notes, folds and
+  narrative are filed under `#412` rather than inside one clone, so you can pick
+  the pass back up anywhere. `P` posts it: a summary, approve or request changes
+  or comment, and one last question before anything leaves the machine.
 
 ## Install
 
@@ -129,6 +134,7 @@ repository changes.
 | `x` / `D` | resolve / delete the comment at the cursor |
 | `C` | copy your own comments as text, to paste into an agent |
 | `A` / `X` | hide the comments an agent left / delete every one of them |
+| `P` | post the review to the pull request: a summary, then approve / request changes / comment |
 | `\` | toggle unified and side-by-side |
 | `w` / `W` | walkthrough on-off / regenerate it |
 | `f` | follow: re-read the repository as it changes |
@@ -190,8 +196,8 @@ change that deletes nothing, and `X` deletes every one of them at once, after
 asking. Neither can reach a note you wrote, and nothing an agent writes replaces
 one: comments are only ever appended.
 
-Which of the two `A` was left on is remembered between runs, in
-`.git/peel/view.json` and per review, so a diff you read without the agent's
+Which of the two `A` was left on is remembered between runs, with the rest of
+that review's state — `.git/peel/view.json` for the working tree — so a diff you read without the agent's
 review does not have it back the next morning. The header says `agent hidden`
 for as long as it is, and a review with no agent notes in it opens plain
 whatever was written down — there is nothing to take out.
@@ -267,7 +273,8 @@ the next exactly as staging does. What is left open is what is left to read. On 
 heading of a half it folds that half instead, leaving the rest of the file where it
 is.
 
-Folds are remembered between runs, in `.git/peel/folds.json` and per review, so a
+Folds are remembered between runs, per review — in `.git/peel/folds.json` for the
+working tree — so a
 pass through a large diff picks up where you left it instead of starting again
 from the top. A file whose change has been committed away loses its fold: the
 next change to it is a new thing to read, not something to hide. A half's fold is
@@ -284,7 +291,45 @@ the notes and the code together. `j`/`k` stop on a note like they stop on a hunk
 order, and `W` writes a new one. Staging keeps the notes; when the code moves on
 underneath them the header says `stale`.
 
-Walkthroughs are cached in `.git/peel/`, so reopening does not pay for one twice.
+Walkthroughs are cached with the rest of the review's state — in `.git/peel/` for
+the working tree — so reopening does not pay for one twice.
+
+### Pull requests
+
+`peel --pr 412` reads a pull request through `gh`: a number resolves against the
+repository you are standing in, and `owner/repo#412` or a URL names one directly.
+That form needs no repository at all, so a pull request can be read from any
+directory.
+
+A pull request is the same pull request from every clone, so its review is not
+kept inside one. The notes, the folds, the `A` filter and the cached walkthrough
+all live in a file named after the pull request itself:
+
+```
+~/.local/state/peel/reviews/github/cli/cli/412.json
+```
+
+`$PEEL_STATE_DIR` moves that directory, and `$XDG_STATE_HOME` moves it the way it
+moves everything else. Start reading #412 in one worktree, carry on in another
+clone tomorrow, and it is the same pass with the same notes still on it. The
+working tree's own review stays in `.git/peel`, since it means nothing anywhere
+else. Notes written on a pull request before this — the ones stranded in some
+checkout's `.git/peel` — are moved into the pull request's file the next time you
+open it from that checkout.
+
+`P` posts the review. It asks for a summary, then what the review does — `a`
+approve, `r` request changes, `c` comment — and then the last question, which
+says how many notes are about to go where:
+
+```
+post 6 comments to cli/cli#412 as request changes?
+```
+
+Only `y` sends it. What goes is every unresolved note on the review, and posting
+resolves them: they are the other side's to answer now. A note left on a file
+rather than a line has nowhere inline to attach, so the panel says it is staying
+behind. `peel pr submit` does the same thing from the command line, and prints
+the whole payload before it asks.
 
 ## For agents
 
@@ -307,10 +352,14 @@ Two things it deliberately will not do:
   `git add` directly, so exposing it here would only add a way for changes to
   reach the index unreviewed.
 - **Post anything.** `peel pr submit` is the only command that leaves the machine.
-  It prints the exact payload, then waits for an explicit `y`.
+  It prints the exact payload, then waits for an explicit `y`. `P` in the UI is
+  the same operation with the same last question, pressed by a person.
 
-Comments are written straight through to `.git/peel/comments.json`, so there is no
-daemon and no session to attach to: review, quit, *then* ask Claude.
+Comments are written straight through to their review's own file — the working
+tree's in `.git/peel/comments.json`, a pull request's under the state directory
+— so there is no daemon and no session to attach to: review, quit, *then* ask
+Claude. An agent reads a pull request's notes with `peel --pr <ref> comment
+list`, since that is what says which review is being asked about.
 
 For an agent that cannot read that file — a browser tab, or one on another
 machine — `C` puts the review on the clipboard as text to paste into it: one
@@ -325,7 +374,8 @@ or `clip.exe`.
 
 ```
 internal/git       diff parsing, status, and whole-file staging
-internal/store     comments, folds, views, and the walkthrough cache, under .git/peel/
+internal/store     comments, folds, views, and the walkthrough cache — in .git/peel/
+                   for the working tree, one file per pull request outside it
 internal/ai        walkthrough providers (claude-code, codex)
 internal/forge     pull request providers (github, via gh)
 internal/registry  provider lookup, shared by both

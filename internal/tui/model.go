@@ -29,6 +29,11 @@ const (
 	modeHelp
 	modeConfirm
 	modeFind
+	// modeReview is the summary being written for a review about to be posted,
+	// and modeReviewEvent is the choice of what posting it does to the pull
+	// request. The question that actually sends it is a modeConfirm after those.
+	modeReview
+	modeReviewEvent
 )
 
 // Model is the review UI's state.
@@ -102,6 +107,10 @@ type Model struct {
 	// ask is the question the footer is putting to the reviewer, and what to do
 	// if they say yes. It is set only in modeConfirm.
 	ask *confirm
+	// posting is the review being sent to the code host: the summary written for
+	// it and what it does to the pull request. It is held from `P` until the
+	// question is answered, since the editor it was written in is gone by then.
+	posting *posting
 	// find is the file search, and is only being typed into in modeFind.
 	find finder
 	// helpTop is the first line of the help screen drawn, for the terminals too
@@ -286,9 +295,14 @@ const (
 	draftMaxHeight = 12
 )
 
+// commentPlaceholder is what the editor says before a note is written. The
+// summary editor `P` opens borrows the same textarea and says something else
+// while it holds it, so this is what it is put back to.
+const commentPlaceholder = "Write a review comment…"
+
 func newInput(theme Theme) textarea.Model {
 	ta := textarea.New()
-	ta.Placeholder = "Write a review comment…"
+	ta.Placeholder = commentPlaceholder
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 4000
 	// The editor draws in the comment's own bar and colour, so a note being
@@ -341,6 +355,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case walkthroughMsg:
 		m.busy = ""
 		m.showWalkthrough(msg.body)
+		return m, nil
+	case postedMsg:
+		m.busy = ""
+		m.status = msg.note
 		return m, nil
 	case errMsg:
 		m.busy = ""
@@ -542,6 +560,10 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 		return m.confirmKey(msg)
 	case modeFind:
 		return m.findKey(msg)
+	case modeReview:
+		return m.reviewKey(msg)
+	case modeReviewEvent:
+		return m.reviewEventKey(msg)
 	default:
 		return m.browseKey(msg)
 	}
@@ -635,6 +657,8 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 		m.toggleAgentComments()
 	case "X":
 		m.askClearAgentComments()
+	case "P":
+		m.openReview()
 	case `\`:
 		m.setLayout(m.layout.Toggle())
 	case "w":
@@ -2010,9 +2034,13 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 		// editor has to be put away with it rather than left focused and invisible.
 		// A question waiting for an answer goes the same way: what it was about to
 		// delete was read before the reload. So does a search: the files it was
-		// listing are the ones this reload has just replaced.
+		// listing are the ones this reload has just replaced. And so does a review
+		// being written, since the notes it was about to carry have just been read
+		// again.
 		m.input.Blur()
+		m.input.Placeholder = commentPlaceholder
 		m.mode, m.ask, m.editing, m.find = modeBrowse, nil, "", finder{}
+		m.posting = nil
 	}
 	// The narrative is kept: it is the notes the reviewer is reading, and
 	// dropping it would reorder the diff underneath them every time they staged
@@ -2053,8 +2081,11 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 func (m *Model) acceptPoll(msg loadedMsg) bool {
 	// A search half typed is a file about to be gone to, the way a comment half
 	// written is: relisting what it matches mid-thought is worse than waiting for
-	// the next tick, which will still find whatever changed.
-	if m.mode == modeComment || m.mode == modeConfirm || m.mode == modeFind {
+	// the next tick, which will still find whatever changed. A review being
+	// written is the same, and the one where a redraw would also take away the
+	// count of what is about to be sent.
+	switch m.mode {
+	case modeComment, modeConfirm, modeFind, modeReview, modeReviewEvent:
 		return false
 	}
 	// Lines marked to comment on are a note half written: redrawing the diff
@@ -2458,6 +2489,9 @@ func (m *Model) resize(width, height int) {
 	m.renderer.SetWidth(m.diffWidth())
 	if m.mode == modeComment {
 		m.input.SetWidth(m.draftWidth())
+	}
+	if m.mode == modeReview {
+		m.input.SetWidth(m.reviewWidth())
 	}
 	// A walkthrough's explanations and a comment's text are both wrapped into
 	// rows, so a resize changes how many rows the document has.

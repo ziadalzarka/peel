@@ -80,6 +80,9 @@ func (s *Session) CommentFilter() store.Filter {
 
 // LoadWorkingTree reads the current state of the repository.
 func (a *App) LoadWorkingTree(ctx context.Context) (*Session, error) {
+	if err := a.needRepo(); err != nil {
+		return nil, err
+	}
 	status, err := a.Repo.LoadStatus(ctx)
 	if err != nil {
 		return nil, err
@@ -111,6 +114,9 @@ func (a *App) LoadWorkingTree(ctx context.Context) (*Session, error) {
 func (a *App) LoadRevision(ctx context.Context, ref string) (*Session, error) {
 	if ref == "" {
 		return a.LoadWorkingTree(ctx)
+	}
+	if err := a.needRepo(); err != nil {
+		return nil, err
 	}
 	base, err := a.Repo.ResolveCommit(ctx, ref)
 	if err != nil {
@@ -144,6 +150,10 @@ func (a *App) LoadRevision(ctx context.Context, ref string) (*Session, error) {
 
 // LoadPullRequest fetches a pull request for review. providerName may be empty
 // to use the first available forge.
+//
+// This is the one session that does not need a repository around it: the
+// changes are the host's and the review is filed under the pull request, so a
+// pull request can be read from any directory.
 func (a *App) LoadPullRequest(ctx context.Context, providerName, ref string) (*Session, error) {
 	provider, err := a.Forges.Resolve(ctx, providerName)
 	if err != nil {
@@ -164,14 +174,30 @@ func (a *App) LoadPullRequest(ctx context.Context, providerName, ref string) (*S
 		return nil, fmt.Errorf("parse diff for %s: %w", parsed, err)
 	}
 
+	target := parsed.Target(provider.Name())
+	if err := a.adoptLocalReview(target); err != nil {
+		return nil, err
+	}
+
 	return &Session{
-		Target:    parsed.Target(provider.Name()),
+		Target:    target,
 		Title:     pr.Describe(),
 		Files:     files,
 		DiffText:  pr.Diff,
 		Stageable: false,
 		PR:        pr,
 	}, nil
+}
+
+// needRepo reports the session that cannot be loaded because peel is not in a
+// repository. A pull request is reviewable from anywhere; a working tree is the
+// repository, so there is nothing to fall back to.
+func (a *App) needRepo() error {
+	if a.HasRepo() {
+		return nil
+	}
+	return fmt.Errorf("peel must run inside a git repository to review a working tree; "+
+		"%s is not in one — review a pull request with --pr instead", a.Root)
 }
 
 // filesFromDiff converts a raw diff into file entries for display.
@@ -209,9 +235,10 @@ func (a *App) Walkthrough(ctx context.Context, s *Session, req WalkthroughReques
 		return store.Walkthrough{}, fmt.Errorf("nothing to summarise: %s has no changes", s.Title)
 	}
 	fingerprint := store.Fingerprint(s.DiffText)
+	cache := a.StateFor(s).Walkthroughs
 
 	if !req.Regenerate {
-		cached, ok, err := a.Walkthroughs.Load()
+		cached, ok, err := cache.Load()
 		if err != nil {
 			return store.Walkthrough{}, err
 		}
@@ -237,7 +264,7 @@ func (a *App) Walkthrough(ctx context.Context, s *Session, req WalkthroughReques
 		Provider:    provider.Name(),
 		Body:        body,
 	}
-	if err := a.Walkthroughs.Save(result); err != nil {
+	if err := cache.Save(result); err != nil {
 		return store.Walkthrough{}, err
 	}
 	return result, nil

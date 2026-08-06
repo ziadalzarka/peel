@@ -146,8 +146,18 @@ func (m *Model) hints() string {
 		return "y confirm · any other key cancels"
 	case modeFind:
 		return "type part of a path · ↓/↑ choose · enter go there · esc cancel"
+	case modeReview:
+		return "write a summary · enter continue · shift/alt+enter new line · esc cancel"
+	case modeReviewEvent:
+		return "a approve · r request changes · c comment · esc cancel"
 	default:
-		return `j/k hunk · ↓/↑ line · [/] ten lines · opt+↓/↑ file · cmd+p go to file · shift+↓/↑ mark · s stage file · u unstage · space fold · c comment · b files · \ layout · w walkthrough · ? help · q quit`
+		hints := `j/k hunk · ↓/↑ line · [/] ten lines · opt+↓/↑ file · cmd+p go to file · shift+↓/↑ mark · s stage file · u unstage · space fold · c comment · b files · \ layout · w walkthrough`
+		// The key that posts is only worth a place in the footer where there is
+		// something to post to.
+		if m.session != nil && m.session.PR != nil {
+			hints += " · P post review"
+		}
+		return hints + " · ? help · q quit"
 	}
 }
 
@@ -164,6 +174,9 @@ func (m *Model) bodyView() string {
 	}
 	if m.mode == modeFind {
 		rows = overlay(rows, m.findLines(m.width))
+	}
+	if m.mode == modeReview || m.mode == modeReviewEvent {
+		rows = overlay(rows, m.reviewLines(m.width))
 	}
 	return strings.Join(rows, "\n")
 }
@@ -303,6 +316,7 @@ var helpBindings = []struct{ keys, action string }{
 	{"C", "copy your own comments as text, to paste into an agent"},
 	{"A", "hide or show the comments an agent left, leaving your own"},
 	{"X", "delete every agent comment — it asks first"},
+	{"P", "post the review to the pull request: a summary, then approve / request changes / comment"},
 	{`\`, "toggle unified and side-by-side"},
 	{"w", "walkthrough: group the diff into steps, with a note before each"},
 	{"W", "regenerate the walkthrough"},

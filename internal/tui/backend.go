@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ziadalzarka/peel/internal/app"
+	"github.com/ziadalzarka/peel/internal/forge"
 	"github.com/ziadalzarka/peel/internal/git"
 	"github.com/ziadalzarka/peel/internal/store"
 )
@@ -53,12 +54,24 @@ type Backend interface {
 
 	// Walkthrough returns the AI narrative of the session.
 	Walkthrough(ctx context.Context, regenerate bool) (string, error)
+
+	// ReviewPayload is what posting the review would send: the summary written
+	// for it and the comments that can be posted inline. It is what the question
+	// asked before anything leaves the machine is asked against.
+	ReviewPayload(body string, event forge.ReviewEvent) (forge.Review, error)
+	// SubmitReview posts that review to the code host and marks the comments it
+	// carried resolved. It is the only thing peel does that anyone else can see,
+	// so nothing calls it without the reviewer having said yes.
+	SubmitReview(ctx context.Context, body string, event forge.ReviewEvent) (forge.Review, error)
 }
 
 // appBackend adapts an App and a session to the Backend interface.
 type appBackend struct {
-	app      *app.App
-	session  *app.Session
+	app     *app.App
+	session *app.Session
+	// state is where this review is kept: the repository's own files for the
+	// working tree, the file named after the pull request for one of those.
+	state    app.State
 	provider string
 }
 
@@ -68,7 +81,7 @@ func NewBackend(a *app.App, s *app.Session, provider ...string) Backend {
 	if len(provider) > 0 {
 		name = provider[0]
 	}
-	return &appBackend{app: a, session: s, provider: name}
+	return &appBackend{app: a, session: s, state: a.StateFor(s), provider: name}
 }
 
 // Reload re-reads what is being reviewed. A pull request is not in this working
@@ -91,7 +104,7 @@ func (b *appBackend) Reload(ctx context.Context) (*app.Session, error) {
 }
 
 func (b *appBackend) Comments(ctx context.Context) ([]store.Comment, error) {
-	all, err := b.app.Comments.List(b.session.CommentFilter())
+	all, err := b.state.Comments.List(b.session.CommentFilter())
 	if err != nil {
 		return nil, err
 	}
@@ -110,31 +123,41 @@ func (b *appBackend) AddComment(ctx context.Context, c store.Comment) (store.Com
 			c.Blob = blob
 		}
 	}
-	created, err := b.app.Comments.Add(c)
+	created, err := b.state.Comments.Add(c)
 	if err != nil {
 		return store.Comment{}, err
 	}
-	return created, b.app.KeepAnchors(ctx)
+	return created, b.keepAnchors(ctx)
 }
 
 // EditComment replaces what a note says. The blob it is anchored to is left
 // exactly as it was: the note is about the same code as before, and re-freezing
 // the file here would move it on to whatever that line holds now.
 func (b *appBackend) EditComment(id, body string) error {
-	_, err := b.app.Comments.Update(id, func(c *store.Comment) { c.Body = body })
+	_, err := b.state.Comments.Update(id, func(c *store.Comment) { c.Body = body })
 	return err
 }
 
 func (b *appBackend) RemoveComment(ctx context.Context, id string) error {
-	if err := b.app.Comments.Remove(id); err != nil {
+	if err := b.state.Comments.Remove(id); err != nil {
 		return err
 	}
-	return b.app.KeepAnchors(ctx)
+	return b.keepAnchors(ctx)
 }
 
 func (b *appBackend) SetResolved(id string, resolved bool) error {
-	_, err := b.app.Comments.Update(id, func(c *store.Comment) { c.Resolved = resolved })
+	_, err := b.state.Comments.Update(id, func(c *store.Comment) { c.Resolved = resolved })
 	return err
+}
+
+// keepAnchors holds open the snapshots this repository's notes are measured
+// from. A pull request's notes are anchored to nothing here, so a review of one
+// has no objects to keep.
+func (b *appBackend) keepAnchors(ctx context.Context) error {
+	if b.session.PR != nil {
+		return nil
+	}
+	return b.app.KeepAnchors(ctx)
 }
 
 func (b *appBackend) StageFile(ctx context.Context, path string) error {
@@ -222,29 +245,48 @@ func (b *appBackend) Copy(ctx context.Context, text string) error {
 }
 
 func (b *appBackend) Folded() ([]string, error) {
-	return b.app.Folds.Load(b.session.Target)
+	return b.state.Folds.Load(b.session.Target)
 }
 
 func (b *appBackend) SetFolded(paths []string) error {
-	return b.app.Folds.Save(b.session.Target, paths)
+	return b.state.Folds.Save(b.session.Target, paths)
 }
 
 func (b *appBackend) AgentCommentsHidden() (bool, error) {
-	view, err := b.app.Views.Load(b.session.Target)
+	view, err := b.state.Views.Load(b.session.Target)
 	return view.AgentCommentsHidden, err
 }
 
 // SetAgentCommentsHidden reads the view back before writing it, so a filter
 // added later is not dropped by the one being changed here.
 func (b *appBackend) SetAgentCommentsHidden(hidden bool) error {
-	view, err := b.app.Views.Load(b.session.Target)
+	view, err := b.state.Views.Load(b.session.Target)
 	if err != nil {
 		return err
 	}
 	view.AgentCommentsHidden = hidden
-	return b.app.Views.Save(b.session.Target, view)
+	return b.state.Views.Save(b.session.Target, view)
 }
 
+// ReviewPayload is what P would post: the summary being written and the notes
+// that can go with it, built exactly as `peel pr submit` builds one.
+func (b *appBackend) ReviewPayload(body string, event forge.ReviewEvent) (forge.Review, error) {
+	return b.app.PreviewSubmission(b.session, b.submitOptions(body, event))
+}
+
+func (b *appBackend) SubmitReview(ctx context.Context, body string, event forge.ReviewEvent) (forge.Review, error) {
+	return b.app.SubmitReview(ctx, b.session, b.submitOptions(body, event))
+}
+
+// submitOptions is how a review posted from the UI is put together: the
+// comments it carries are resolved once they are posted, since a note the other
+// side can now read is one that has left the reviewer's own list.
+func (b *appBackend) submitOptions(body string, event forge.ReviewEvent) app.SubmitOptions {
+	return app.SubmitOptions{Body: body, Event: event, ResolveAfter: true}
+}
+
+// Walkthrough returns the narrative of the session, cached with the rest of
+// this review's state.
 func (b *appBackend) Walkthrough(ctx context.Context, regenerate bool) (string, error) {
 	got, err := b.app.Walkthrough(ctx, b.session, app.WalkthroughRequest{
 		Provider:   b.provider,

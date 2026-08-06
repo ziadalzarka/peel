@@ -181,6 +181,124 @@ func (f Filter) Matches(c Comment) bool {
 	return true
 }
 
+// What follows is what a comment store does, written against a slice rather
+// than against a file: the repository's own store and the file holding one pull
+// request's review both hold a list of comments and both answer the same
+// questions of it, so the answers live here and each store only has to say how
+// its list is read and written.
+
+// filterComments picks out the comments matching f, oldest first.
+func filterComments(all []Comment, f Filter) []Comment {
+	out := make([]Comment, 0, len(all))
+	for _, c := range all {
+		if f.Matches(c) {
+			out = append(out, c)
+		}
+	}
+	sortComments(out)
+	return out
+}
+
+// findComment returns the comment with the given ID.
+func findComment(all []Comment, id string) (Comment, error) {
+	for _, c := range all {
+		if c.ID == id {
+			return c, nil
+		}
+	}
+	return Comment{}, fmt.Errorf("%w: %s", ErrNotFound, id)
+}
+
+// prepareComment fills in what every stored comment carries and the caller
+// usually leaves out: which side it is anchored to, who wrote it, and when.
+func prepareComment(c Comment, p params) (Comment, error) {
+	if err := c.Validate(); err != nil {
+		return Comment{}, err
+	}
+	if c.Side == "" {
+		c.Side = SideNew
+	}
+	if c.Author == "" {
+		c.Author = AuthorUser
+	}
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = p.now().UTC()
+	}
+	return c, nil
+}
+
+// addComment appends c, giving it an ID no comment already there holds.
+func addComment(all []Comment, c Comment, p params) ([]Comment, Comment, error) {
+	if c.ID == "" {
+		c.ID = uniqueID(all, p.newID)
+	}
+	for _, existing := range all {
+		if existing.ID == c.ID {
+			return nil, Comment{}, fmt.Errorf("comment id %s already exists", c.ID)
+		}
+	}
+	return append(all, c), c, nil
+}
+
+// updateComment applies apply to one comment and returns the list holding the
+// result.
+func updateComment(all []Comment, id string, apply func(*Comment)) ([]Comment, Comment, error) {
+	for i := range all {
+		if all[i].ID != id {
+			continue
+		}
+		candidate := all[i]
+		apply(&candidate)
+		// The ID is the store's to control, not the caller's.
+		candidate.ID = id
+		if err := candidate.Validate(); err != nil {
+			return nil, Comment{}, err
+		}
+		all[i] = candidate
+		return all, candidate, nil
+	}
+	return nil, Comment{}, fmt.Errorf("%w: %s", ErrNotFound, id)
+}
+
+// removeComment drops one comment by ID.
+func removeComment(all []Comment, id string) ([]Comment, error) {
+	for i, c := range all {
+		if c.ID == id {
+			return append(all[:i:i], all[i+1:]...), nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
+}
+
+// clearComments drops every comment matching f, and reports how many went.
+func clearComments(all []Comment, f Filter) ([]Comment, int) {
+	kept := make([]Comment, 0, len(all))
+	removed := 0
+	for _, c := range all {
+		if f.Matches(c) {
+			removed++
+			continue
+		}
+		kept = append(kept, c)
+	}
+	return kept, removed
+}
+
+// uniqueID returns an ID not already present in all.
+func uniqueID(all []Comment, newID func() string) string {
+	taken := make(map[string]bool, len(all))
+	for _, c := range all {
+		taken[c.ID] = true
+	}
+	for range 100 {
+		if id := newID(); !taken[id] {
+			return id
+		}
+	}
+	// Deterministic fallback so a poor generator cannot loop forever.
+	return fmt.Sprintf("c%d", len(all)+1)
+}
+
 // CommentStore persists review comments.
 //
 // The interface exists so the CLI, the TUI and any future frontend all depend

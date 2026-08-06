@@ -37,37 +37,39 @@ type SubmitOptions struct {
 	ResolveAfter bool
 }
 
-// SubmitReview posts the session's local comments to the code host.
+// SubmitReview posts the session's local comments to the code host and returns
+// what it sent.
 //
 // This is the only operation in peel that sends anything off the machine.
 // It never runs implicitly: the caller confirms with the user first, and
 // PreviewSubmission exists so there is something concrete to confirm against.
-func (a *App) SubmitReview(ctx context.Context, s *Session, opts SubmitOptions) error {
+func (a *App) SubmitReview(ctx context.Context, s *Session, opts SubmitOptions) (forge.Review, error) {
 	if s.PR == nil {
-		return fmt.Errorf("no pull request in this session: run peel --pr <number> first")
+		return forge.Review{}, fmt.Errorf("no pull request in this session: run peel --pr <number> first")
 	}
 	provider, err := a.Forges.Resolve(ctx, opts.Provider)
 	if err != nil {
-		return err
+		return forge.Review{}, err
 	}
 
 	review, submitted, err := a.buildReview(s, opts)
 	if err != nil {
-		return err
+		return forge.Review{}, err
 	}
 	if err := provider.SubmitReview(ctx, s.PR.Ref, review); err != nil {
-		return err
+		return forge.Review{}, err
 	}
 
 	if !opts.ResolveAfter {
-		return nil
+		return review, nil
 	}
+	comments := a.StateFor(s).Comments
 	for _, c := range submitted {
-		if _, err := a.Comments.Update(c.ID, func(c *store.Comment) { c.Resolved = true }); err != nil {
-			return fmt.Errorf("review posted, but marking %s resolved failed: %w", c.ID, err)
+		if _, err := comments.Update(c.ID, func(c *store.Comment) { c.Resolved = true }); err != nil {
+			return review, fmt.Errorf("review posted, but marking %s resolved failed: %w", c.ID, err)
 		}
 	}
-	return nil
+	return review, nil
 }
 
 // PreviewSubmission returns exactly what SubmitReview would post, so the user
@@ -86,7 +88,7 @@ func (a *App) buildReview(s *Session, opts SubmitOptions) (forge.Review, []store
 
 	filter := s.CommentFilter()
 	filter.Unresolved = true
-	comments, err := a.Comments.List(filter)
+	comments, err := a.StateFor(s).Comments.List(filter)
 	if err != nil {
 		return forge.Review{}, nil, err
 	}

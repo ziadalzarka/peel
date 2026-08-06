@@ -25,14 +25,10 @@ const StateDirName = "peel"
 type App struct {
 	Repo   *git.Repo
 	Stager *git.Stager
-	// Comments persists review notes.
-	Comments store.CommentStore
-	// Walkthroughs caches the most recent AI narrative.
-	Walkthroughs store.WalkthroughCache
-	// Folds remembers which files have been folded away.
-	Folds store.FoldStore
-	// Views remembers how each review was last being looked at.
-	Views store.ViewStore
+	// Local is the state of this repository's own review: the working tree's
+	// notes, folds, view and narrative, kept inside the git directory. A review
+	// that is not this checkout's is opened through StateFor instead.
+	Local State
 	// AI holds the walkthrough providers, in preference order.
 	AI *ai.Registry
 	// Forges holds the pull request providers, in preference order.
@@ -41,15 +37,28 @@ type App struct {
 	// Runner runs the external commands peel shells out to.
 	Runner exec.Runner
 
-	// Root is the working tree root.
+	// Root is the working tree root, or the directory peel was started in when
+	// that is not inside a repository.
 	Root string
-	// StateDir is where peel keeps its files, inside the git directory.
+	// StateDir is where peel keeps this repository's files, inside the git
+	// directory. It is empty when peel is not running in a repository.
 	StateDir string
+	// GlobalDir is where peel keeps the reviews that are not this checkout's.
+	GlobalDir string
+
+	// storeOpts are handed to every store opened later, so a per-review file
+	// gets the same clock and ID generator the repository's own store has.
+	storeOpts []store.Option
 
 	// lookPath reports whether an executable is on PATH, which is how the
 	// clipboard tool is chosen. Injected for tests.
 	lookPath func(string) bool
 }
+
+// HasRepo reports whether peel is running inside a git repository. A pull
+// request is reviewed from anywhere, so it is the one session that does not
+// need one — and everything that reads or writes git is off in that case.
+func (a *App) HasRepo() bool { return a.StateDir != "" }
 
 // OpenCommand hands a file to whatever the desktop opens it with, and is what
 // `o` runs when git config names nothing better.
@@ -157,6 +166,13 @@ type config struct {
 	codexOpts []ai.CodexOption
 	ghOpts    []forge.GitHubOption
 	storeOp   []store.Option
+	globalDir string
+}
+
+// WithGlobalDir overrides where the reviews that are not this checkout's are
+// kept, which is how a test keeps them out of the machine's real state.
+func WithGlobalDir(dir string) Option {
+	return func(c *config) { c.globalDir = dir }
 }
 
 // WithRunner replaces the command runner used for git and every provider.
@@ -202,20 +218,27 @@ func WithStoreOptions(opts ...store.Option) Option {
 
 // Open discovers the repository containing dir and assembles an App for it.
 //
-// State lives in the working tree's own git directory rather than the shared
-// one, so each worktree keeps its own review notes.
+// The working tree's state lives in that tree's own git directory rather than
+// the shared one, so each worktree keeps its own review notes. A pull request's
+// does not live in a repository at all, so peel opens outside one too: there is
+// simply no working tree to review, and the sessions that need one say so when
+// they are asked for.
 func Open(ctx context.Context, dir string, opts ...Option) (*App, error) {
 	cfg := &config{runner: exec.NewOSRunner(), lookPath: exec.LookPath}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 
-	repo := git.NewRepo(dir, cfg.runner)
-	root, err := repo.Root(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("peel must run inside a git repository: %w", err)
+	globalDir := cfg.globalDir
+	if globalDir == "" {
+		var err error
+		if globalDir, err = GlobalStateDir(); err != nil {
+			return nil, err
+		}
 	}
-	gitDir, err := repo.GitDir(ctx)
+
+	repo := git.NewRepo(dir, cfg.runner)
+	root, gitDir, err := discover(ctx, repo, dir)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +246,10 @@ func Open(ctx context.Context, dir string, opts ...Option) (*App, error) {
 	// Commands run from the root so relative paths in diffs resolve the same
 	// way regardless of which subdirectory peel was started in.
 	repo = git.NewRepo(root, cfg.runner)
-	stateDir := filepath.Join(gitDir, StateDirName)
+	stateDir := ""
+	if gitDir != "" {
+		stateDir = filepath.Join(gitDir, StateDirName)
+	}
 
 	aiRegistry := cfg.ai
 	if aiRegistry == nil {
@@ -240,17 +266,53 @@ func Open(ctx context.Context, dir string, opts ...Option) (*App, error) {
 	}
 
 	return &App{
-		Repo:         repo,
-		Stager:       git.NewStager(repo),
-		Comments:     store.NewJSONStore(filepath.Join(stateDir, "comments.json"), cfg.storeOp...),
+		Repo:      repo,
+		Stager:    git.NewStager(repo),
+		Local:     localState(stateDir, cfg.storeOp),
+		AI:        aiRegistry,
+		Forges:    forgeRegistry,
+		Runner:    cfg.runner,
+		Root:      root,
+		StateDir:  stateDir,
+		GlobalDir: globalDir,
+		storeOpts: cfg.storeOp,
+		lookPath:  cfg.lookPath,
+	}, nil
+}
+
+// discover locates the repository dir is in.
+//
+// Not being in one is not a failure here: a pull request is reviewable from
+// anywhere, so peel stands in the directory it was started in and keeps no
+// repository state at all. What that costs is said by the sessions that need a
+// repository, when they are asked for.
+func discover(ctx context.Context, repo *git.Repo, dir string) (root, gitDir string, err error) {
+	root, err = repo.Root(ctx)
+	if err != nil {
+		abs, absErr := filepath.Abs(dir)
+		if absErr != nil {
+			abs = dir
+		}
+		return abs, "", nil
+	}
+	gitDir, err = repo.GitDir(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	return root, gitDir, nil
+}
+
+// localState opens this repository's own review state, and nothing at all when
+// there is no repository — the sessions that would read it cannot be loaded
+// outside one, so there is nothing for it to hold.
+func localState(stateDir string, opts []store.Option) State {
+	if stateDir == "" {
+		return State{}
+	}
+	return State{
+		Comments:     store.NewJSONStore(filepath.Join(stateDir, "comments.json"), opts...),
 		Walkthroughs: store.NewJSONWalkthroughCache(filepath.Join(stateDir, "walkthrough.json")),
 		Folds:        store.NewJSONFoldStore(filepath.Join(stateDir, "folds.json")),
 		Views:        store.NewJSONViewStore(filepath.Join(stateDir, "view.json")),
-		AI:           aiRegistry,
-		Forges:       forgeRegistry,
-		Runner:       cfg.runner,
-		Root:         root,
-		StateDir:     stateDir,
-		lookPath:     cfg.lookPath,
-	}, nil
+	}
 }

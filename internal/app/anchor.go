@@ -53,8 +53,12 @@ func baseOr(s *Session) string {
 //
 // Only the working tree's copy is written; the index's and a commit's are
 // already objects git keeps for its own reasons.
+//
+// A pull request has no anchor to take: the code is the host's rather than this
+// checkout's, nothing here can move under the note, and there may not be a
+// repository to write an object into at all.
 func (a *App) Snapshot(ctx context.Context, s *Session, c store.Comment) (string, error) {
-	if c.Line <= 0 {
+	if c.Line <= 0 || !a.HasRepo() || (s != nil && s.PR != nil) {
 		return "", nil
 	}
 	v := versionOf(s, c)
@@ -207,8 +211,15 @@ func (a *App) lineMap(ctx context.Context, key anchorKey) (git.LineMap, error) {
 // Every path that writes a comment ends here. What peel costs the repository is
 // one blob per file version somebody commented on, and removing the last note
 // naming one hands it straight back to git's own collector.
+//
+// Only this repository's own notes are counted. A pull request's are filed
+// outside it and anchored to nothing here, so an object of theirs is not one
+// this repository is holding open.
 func (a *App) KeepAnchors(ctx context.Context) error {
-	all, err := a.Comments.List(store.Filter{})
+	if !a.HasRepo() {
+		return nil
+	}
+	all, err := a.Local.Comments.List(store.Filter{})
 	if err != nil {
 		return err
 	}

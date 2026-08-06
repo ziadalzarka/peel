@@ -33,6 +33,11 @@ func New(t *testing.T) *Repo {
 	// environment carries into the git commands the code under test runs too.
 	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
 	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+	// A review that is not a repository's own — a pull request's — is kept under
+	// the user's state directory rather than in .git, so a test is given one of
+	// those to itself too. Without it a test would read back the last one's
+	// reviews, and write into the developer's real notes.
+	t.Setenv("PEEL_STATE_DIR", filepath.Join(t.TempDir(), "peel-state"))
 
 	r := &Repo{t: t, Dir: t.TempDir()}
 	r.Git("init", "--quiet", "--initial-branch=main")

@@ -10,8 +10,11 @@ run bare `peel`, `peel --rev` or `peel --pr` with no subcommand, which would tak
 over their terminal. Use the subcommands below; they read and write the same
 store the TUI does, and work whether or not the TUI is open.
 
-There is no daemon and no session to attach to. State lives in `.git/peel/`, so
-every command just needs to run inside the repository.
+There is no daemon and no session to attach to. Each review keeps its own state:
+the working tree's in `.git/peel/`, a pull request's in a file named after the
+pull request under the user's state directory. So a command reads the review it
+is pointed at — plain for the working tree, `--pr <ref>` for a pull request —
+and needs nothing else running.
 
 ## Workflow
 
@@ -97,7 +100,10 @@ run — the ones you read before the edit are stale.
 - A note with neither field is on exactly the line it says.
 
 By default both commands are scoped to what is being reviewed: the working tree,
-or the pull request named by `--pr`. `comment list --all` ignores that scope.
+or the pull request named by `--pr`. Those are separate files, so `--pr <ref>` is
+how a pull request's notes are read and written at all — including by id, for
+`comment rm` and `comment resolve`. `comment list --all` lifts the target filter
+within one review's file; it does not reach across reviews.
 
 ## Reviewing further back than HEAD
 
@@ -224,13 +230,19 @@ peel --pr <ref> comment add --file <path> --line <n> --body "..."
 peel pr view <ref> [--json]
 ```
 
-`<ref>` is a number, `owner/repo#number`, or a URL. Comments on a PR are stored
-locally and scoped to that PR — nothing is sent anywhere.
+`<ref>` is a number, `owner/repo#number`, or a URL. A number resolves against the
+repository you are in; the other two name one directly and work from anywhere.
+
+Comments on a PR are stored locally and nothing is sent anywhere. They are kept
+in a file named after the pull request, under the user's state directory rather
+than in `.git` — so every command about them takes `--pr <ref>`, and one run
+without it is reading the working tree's review instead.
 
 **Do not run `peel pr submit`.** It posts the review to the forge, where other
 people see it and it cannot be undone from here. It is the user's call, it
 prompts them for an explicit yes, and `--yes` exists for them, not for you. If a
-review is ready to post, say so and let them run it.
+review is ready to post, say so and let them run it — or tell them `P` in the
+TUI does the same thing without leaving the review.
 
 `peel pr submit --dry-run` is safe — it prints the exact payload and exits — but
 prefer `comment list --json`, which tells you the same thing without the risk of

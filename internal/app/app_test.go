@@ -137,13 +137,30 @@ func TestOpenFromSubdirectoryUsesRoot(t *testing.T) {
 	}
 }
 
-func TestOpenOutsideRepositoryFails(t *testing.T) {
-	_, err := app.Open(context.Background(), t.TempDir())
-	if err == nil {
-		t.Fatal("Open succeeded outside a git repository")
+// Outside a repository there is no working tree to review, but a pull request
+// is reviewable from anywhere — so peel opens, and only the session that needs
+// a repository says it cannot be had.
+func TestOpenOutsideRepositoryDefersToTheSession(t *testing.T) {
+	t.Setenv("PEEL_STATE_DIR", t.TempDir())
+	dir := t.TempDir()
+
+	a, err := app.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("Open outside a repository: %v", err)
 	}
-	if !strings.Contains(err.Error(), "git repository") {
-		t.Errorf("error = %v, want it to explain the requirement", err)
+	if a.HasRepo() {
+		t.Error("HasRepo is true outside a repository")
+	}
+	if a.StateDir != "" {
+		t.Errorf("StateDir = %q, want none without a git directory", a.StateDir)
+	}
+
+	_, err = a.LoadWorkingTree(context.Background())
+	if err == nil {
+		t.Fatal("loaded a working tree outside a repository")
+	}
+	if !strings.Contains(err.Error(), "git repository") || !strings.Contains(err.Error(), "--pr") {
+		t.Errorf("error = %v, want it to explain the requirement and the way round it", err)
 	}
 }
 
@@ -154,7 +171,7 @@ func TestStateDirIsNotCreatedUntilNeeded(t *testing.T) {
 		t.Errorf("StateDir exists after Open (err=%v), want it created lazily", err)
 	}
 
-	if _, err := f.app.Comments.Add(store.Comment{File: "f.txt", Body: "note"}); err != nil {
+	if _, err := f.app.Local.Comments.Add(store.Comment{File: "f.txt", Body: "note"}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
 	if _, err := os.Stat(f.app.StateDir); err != nil {
@@ -527,7 +544,7 @@ func TestWalkthroughProviderFailureIsNotCached(t *testing.T) {
 	if _, err := f.app.Walkthrough(f.ctx, s, app.WalkthroughRequest{}); err == nil {
 		t.Fatal("Walkthrough succeeded despite a provider failure")
 	}
-	if _, ok, _ := f.app.Walkthroughs.Load(); ok {
+	if _, ok, _ := f.app.Local.Walkthroughs.Load(); ok {
 		t.Error("a failed generation was written to the cache")
 	}
 }
@@ -564,7 +581,7 @@ func TestCommentsAreScopedToTarget(t *testing.T) {
 	mustAddComment(t, f, store.Comment{File: "f.txt", Line: 1, Body: "working tree note"})
 	mustAddComment(t, f, store.Comment{File: "pr.go", Line: 1, Body: "pr note", Target: pr.Target})
 
-	wt, err := f.app.Comments.List(working.CommentFilter())
+	wt, err := f.app.Local.Comments.List(working.CommentFilter())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -572,12 +589,22 @@ func TestCommentsAreScopedToTarget(t *testing.T) {
 		t.Errorf("working tree comments = %v", wt)
 	}
 
-	prComments, err := f.app.Comments.List(pr.CommentFilter())
+	prComments, err := f.app.StateFor(pr).Comments.List(pr.CommentFilter())
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
 	if len(prComments) != 1 || prComments[0].Body != "pr note" {
 		t.Errorf("PR comments = %v", prComments)
+	}
+
+	// The two are not only filtered apart: a pull request's notes are not in the
+	// repository at all, which is what lets them be read from anywhere else.
+	inRepo, err := f.app.Local.Comments.List(store.Filter{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(inRepo) != 1 || inRepo[0].Body != "working tree note" {
+		t.Errorf("comments in the repository = %v, want the working tree's alone", inRepo)
 	}
 }
 
@@ -594,7 +621,7 @@ func TestSubmitReview(t *testing.T) {
 	mustAddComment(t, f, store.Comment{File: "pr.go", Line: 2, Body: "and this", Target: s.Target, Side: store.SideOld})
 
 	opts := app.SubmitOptions{Body: "a couple of things", Event: forge.EventRequestChanges}
-	if err := f.app.SubmitReview(f.ctx, s, opts); err != nil {
+	if _, err := f.app.SubmitReview(f.ctx, s, opts); err != nil {
 		t.Fatalf("SubmitReview: %v", err)
 	}
 
@@ -624,7 +651,7 @@ func TestSubmitReviewDefaultsToComment(t *testing.T) {
 	s, _ := f.app.LoadPullRequest(f.ctx, "", "412")
 	mustAddComment(t, f, store.Comment{File: "pr.go", Line: 1, Body: "note", Target: s.Target})
 
-	if err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{}); err != nil {
+	if _, err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{}); err != nil {
 		t.Fatalf("SubmitReview: %v", err)
 	}
 	if got := f.gh.submitted[0].Event; got != forge.EventComment {
@@ -641,7 +668,7 @@ func TestSubmitReviewExcludesOtherTargets(t *testing.T) {
 	mustAddComment(t, f, store.Comment{File: "pr.go", Line: 1, Body: "for the PR", Target: s.Target})
 	mustAddComment(t, f, store.Comment{File: "f.txt", Line: 1, Body: "for the working tree"})
 
-	if err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{}); err != nil {
+	if _, err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{}); err != nil {
 		t.Fatalf("SubmitReview: %v", err)
 	}
 	got := f.gh.submitted[0].Comments
@@ -659,10 +686,10 @@ func TestSubmitReviewExcludesResolved(t *testing.T) {
 	done := mustAddComment(t, f, store.Comment{File: "pr.go", Line: 1, Body: "already handled", Target: s.Target})
 	mustAddComment(t, f, store.Comment{File: "pr.go", Line: 2, Body: "still open", Target: s.Target})
 
-	if _, err := f.app.Comments.Update(done.ID, func(c *store.Comment) { c.Resolved = true }); err != nil {
+	if _, err := f.app.StateFor(s).Comments.Update(done.ID, func(c *store.Comment) { c.Resolved = true }); err != nil {
 		t.Fatalf("Update: %v", err)
 	}
-	if err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{}); err != nil {
+	if _, err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{}); err != nil {
 		t.Fatalf("SubmitReview: %v", err)
 	}
 
@@ -680,13 +707,13 @@ func TestSubmitReviewResolvesAfter(t *testing.T) {
 	s, _ := f.app.LoadPullRequest(f.ctx, "", "412")
 	mustAddComment(t, f, store.Comment{File: "pr.go", Line: 1, Body: "note", Target: s.Target})
 
-	if err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{ResolveAfter: true}); err != nil {
+	if _, err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{ResolveAfter: true}); err != nil {
 		t.Fatalf("SubmitReview: %v", err)
 	}
 
 	filter := s.CommentFilter()
 	filter.Unresolved = true
-	remaining, err := f.app.Comments.List(filter)
+	remaining, err := f.app.Local.Comments.List(filter)
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -703,7 +730,7 @@ func TestSubmitReviewFileLevelCommentsCannotBeInline(t *testing.T) {
 	s, _ := f.app.LoadPullRequest(f.ctx, "", "412")
 	mustAddComment(t, f, store.Comment{File: "pr.go", Body: "general thought", Target: s.Target})
 
-	err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{})
+	_, err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{})
 	if err == nil {
 		t.Fatal("SubmitReview succeeded with only a file-level comment")
 	}
@@ -723,7 +750,7 @@ func TestSubmitReviewFileLevelCommentWithBodySucceeds(t *testing.T) {
 	s, _ := f.app.LoadPullRequest(f.ctx, "", "412")
 	mustAddComment(t, f, store.Comment{File: "pr.go", Body: "general thought", Target: s.Target})
 
-	if err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{Body: "overall looks fine"}); err != nil {
+	if _, err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{Body: "overall looks fine"}); err != nil {
 		t.Fatalf("SubmitReview: %v", err)
 	}
 	if got := f.gh.submitted[0].Body; got != "overall looks fine" {
@@ -738,7 +765,7 @@ func TestSubmitReviewNeedsAPullRequest(t *testing.T) {
 	f.repo.Write("f.txt", "y\n")
 
 	s, _ := f.app.LoadWorkingTree(f.ctx)
-	err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{Body: "x"})
+	_, err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{Body: "x"})
 	if err == nil {
 		t.Fatal("SubmitReview succeeded for the working tree")
 	}
@@ -753,7 +780,7 @@ func TestSubmitReviewNothingToSay(t *testing.T) {
 	f.repo.Commit("base")
 
 	s, _ := f.app.LoadPullRequest(f.ctx, "", "412")
-	if err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{}); err == nil {
+	if _, err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{}); err == nil {
 		t.Fatal("SubmitReview succeeded with no comments and no body")
 	}
 	if len(f.gh.submitted) != 0 {
@@ -791,13 +818,13 @@ func TestSubmitReviewFailureLeavesCommentsUnresolved(t *testing.T) {
 	s, _ := f.app.LoadPullRequest(f.ctx, "", "412")
 	mustAddComment(t, f, store.Comment{File: "pr.go", Line: 1, Body: "note", Target: s.Target})
 
-	if err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{ResolveAfter: true}); err == nil {
+	if _, err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{ResolveAfter: true}); err == nil {
 		t.Fatal("SubmitReview succeeded despite a forge failure")
 	}
 
 	filter := s.CommentFilter()
 	filter.Unresolved = true
-	remaining, _ := f.app.Comments.List(filter)
+	remaining, _ := f.app.StateFor(s).Comments.List(filter)
 	if len(remaining) != 1 {
 		t.Error("comments were resolved even though the review never posted")
 	}
@@ -1034,9 +1061,11 @@ func TestCopyWithoutAClipboardToolNamesTheOnesItWanted(t *testing.T) {
 	}
 }
 
+// mustAddComment stores a note in whichever review it belongs to: the
+// repository's own, or the file named after the pull request it is about.
 func mustAddComment(t *testing.T, f *fixture, c store.Comment) store.Comment {
 	t.Helper()
-	got, err := f.app.Comments.Add(c)
+	got, err := f.app.StateForTarget(c.Target).Comments.Add(c)
 	if err != nil {
 		t.Fatalf("Add(%+v): %v", c, err)
 	}

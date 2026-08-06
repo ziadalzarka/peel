@@ -159,7 +159,7 @@ func prSubmit(ctx context.Context, c *CLI, args []string) error {
 		}
 	}
 
-	if err := a.SubmitReview(ctx, s, opts); err != nil {
+	if _, err := a.SubmitReview(ctx, s, opts); err != nil {
 		return err
 	}
 	fmt.Fprintf(c.Stdout, "posted %s to %s\n", plural(len(preview.Comments), "comment"), s.PR.Ref)

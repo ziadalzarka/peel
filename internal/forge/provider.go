@@ -7,6 +7,7 @@ package forge
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/ziadalzarka/peel/internal/registry"
@@ -34,6 +35,29 @@ func (r Ref) Valid() bool { return r.Owner != "" && r.Repo != "" && r.Number > 0
 // Target renders the value stored on comments to scope them to this pull
 // request, e.g. "github:cli/cli#123".
 func (r Ref) Target(provider string) string { return provider + ":" + r.String() }
+
+// ParseTarget reads a target back into the provider and pull request it names,
+// and reports false for anything that is not one — the working tree's empty
+// target included.
+//
+// It is what lets a review be filed by what it is about rather than by where it
+// was read: the target stored on a comment is enough to name the file that
+// review lives in.
+func ParseTarget(target string) (provider string, ref Ref, ok bool) {
+	provider, rest, found := strings.Cut(target, ":")
+	if !found || provider == "" {
+		return "", Ref{}, false
+	}
+	m := slugPattern.FindStringSubmatch(rest)
+	if m == nil {
+		return "", Ref{}, false
+	}
+	number, err := strconv.Atoi(m[3])
+	if err != nil {
+		return "", Ref{}, false
+	}
+	return provider, Ref{Owner: m[1], Repo: m[2], Number: number}, true
+}
 
 // PullRequest is the reviewable state of one pull request.
 type PullRequest struct {

@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -1096,11 +1098,44 @@ func TestPRModeScopesCommentsSeparately(t *testing.T) {
 		t.Errorf("PR comments = %v", pr)
 	}
 
-	// --all crosses the boundary deliberately.
+	// The two reviews are kept in different files — the working tree's in the
+	// repository, the pull request's under the state directory — so --all reaches
+	// across the targets in one store rather than across the reviews themselves.
 	var all []map[string]any
 	mustJSON(t, h.mustRun("comment", "list", "--json", "--all"), &all)
-	if len(all) != 2 {
-		t.Errorf("--all returned %d comments, want 2", len(all))
+	if len(all) != 1 || all[0]["body"] != "working tree note" {
+		t.Errorf("--all in the working tree returned %v", all)
+	}
+
+	var allPR []map[string]any
+	mustJSON(t, h.mustRun("--pr", "412", "comment", "list", "--json", "--all"), &allPR)
+	if len(allPR) != 1 || allPR[0]["body"] != "pr note" {
+		t.Errorf("--all on the pull request returned %v", allPR)
+	}
+}
+
+// A pull request is the same pull request from every checkout, so its review is
+// filed by the pull request rather than inside one — which is what makes it
+// readable from another worktree, another clone, or no repository at all.
+func TestPRCommentsAreFiledOutsideTheRepository(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+
+	h.mustRun("--pr", "412", "comment", "add", "--file", "pr.go", "--line", "1", "--body", "pr note")
+
+	stateDir := os.Getenv("PEEL_STATE_DIR")
+	path := filepath.Join(stateDir, "reviews", "fake-forge", "o", "r", "412.json")
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the review file: %v", err)
+	}
+	if !strings.Contains(string(body), "pr note") {
+		t.Errorf("%s does not hold the note: %s", path, body)
+	}
+
+	inRepo, err := os.ReadFile(filepath.Join(h.repo.Dir, ".git", "peel", "comments.json"))
+	if err == nil && strings.Contains(string(inRepo), "pr note") {
+		t.Errorf("the note was written into the repository as well: %s", inRepo)
 	}
 }
 

@@ -271,7 +271,7 @@ func TestBackendCommentsAreScopedToTheSession(t *testing.T) {
 	}
 
 	// A comment on another target must not show up in this session.
-	if _, err := a.Comments.Add(store.Comment{
+	if _, err := a.Local.Comments.Add(store.Comment{
 		File:   "main.go",
 		Line:   3,
 		Body:   "on a pull request",

@@ -9,7 +9,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/ziadalzarka/peel/internal/app"
 	"github.com/ziadalzarka/peel/internal/store"
 )
 
@@ -38,7 +37,7 @@ func commentList(ctx context.Context, c *CLI, args []string) error {
 	file := fs.String("file", "", "only comments on this path")
 	unresolved := fs.Bool("unresolved", false, "only comments not yet resolved")
 	author := fs.String("author", "", "only comments by this author (user or agent)")
-	allTargets := fs.Bool("all", false, "include comments from other review targets")
+	allTargets := fs.Bool("all", false, "include every comment in this review's store, whatever its target")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
@@ -58,7 +57,7 @@ func commentList(ctx context.Context, c *CLI, args []string) error {
 		return err
 	}
 
-	comments, err := a.Comments.List(filter)
+	comments, err := a.StateFor(s).Comments.List(filter)
 	if err != nil {
 		return err
 	}
@@ -131,7 +130,7 @@ func commentAdd(ctx context.Context, c *CLI, args []string) error {
 		comment.Blob = blob
 	}
 
-	created, err := a.Comments.Add(comment)
+	created, err := a.StateFor(s).Comments.Add(comment)
 	if err != nil {
 		return err
 	}
@@ -146,16 +145,19 @@ func commentAdd(ctx context.Context, c *CLI, args []string) error {
 	return nil
 }
 
+// commentRemove deletes notes by id, out of the review being read: each review
+// keeps its own store, so `--pr` is how an id in a pull request's is reached.
 func commentRemove(ctx context.Context, c *CLI, args []string) error {
 	if len(args) == 0 {
 		return usageErrorf("comment rm needs at least one comment id")
 	}
-	a, err := c.open(ctx)
+	a, s, err := c.openSession(ctx)
 	if err != nil {
 		return err
 	}
+	comments := a.StateFor(s).Comments
 	for _, id := range args {
-		if err := a.Comments.Remove(id); err != nil {
+		if err := comments.Remove(id); err != nil {
 			return err
 		}
 		fmt.Fprintf(c.Stdout, "removed %s\n", id)
@@ -174,12 +176,13 @@ func commentResolve(ctx context.Context, c *CLI, args []string) error {
 		return usageErrorf("comment resolve needs at least one comment id")
 	}
 
-	a, err := c.open(ctx)
+	a, s, err := c.openSession(ctx)
 	if err != nil {
 		return err
 	}
+	comments := a.StateFor(s).Comments
 	for _, id := range ids {
-		got, err := a.Comments.Update(id, func(c *store.Comment) { c.Resolved = !*reopen })
+		got, err := comments.Update(id, func(c *store.Comment) { c.Resolved = !*reopen })
 		if err != nil {
 			return err
 		}
@@ -197,7 +200,7 @@ func commentClear(ctx context.Context, c *CLI, args []string) error {
 	file := fs.String("file", "", "only clear comments on this path")
 	resolved := fs.Bool("resolved", false, "only clear comments already resolved")
 	author := fs.String("author", "", "only clear comments by this author (user or agent)")
-	allTargets := fs.Bool("all", false, "clear comments from every review target")
+	allTargets := fs.Bool("all", false, "clear every comment in this review's store, whatever its target")
 	if err := parse(fs, args); err != nil {
 		return err
 	}
@@ -216,15 +219,16 @@ func commentClear(ctx context.Context, c *CLI, args []string) error {
 		return err
 	}
 
+	comments := a.StateFor(s).Comments
 	// Clear has no "resolved only" filter of its own, so select the ids first.
 	if *resolved {
-		if err := clearResolved(c, a, filter); err != nil {
+		if err := clearResolved(c, comments, filter); err != nil {
 			return err
 		}
 		return a.KeepAnchors(ctx)
 	}
 
-	n, err := a.Comments.Clear(filter)
+	n, err := comments.Clear(filter)
 	if err != nil {
 		return err
 	}
@@ -247,17 +251,17 @@ func narrowToAuthor(filter *store.Filter, name string) error {
 }
 
 // clearResolved removes only the resolved comments matching filter.
-func clearResolved(c *CLI, a *app.App, filter store.Filter) error {
-	comments, err := a.Comments.List(filter)
+func clearResolved(c *CLI, comments store.CommentStore, filter store.Filter) error {
+	found, err := comments.List(filter)
 	if err != nil {
 		return err
 	}
 	n := 0
-	for _, comment := range comments {
+	for _, comment := range found {
 		if !comment.Resolved {
 			continue
 		}
-		if err := a.Comments.Remove(comment.ID); err != nil {
+		if err := comments.Remove(comment.ID); err != nil {
 			return err
 		}
 		n++
