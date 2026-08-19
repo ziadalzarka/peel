@@ -15,7 +15,7 @@ func TestHandoffGroupsTheNotesByFile(t *testing.T) {
 		{File: "beta.txt", Line: 2, Side: store.SideNew, Body: "wrong fixture"},
 		{File: "alpha.go", Line: 9, Side: store.SideNew, Body: "this leaks the tx"},
 		{File: "alpha.go", Line: 3, Side: store.SideNew, Body: "name it"},
-	})
+	}, nil)
 
 	want := "beta.txt:2\n" +
 		"  wrong fixture\n" +
@@ -40,34 +40,47 @@ func TestHandoffAnchorsSayWhichSideAndWhichLine(t *testing.T) {
 	cases := []struct {
 		name    string
 		comment store.Comment
+		gone    bool
 		want    string
 	}{
-		{"new side", store.Comment{File: "alpha.go", Line: 9, Side: store.SideNew}, "alpha.go:9"},
+		{name: "new side", comment: store.Comment{File: "alpha.go", Line: 9, Side: store.SideNew}, want: "alpha.go:9"},
 		{
-			"working tree",
-			store.Comment{File: "alpha.go", Line: 9, Side: store.SideNew, Origin: store.OriginWorktree},
-			"alpha.go:9",
+			name:    "working tree",
+			comment: store.Comment{File: "alpha.go", Line: 9, Side: store.SideNew, Origin: store.OriginWorktree},
+			want:    "alpha.go:9",
 		},
 		{
-			"old side",
-			store.Comment{File: "alpha.go", Line: 9, Side: store.SideOld},
-			"alpha.go:9 (line number from the file before this change)",
+			name:    "old side",
+			comment: store.Comment{File: "alpha.go", Line: 9, Side: store.SideOld},
+			want:    "alpha.go:9 (line number from the file before this change)",
 		},
 		{
-			"staged half",
-			store.Comment{File: "alpha.go", Line: 9, Side: store.SideNew, Origin: store.OriginIndex},
-			"alpha.go:9 (line number from the staged copy, not the file on disk)",
+			name:    "staged half",
+			comment: store.Comment{File: "alpha.go", Line: 9, Side: store.SideNew, Origin: store.OriginIndex},
+			want:    "alpha.go:9 (line number from the staged copy, not the file on disk)",
 		},
 		{
-			"old side of the staged half",
-			store.Comment{File: "alpha.go", Line: 9, Side: store.SideOld, Origin: store.OriginIndex},
-			"alpha.go:9 (line number from the committed file, before anything was staged)",
+			name:    "old side of the staged half",
+			comment: store.Comment{File: "alpha.go", Line: 9, Side: store.SideOld, Origin: store.OriginIndex},
+			want:    "alpha.go:9 (line number from the committed file, before anything was staged)",
 		},
-		{"whole file", store.Comment{File: "alpha.go", Side: store.SideNew}, "alpha.go"},
+		{name: "whole file", comment: store.Comment{File: "alpha.go", Side: store.SideNew}, want: "alpha.go"},
+		{
+			name:    "a file the change no longer touches",
+			comment: store.Comment{File: "alpha.go", Line: 9, Side: store.SideNew},
+			gone:    true,
+			want:    "alpha.go:9 (" + goneNote + ")",
+		},
+		{
+			name:    "a whole-file note on one the change no longer touches",
+			comment: store.Comment{File: "alpha.go", Side: store.SideNew},
+			gone:    true,
+			want:    "alpha.go (" + goneNote + ")",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := handoffAnchor(c.comment); got != c.want {
+			if got := handoffAnchor(c.comment, c.gone); got != c.want {
 				t.Errorf("handoffAnchor = %q, want %q", got, c.want)
 			}
 		})
@@ -79,7 +92,7 @@ func TestHandoffAnchorsSayWhichSideAndWhichLine(t *testing.T) {
 func TestHandoffIndentsEveryLineOfANote(t *testing.T) {
 	got := commentHandoff([]store.Comment{
 		{File: "alpha.go", Line: 3, Side: store.SideNew, Body: "this leaks the tx\n\nand the retry hides it\n"},
-	})
+	}, nil)
 
 	want := "alpha.go:3\n" +
 		"  this leaks the tx\n" +
@@ -95,7 +108,7 @@ func TestHandoffIndentsEveryLineOfANote(t *testing.T) {
 func TestHandoffLeavesPeelsOwnBookkeepingOut(t *testing.T) {
 	got := commentHandoff([]store.Comment{
 		{ID: "cmt_abc123", File: "alpha.go", Line: 3, Side: store.SideNew, Body: "name it"},
-	})
+	}, nil)
 
 	if strings.Contains(got, "cmt_abc123") {
 		t.Errorf("handoff carries the comment id:\n%s", got)

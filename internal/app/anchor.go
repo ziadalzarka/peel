@@ -96,9 +96,10 @@ func (a *App) Relocate(ctx context.Context, s *Session, comments []store.Comment
 	}
 
 	// Only the files this review is about are worth asking git about. A note on a
-	// file that has left the diff — committed, or put back — is an orphan the UI
-	// draws nowhere and the agent has nothing to do with, and re-reading it costs
-	// two git calls on every refresh in a mode that refreshes continuously.
+	// file that has left the diff — committed, or put back — is drawn under a
+	// header of its own rather than on a line, so there is no line to move it
+	// onto; working one out anyway would cost two git calls on every refresh in a
+	// mode that refreshes continuously, to place a note that hangs off no line.
 	shown := map[string]bool{}
 	for _, f := range s.Files {
 		shown[f.Path] = true

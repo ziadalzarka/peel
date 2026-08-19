@@ -157,6 +157,10 @@ type FileRef struct {
 	Row int
 	// Collapsed reports that the file's body is hidden.
 	Collapsed bool
+	// Orphan marks a file the session does not hold, drawn only because notes
+	// were left on it before its changes went. It has no diff, so there is
+	// nothing under it to stage and nothing but the notes to read.
+	Orphan bool
 }
 
 // StepRef is one walkthrough group as the document lays it out.
@@ -296,7 +300,75 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 			doc.add(Row{Kind: RowBlank, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1})
 		}
 	}
+	doc.addOrphans(s, idx, collapsed)
 	return doc
+}
+
+// addOrphans draws the notes whose file has left the diff.
+//
+// A file's changes can be committed, stashed or put back while a note written on
+// them is still in the review, and the note is then anchored to a file the
+// session does not hold: no line to hang off, no hunk, not even a header. It was
+// drawn nowhere at all — while the store kept it, `C` handed it to an agent, and
+// the file changing again brought it back onto whatever had taken its number.
+//
+// So the file is drawn anyway, saying where its changes went in place of the
+// diff it no longer has, with its notes beneath it. What becomes of them is then
+// the reviewer's to decide, which is the one thing a note drawn nowhere never
+// let them do.
+func (d *Document) addOrphans(s *app.Session, idx *commentIndex, collapsed map[string]bool) {
+	inDiff := make(map[string]bool, len(s.Files))
+	for _, f := range s.Files {
+		inDiff[f.Path] = true
+	}
+	for _, c := range d.Comments {
+		if inDiff[c.File] {
+			continue
+		}
+		inDiff[c.File] = true
+
+		fi := len(d.Files)
+		hidden := collapsed[c.File]
+		notes := idx.rest(c.File)
+		d.Files = append(d.Files, FileRef{Entry: git.FileEntry{Path: c.File},
+			Row: len(d.Rows), Collapsed: hidden, Orphan: true})
+		d.add(Row{Kind: RowFile, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1})
+		if !hidden {
+			d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1,
+				Text: orphanNote(len(notes))})
+		}
+		// The notes stay on screen whether or not the file is folded away, as
+		// they do on a file the diff still holds: a folded note is a note back
+		// where it was, drawn nowhere.
+		d.addComments(fi, -1, notes)
+		d.addDraft(fi, -1, d.Draft.path == c.File)
+		d.add(Row{Kind: RowBlank, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1})
+	}
+}
+
+// orphanNote stands where the diff would be on a file that has none left, naming
+// the two ways a change goes without the notes on it going too.
+func orphanNote(n int) string {
+	left := "leaving these notes behind"
+	if n == 1 {
+		left = "leaving this note behind"
+	}
+	return "no changes here any more — committed, or put back — " + left
+}
+
+// orphanLabel stands in for the line counts on a file that has no diff to count.
+const orphanLabel = "not in this change"
+
+// orphanPaths names the files drawn only because notes were left on them, for
+// the places that have to say so in words rather than in a header.
+func (d Document) orphanPaths() map[string]bool {
+	out := map[string]bool{}
+	for _, f := range d.Files {
+		if f.Orphan {
+			out[f.Entry.Path] = true
+		}
+	}
+	return out
 }
 
 // addDraft lays the editor out here, if this is where the comment being written

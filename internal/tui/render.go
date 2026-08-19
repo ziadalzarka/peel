@@ -150,12 +150,19 @@ func (r *Renderer) file(d Document, row Row, st RowState) string {
 		name = r.theme.FileHead.Render(name)
 	}
 
+	summary := r.fileSummary(entry, added, removed)
+	if f.Orphan {
+		// `+0 -0` under a file with no diff reads as a change that came to
+		// nothing, rather than as a file this review is not about any more.
+		summary = r.theme.Dim.Render(orphanLabel)
+	}
+
 	return r.fit(strings.Join([]string{
 		" ",
 		r.stateSymbol(entry.State()),
 		r.theme.Dim.Render(arrow),
 		name,
-		r.fileSummary(entry, added, removed),
+		summary,
 	}, " "))
 }
 

@@ -2621,3 +2621,56 @@ func rowOfCode(t *testing.T, m *Model, text string) int {
 	t.Fatalf("no row shows %q", text)
 	return -1
 }
+
+// What `C` hands over and what the diff shows are the same review. A note whose
+// file has left the change is drawn under a header of its own, so the clipboard
+// never carries something the reviewer had no way to see, resolve, or delete.
+func TestCCopiesNothingTheDiffDoesNotShow(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 3, Side: store.SideNew, Body: "still in the change", Author: store.AuthorUser},
+		{ID: "c2", File: "reverted.go", Line: 12, Side: store.SideNew, Body: "the change went, this stayed", Author: store.AuthorUser},
+	}
+	m := newModel(t, backend)
+
+	press(t, m, "C")
+
+	if len(backend.copied) != 1 {
+		t.Fatalf("Copy called %d times, want 1", len(backend.copied))
+	}
+	for _, c := range backend.comments {
+		if m.doc.RowOfComment(c.ID) < 0 {
+			t.Errorf("%s was copied but drawn nowhere", c.ID)
+		}
+	}
+	got := backend.copied[0]
+	if !strings.Contains(got, "reverted.go:12") {
+		t.Errorf("the copied review is missing the note on the file that left the diff:\n%s", got)
+	}
+	if !strings.Contains(got, goneNote) {
+		t.Errorf("the agent was sent to a line in a file the change no longer touches, unwarned:\n%s", got)
+	}
+	if strings.Count(got, goneNote) != 1 {
+		t.Errorf("the warning was put on a note whose file is still in the change:\n%s", got)
+	}
+}
+
+// A file drawn only because a note outlived its changes has nothing to stage.
+// `s` on its header says so instead of reporting a staging that stages nothing.
+func TestSOnAFileThatLeftTheDiffStagesNothing(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "reverted.go", Line: 12, Side: store.SideNew, Body: "left behind", Author: store.AuthorUser},
+	}
+	m := newModel(t, backend)
+	m.moveTo(m.doc.RowOfFile(m.fileIndex("reverted.go")))
+
+	press(t, m, "s")
+
+	if len(backend.stagedFiles) != 0 {
+		t.Errorf("staged %v, want git left alone", backend.stagedFiles)
+	}
+	if !strings.Contains(m.status, "no changes to stage") {
+		t.Errorf("status = %q, want it to say there is nothing there to stage", m.status)
+	}
+}

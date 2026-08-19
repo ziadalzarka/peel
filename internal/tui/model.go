@@ -1018,6 +1018,10 @@ func (m *Model) stageAt() tea.Cmd {
 		return nil
 	}
 	path := file.Entry.Path
+	if file.Orphan {
+		m.status = path + " has no changes to stage — its notes outlived them"
+		return nil
+	}
 	if file.Entry.State() == git.StateStaged {
 		// Nothing to write, but `s` still means "done with this one" — a file
 		// reopened with `space` folds again, and moves on, without a pointless git
@@ -1708,7 +1712,7 @@ func (m *Model) copyComments() tea.Cmd {
 		return nil
 	}
 
-	text := commentHandoff(open)
+	text := commentHandoff(open, m.doc.orphanPaths())
 	before := m.snapshot()
 	m.status = "copied " + plural(len(open), "comment")
 	if resolved > 0 {

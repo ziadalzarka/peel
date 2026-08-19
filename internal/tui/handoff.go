@@ -29,12 +29,17 @@ const handoffHeader = "Review comments copied from peel. Review them one by one.
 // The notes are grouped by file, in the order the files are first commented on
 // and by line within a file, so the agent reads a file's notes together instead
 // of being sent back and forth in the order they happened to be written.
-func commentHandoff(comments []store.Comment) string {
+//
+// gone names the files the change no longer touches, which the reader has to be
+// told about: the agent is being sent to a path on disk, and a note left on a
+// change that has since gone is the one case where that path holds nothing the
+// review was ever about.
+func commentHandoff(comments []store.Comment, gone map[string]bool) string {
 	var b strings.Builder
 	b.WriteString(handoffHeader)
 	b.WriteString("\n")
 	for _, c := range inReadingOrder(comments) {
-		fmt.Fprintf(&b, "\n%s\n", handoffAnchor(c))
+		fmt.Fprintf(&b, "\n%s\n", handoffAnchor(c, gone[c.File]))
 		for _, line := range strings.Split(strings.TrimSpace(c.Body), "\n") {
 			if strings.TrimSpace(line) == "" {
 				b.WriteString("\n")
@@ -49,16 +54,32 @@ func commentHandoff(comments []store.Comment) string {
 // handoffAnchor names where a note was left, in the file:line form every tool
 // prints paths in, saying what the number counts lines in when that is not the
 // file the agent is about to open.
-func handoffAnchor(c store.Comment) string {
+func handoffAnchor(c store.Comment, gone bool) string {
 	if c.Line <= 0 {
+		if gone {
+			return c.File + " (" + goneNote + ")"
+		}
 		return c.File
 	}
 	anchor := c.Location()
+	if gone {
+		return anchor + " (" + goneNote + ")"
+	}
 	if note := lineNumberNote(c); note != "" {
 		return anchor + " (" + note + ")"
 	}
 	return anchor
 }
+
+// goneNote warns that the change a note was written on is not in the diff any
+// more — committed, stashed, or put back.
+//
+// Which of those it was decides whether the line number still names the same
+// code, and peel cannot tell them apart from here. So the note says the one
+// thing that is true of all three: what the number meant was measured against a
+// change the reader will not find by reading the file.
+const goneNote = "this file is not part of the change under review any more; " +
+	"the line number is where the note was written"
 
 // lineNumberNote explains a line number the agent cannot take at face value.
 //

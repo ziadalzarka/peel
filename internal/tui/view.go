@@ -255,15 +255,23 @@ func (m *Model) paneLine(row paneRow, marked string, width int) string {
 
 	added, removed := m.doc.Files[row.File].Entry.Stats()
 	counts := fmt.Sprintf("+%d -%d", added, removed)
+	if m.doc.Files[row.File].Orphan {
+		// A file with no diff has nothing to count, and `+0 -0` beside it would
+		// read as a change that came to nothing. The row is here for the notes on
+		// it, which the diff itself says.
+		counts = ""
+	}
 	// What the name has left once the counts and the gap in front of them are
 	// out of the way. Now that the pane stays on screen at narrow widths, and
 	// an indent takes some of what is left, a row can end up with room for the
 	// counts or for the name but not both. The name wins: the file header in
 	// the diff carries the counts anyway.
-	if named := room - ansi.StringWidth(counts) - 2; named >= filePaneNameMin {
-		room = named
-	} else {
-		counts = ""
+	if counts != "" {
+		if named := room - ansi.StringWidth(counts) - 2; named >= filePaneNameMin {
+			room = named
+		} else {
+			counts = ""
+		}
 	}
 	name := shorten(row.Name, max(room, 4))
 

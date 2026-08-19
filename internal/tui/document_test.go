@@ -1104,3 +1104,72 @@ func TestDocumentMeasuresTheWidestLineWithTabsExpanded(t *testing.T) {
 		t.Errorf("CodeWidth over tab-indented code = %d, want %d", tabbed.CodeWidth, want)
 	}
 }
+
+// A note outlives the change it was written on when the file is committed, put
+// back, or stashed: the session stops holding it, and before this the note was
+// drawn nowhere while the store, `C` and the code host all still had it. It is
+// the reviewer's note either way, so it keeps a place on screen.
+func TestBuildDrawsNotesWhoseFileHasLeftTheDiff(t *testing.T) {
+	comments := []store.Comment{
+		{ID: "here", File: "alpha.go", Line: 3, Side: store.SideNew, Body: "still in the change", Author: store.AuthorUser},
+		{ID: "gone", File: "vanished.go", Line: 7, Side: store.SideNew, Body: "left behind", Author: store.AuthorUser},
+		{ID: "also", File: "vanished.go", Line: 9, Side: store.SideNew, Body: "left behind too", Author: store.AuthorUser},
+	}
+	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutUnified)
+
+	row := doc.RowOfComment("gone")
+	if row < 0 {
+		t.Fatal("a note whose file left the diff was drawn nowhere")
+	}
+	if doc.RowOfComment("also") < 0 {
+		t.Error("the second note on the same file was drawn nowhere")
+	}
+
+	fi := doc.Rows[row].File
+	if fi != 2 {
+		t.Errorf("the note's file is document file %d, want it after the two the diff holds", fi)
+	}
+	if len(doc.Files) != 3 {
+		t.Fatalf("files = %d, want one header per file, the missing one included", len(doc.Files))
+	}
+	f := doc.Files[fi]
+	if !f.Orphan || f.Entry.Path != "vanished.go" {
+		t.Fatalf("the note's file = %+v, want vanished.go marked as having no diff", f)
+	}
+	if len(f.Hunks) != 0 {
+		t.Errorf("hunks under a file with no diff = %d, want none", len(f.Hunks))
+	}
+
+	head := doc.RowOfFile(fi)
+	if doc.Rows[head].Kind != RowFile || doc.Rows[head+1].Kind != RowNote {
+		t.Fatalf("rows at the header = %v, %v, want a header and the note saying why there is no diff",
+			doc.Rows[head].Kind, doc.Rows[head+1].Kind)
+	}
+	if got := doc.Rows[head+1].Text; got != orphanNote(2) {
+		t.Errorf("the note under the header = %q, want it to say where the two notes' changes went", got)
+	}
+	if got := doc.Hunks; len(got) != 2 {
+		t.Errorf("hunks = %d, want the two the diff holds and no more", len(got))
+	}
+}
+
+// A file the diff still holds keeps its notes where they were: only the ones
+// nothing on screen can claim go under a header of their own.
+func TestBuildLeavesNotesOnFilesTheDiffHolds(t *testing.T) {
+	comments := []store.Comment{
+		{ID: "here", File: "alpha.go", Line: 3, Side: store.SideNew, Body: "on a line", Author: store.AuthorUser},
+	}
+	doc := Build(newSession(t, twoFileDiff), comments, nil, LayoutUnified)
+
+	if len(doc.Files) != 2 {
+		t.Fatalf("files = %d, want only the two the diff holds", len(doc.Files))
+	}
+	for _, f := range doc.Files {
+		if f.Orphan {
+			t.Errorf("%s was drawn as a file with no diff", f.Entry.Path)
+		}
+	}
+	if _, staged := codeUnder(t, doc, "here"); staged {
+		t.Error("the note left the line it was written on")
+	}
+}
