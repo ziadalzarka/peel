@@ -883,7 +883,12 @@ type spot struct {
 	path string
 	// comment is the ID of the comment the cursor is on, when it is on one.
 	comment string
-	hunk    git.HunkID
+	// under and over are the notes drawn either side of comment, for the notes
+	// that hang off no line and are stacked under their file. They are what the
+	// cursor falls back to when comment has been deleted, since the row above
+	// that stack is the end of a diff the note was never about.
+	under, over string
+	hunk        git.HunkID
 	// line indexes into the hunk's lines, and is -1 when the cursor is not on
 	// one. Hunk IDs carry the hunk header, so a hunk that kept its ID kept its
 	// lines too and the index still names the same code.
@@ -898,12 +903,22 @@ type spot struct {
 // A comment records the line it hangs off as well as its own ID, since the
 // rebuild that follows deleting or hiding one is the rebuild where the ID names
 // nothing: the cursor belongs on the code the comment was about, not at the top
-// of the file.
+// of the file. A comment with no line to hang off records the notes stacked
+// beside it instead, which is the same rule where there is no code to fall back
+// to.
 func (m *Model) spot() spot {
 	at := spot{path: m.currentPath(), line: -1}
 	row := m.cursor
 	if c, ok := m.doc.CommentAt(row); ok {
 		at.comment = c.ID
+		// A note on the file as a whole, and one whose code has been rewritten
+		// out from under it, are both drawn under their file rather than on a
+		// line — stacked one on the next, with the end of the diff above them.
+		// Losing one of those puts the cursor on its neighbour in the stack, not
+		// on code the note was never about.
+		if m.doc.Rows[row].Hunk < 0 {
+			at.under, at.over = m.doc.StackedAround(row)
+		}
 		row = m.doc.AnchorOf(row)
 	}
 	if side := m.doc.SideAt(row); side >= 0 {
@@ -924,9 +939,11 @@ func (m *Model) spot() spot {
 // moveToSpot puts the cursor back on what spot named, falling back through the
 // line, the hunk and then the file when the comment or the exact line has gone.
 func (m *Model) moveToSpot(at spot) {
-	if row := m.doc.RowOfComment(at.comment); row >= 0 {
-		m.moveTo(row)
-		return
+	for _, id := range []string{at.comment, at.under, at.over} {
+		if row := m.doc.RowOfComment(id); row >= 0 {
+			m.moveTo(row)
+			return
+		}
 	}
 	if at.side != "" {
 		if row := m.doc.RowOfSide(at.path, at.side); row >= 0 {

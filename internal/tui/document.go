@@ -1302,6 +1302,44 @@ func (d Document) AnchorOf(row int) int {
 	return row
 }
 
+// StackedAround returns the IDs of the notes drawn immediately under and over
+// the one at row, within the unbroken run of notes it sits in. Either is empty
+// where the run ends.
+//
+// It is what a note that hangs off no line falls back to when it goes: those are
+// drawn under their file, one after another with no code between them, so the
+// note beside it in the run is the nearest thing it was next to.
+func (d Document) StackedAround(row int) (under, over string) {
+	c, ok := d.CommentAt(row)
+	if !ok {
+		return "", ""
+	}
+	start := row
+	for start > 0 && d.Rows[start-1].Kind == RowComment {
+		start--
+	}
+	var run []string
+	for i := start; i < len(d.Rows) && d.Rows[i].Kind == RowComment; i++ {
+		r := d.Rows[i]
+		if r.Head && r.Comment >= 0 && r.Comment < len(d.Comments) {
+			run = append(run, d.Comments[r.Comment].ID)
+		}
+	}
+	for i, id := range run {
+		if id != c.ID {
+			continue
+		}
+		if i+1 < len(run) {
+			under = run[i+1]
+		}
+		if i > 0 {
+			over = run[i-1]
+		}
+		return under, over
+	}
+	return "", ""
+}
+
 // commentIndex places comments at the rows they anchor to, using each comment
 // at most once so a line appearing on both the staged and unstaged side does
 // not duplicate it.

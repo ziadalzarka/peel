@@ -170,6 +170,13 @@ the note's own place — a comment is corrected where it stands rather than dele
 and written again. Emptying it does not delete it; `D` is that key. The agent's
 notes are its own: they can be resolved, answered or deleted, not rewritten.
 
+`D` leaves the cursor on the code the note was about, so deleting one does not
+cost you your place. A note with no code left to go back to — one on the file as
+a whole, or one whose lines have been rewritten away — is drawn under its file
+with the others in the same position, and there the cursor lands on the next note
+down the stack instead. Working through a file's outdated notes is one key
+pressed over and over, rather than a scroll back up the file between each one.
+
 A note can be about more than one line. `shift` with `↓` or `↑` takes the next
 line into a run and carries the cursor with it — reversing the arrow gives a line
 back — and `c` then writes one note about all of it, stored with both ends and
