@@ -150,6 +150,13 @@ func sessionOf(entries []git.FileEntry) *app.Session {
 	return &app.Session{Title: "working tree", Files: entries, Stageable: true}
 }
 
+// readOnlySession is a diff with no index behind it, the way a pull request
+// arrives: everything in it reads as a change and nothing in it can be staged.
+func readOnlySession(t *testing.T, diff string) *app.Session {
+	t.Helper()
+	return &app.Session{Title: "#412", Files: parseFiles(t, diff)}
+}
+
 // groupedWalkthrough is the shape the default instruction asks a provider for:
 // a numbered step, the files it covers, then the explanation.
 const groupedWalkthrough = "## 1. The function alpha exports\n" +

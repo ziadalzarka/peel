@@ -136,6 +136,11 @@ type Model struct {
 	// says may no longer be true and `W` is worth pressing.
 	walkStale bool
 
+	// moves is where the cursor goes once a file has been dealt with, one
+	// setting for `s` and one for `space`. It is read from git config at
+	// startup, since the keys it governs draw before they ask git anything.
+	moves app.Moves
+
 	// follow re-reads the repository on a timer, for watching a build or an
 	// agent change files while reviewing.
 	follow bool
@@ -177,6 +182,7 @@ type options struct {
 	follow    bool
 	pollEvery time.Duration
 	provider  string
+	moves     app.Moves
 }
 
 // Option customises a Model.
@@ -208,6 +214,10 @@ func WithPollInterval(d time.Duration) Option {
 	return func(o *options) { o.pollEvery = d }
 }
 
+// WithMoves sets where the cursor goes after a file has been staged and after
+// one has been folded away.
+func WithMoves(m app.Moves) Option { return func(o *options) { o.moves = m } }
+
 // New builds the review UI for a session and the comments already on it.
 func New(ctx context.Context, backend Backend, session *app.Session, comments []store.Comment, opts ...Option) *Model {
 	cfg := options{theme: DefaultTheme(), syntax: NewHighlighter(), width: 100, height: 30}
@@ -229,6 +239,7 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 		renderer:    NewRenderer(cfg.theme, cfg.syntax),
 		input:       newInput(cfg.theme),
 		walkFolded:  map[int]bool{},
+		moves:       cfg.moves.OrDefault(),
 		follow:      cfg.follow,
 		pollEvery:   cfg.pollEvery,
 	}
@@ -1009,8 +1020,10 @@ func (m *Model) quit() tea.Cmd {
 //
 // A file is the smallest thing that can be staged, so a hunk header or a diff
 // line stages the file it belongs to. The file folds away once it is staged and
-// the cursor moves on to the next one still open, since this one has been dealt
-// with — `space` opens it again.
+// the cursor carries on to the next file with work still out of the index,
+// since this one has been dealt with — `space` opens it again. Where the cursor
+// goes is `peel.afterStage`, for the passes that read the diff in another
+// order.
 func (m *Model) stageAt() tea.Cmd {
 	file, ok := m.doc.FileTargetAt(m.cursor)
 	if !ok {
@@ -1181,12 +1194,12 @@ func (m *Model) saveFolds() {
 	}
 }
 
-// foldNow folds a file away immediately, without waiting on git, and moves on
-// the way staging does.
-func (m *Model) foldNow(path string) {
+// foldNow folds a file away immediately, without waiting on git, and carries
+// the pass on under the rule the key that folded it goes by.
+func (m *Model) foldNow(path string, move app.Move) {
 	m.setCollapsed(fold(path))
 	m.rebuild()
-	m.advanceFrom(path)
+	m.advanceFrom(path, move)
 }
 
 // foldStaged folds a file away because it has just been staged, and records
@@ -1198,7 +1211,7 @@ func (m *Model) foldNow(path string) {
 // A file put away by hand was put away deliberately and stays that way.
 func (m *Model) foldStaged(path string) {
 	m.stagedFolds[path] = true
-	m.foldNow(path)
+	m.foldNow(path, m.moves.AfterStage)
 }
 
 // reopenStagedChanged opens the files that were folded away by staging and have
@@ -1229,39 +1242,55 @@ func (m *Model) reopenStagedChanged() []string {
 	return opened
 }
 
-// advanceFrom moves the cursor on to the next file left open below, which is
-// where the pass carries on once path has been dealt with. It stays on path
-// when nothing below it is open, since a file that has just been folded is a
-// better place to be than an arbitrary one.
-func (m *Model) advanceFrom(path string) {
-	if next := m.nextToReview(path); next >= 0 {
-		m.revealFile(m.doc.topOf(m.doc.RowOfFile(next)))
-		return
+// advanceFrom moves the cursor on to the next file the pass carries on with
+// once path has been dealt with. It stays on path when there is no such file,
+// since a file that has just been folded is a better place to be than an
+// arbitrary one — and when the setting says the cursor was never to move.
+func (m *Model) advanceFrom(path string, move app.Move) {
+	if move != app.MoveStay {
+		if next := m.nextToReview(path, move); next >= 0 {
+			m.revealFile(m.doc.topOf(m.doc.RowOfFile(next)))
+			return
+		}
 	}
 	m.restoreCursor(path)
 }
 
-// nextToReview finds the first file below path that is still open — not folded
-// away — or -1 when there is none, including when path itself has gone.
+// nextToReview finds the first file below path the pass stops on, or -1 when
+// there is none, including when path itself has gone.
 //
-// A folded file is passed over: it has been dealt with, and a header with
-// nothing under it is nothing to carry the pass on with. Being staged is not
-// what makes a file done here — the fold is; a staged file still open is one
-// whose diff is on screen to be read, so the pass stops on it like any other.
 // What is above path does not come into it — the pass runs down the diff, and a
-// file left open behind the cursor was left that way on purpose.
-func (m *Model) nextToReview(path string) int {
+// file left behind the cursor was left that way on purpose.
+func (m *Model) nextToReview(path string, move app.Move) int {
 	file := m.fileIndex(path)
 	if file < 0 {
 		return -1
 	}
 	for i := file + 1; i < len(m.doc.Files); i++ {
-		if m.collapsed[m.doc.Files[i].Entry.Path] {
-			continue
+		if m.stopsOn(m.doc.Files[i], move) {
+			return i
 		}
-		return i
 	}
 	return -1
+}
+
+// stopsOn reports whether a pass moving on lands on this file.
+//
+// Under `next-unstaged` the index is what says a file is done: everything of it
+// is in there, so there is nothing left to decide about it, and whether it is
+// folded is only where it happens to be on screen. A file folded away with work
+// still out of the index is a stop — the fold was the reviewer's, and the work
+// it hid is work nobody has staged.
+//
+// Under `next-open` the fold is what says it, whatever the index holds: a file
+// staged outside peel has never been read here, so its diff is a stop like any
+// other. A session with no index to stage into reads that way too, since there
+// the fold is the only record of the pass there is.
+func (m *Model) stopsOn(f FileRef, move app.Move) bool {
+	if move == app.MoveUnstaged && m.session.Stageable {
+		return f.Entry.State() != git.StateStaged
+	}
+	return !m.collapsed[f.Entry.Path]
 }
 
 // foldEvery collapses or opens every file on screen, for the whole-tree
@@ -2238,7 +2267,8 @@ func (m *Model) fileIndex(path string) int {
 // and this shows it.
 //
 // Folding a file means the same thing staging one does — done with it — so the
-// cursor moves on to the next file still open. Opening one again leaves the
+// cursor moves on, by its own setting: `peel.afterFold`, which defaults to the
+// next file with work still out of the index. Opening one again leaves the
 // cursor on it, since that is the file being read.
 func (m *Model) toggleCollapse() {
 	if step := m.doc.StepAt(m.cursor); step >= 0 {
@@ -2262,7 +2292,7 @@ func (m *Model) toggleCollapse() {
 		// A file put away by hand is put away for good: it was read and closed,
 		// where a file folded by staging opens again when something lands in it.
 		delete(m.stagedFolds, path)
-		m.foldNow(path)
+		m.foldNow(path, m.moves.AfterFold)
 		return
 	}
 	m.setCollapsed(unfold(path))

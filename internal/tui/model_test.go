@@ -759,10 +759,14 @@ func TestStagingLeavesTheWindowOnANextFileAlreadyOnScreen(t *testing.T) {
 // the bottom of the window with what came before it still above, the way it would
 // have arrived had the reviewer scrolled there by hand.
 func TestFoldingScrollsFarEnoughToOpenTheNextFile(t *testing.T) {
-	m := newModel(t, newFakeBackend(manyFileSession(t, 20)), WithSize(100, 30))
-
-	// Everything between the first file and file 14 has been folded away already,
-	// so the file the pass moves on to is far below the window.
+	// Everything between the first file and file 14 has been dealt with already —
+	// staged, and folded away by the staging — so the file the pass moves on to
+	// is far below the window.
+	session := manyFileSession(t, 20)
+	for i := 1; i < 14; i++ {
+		session.Files[i].Staged, session.Files[i].Unstaged = session.Files[i].Unstaged, nil
+	}
+	m := newModel(t, newFakeBackend(session), WithSize(100, 30))
 	for i := 1; i < 14; i++ {
 		m.collapsed[m.doc.Files[i].Entry.Path] = true
 	}
@@ -782,10 +786,10 @@ func TestFoldingScrollsFarEnoughToOpenTheNextFile(t *testing.T) {
 	}
 }
 
-// The next file is the next one still open. A file staged elsewhere — by an
-// agent, or by a git add outside peel — has never been folded away here, so its
-// diff is still on screen to be read and the pass stops on it.
-func TestStagingStopsOnAStagedFileLeftOpen(t *testing.T) {
+// The next file is the next one with work still out of the index. A file staged
+// elsewhere — by an agent, or by a git add outside peel — has nothing left to
+// decide about, so the pass goes over it whether or not its diff is on screen.
+func TestStagingPassesOverAFileAlreadyInTheIndex(t *testing.T) {
 	entries := parseFiles(t, threeFileDiff)
 	entries[1].Staged, entries[1].Unstaged = entries[1].Unstaged, nil
 	backend := newFakeBackend(sessionOf(entries))
@@ -798,14 +802,15 @@ func TestStagingStopsOnAStagedFileLeftOpen(t *testing.T) {
 	m := newModel(t, backend)
 	press(t, m, "s")
 
-	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
-		t.Errorf("cursor is on %q, want beta.txt — it is staged but still open to read", got)
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "gamma.md" {
+		t.Errorf("cursor is on %q, want gamma.md — beta.txt is in the index already", got)
 	}
 }
 
-// A folded file has been read already, so staging passes over it the way it
-// passes over a staged one and carries on to the next file still open.
-func TestStagingSkipsFilesThatAreFolded(t *testing.T) {
+// A fold is where a file is on screen, not whether it is done: a file folded
+// away with work still out of the index is a stop, and `space` on it opens the
+// work the fold was hiding.
+func TestStagingStopsOnAFoldedFileWithWorkLeftInIt(t *testing.T) {
 	backend := newFakeBackend(newSession(t, threeFileDiff))
 	backend.folded = []string{"beta.txt"}
 
@@ -816,27 +821,29 @@ func TestStagingSkipsFilesThatAreFolded(t *testing.T) {
 	m := newModel(t, backend)
 	press(t, m, "s")
 
-	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "gamma.md" {
-		t.Errorf("cursor is on %q, want gamma.md — beta.txt is folded away, but gamma.md below it is still open", got)
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
+		t.Errorf("cursor is on %q, want beta.txt — it is folded away, but nothing of it is staged", got)
 	}
 }
 
-// With nothing open below, there is nowhere to carry the pass on to: the cursor
+// With nothing left below, there is nowhere to carry the pass on to: the cursor
 // stays on the file just dealt with rather than landing on a header with
-// nothing under it. A file left open above does not pull the cursor back.
-func TestStagingStaysPutWhenEverythingBelowIsFolded(t *testing.T) {
-	backend := newFakeBackend(newSession(t, threeFileDiff))
-	backend.folded = []string{"gamma.md"}
+// nothing under it. A file left over above does not pull the cursor back.
+func TestStagingStaysPutWhenEverythingBelowIsDone(t *testing.T) {
+	entries := parseFiles(t, threeFileDiff)
+	entries[2].Staged, entries[2].Unstaged = entries[2].Unstaged, nil
+	backend := newFakeBackend(sessionOf(entries))
 
 	staged := parseFiles(t, threeFileDiff)
 	staged[1].Staged, staged[1].Unstaged = staged[1].Unstaged, nil
+	staged[2].Staged, staged[2].Unstaged = staged[2].Unstaged, nil
 	backend.nextSession = sessionOf(staged)
 
 	m := newModel(t, backend)
 	press(t, m, "alt+down", "s")
 
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
-		t.Errorf("cursor is on %q, want it to stay on beta.txt — gamma.md is folded and alpha.go is behind the cursor", got)
+		t.Errorf("cursor is on %q, want it to stay on beta.txt — gamma.md is staged and alpha.go is behind the cursor", got)
 	}
 }
 
@@ -1049,11 +1056,13 @@ func TestFoldingTheLastFileStaysOnIt(t *testing.T) {
 	}
 }
 
-// Folding moves on the way staging does, over what has been read already and on
-// to the next file still open.
-func TestFoldingSkipsFilesThatAreFolded(t *testing.T) {
-	backend := newFakeBackend(newSession(t, threeFileDiff))
-	backend.folded = []string{"beta.txt"}
+// Folding moves on the way staging does, over the files whose work is in the
+// index and on to the next one whose is not — folded or not.
+func TestFoldingMovesOnByTheIndexAndNotTheFold(t *testing.T) {
+	entries := parseFiles(t, threeFileDiff)
+	entries[1].Staged, entries[1].Unstaged = entries[1].Unstaged, nil
+	backend := newFakeBackend(sessionOf(entries))
+	backend.folded = []string{"gamma.md"}
 	m := newModel(t, backend)
 
 	press(t, m, "space")
@@ -1062,7 +1071,76 @@ func TestFoldingSkipsFilesThatAreFolded(t *testing.T) {
 		t.Fatal("space did not collapse alpha.go")
 	}
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "gamma.md" {
-		t.Errorf("cursor is on %q, want gamma.md — beta.txt is folded away, but gamma.md below it is still open", got)
+		t.Errorf("cursor is on %q, want gamma.md — beta.txt is staged, and gamma.md is folded with its work still out", got)
+	}
+}
+
+// Where the cursor goes after a file has been dealt with is the reviewer's, not
+// peel's: `peel.afterStage` set to next-open puts the pass back on the fold, so
+// a file staged outside peel is a stop again because its diff has still to be
+// read here.
+func TestAfterStageNextOpenMovesByTheFold(t *testing.T) {
+	entries := parseFiles(t, threeFileDiff)
+	entries[1].Staged, entries[1].Unstaged = entries[1].Unstaged, nil
+	backend := newFakeBackend(sessionOf(entries))
+
+	staged := parseFiles(t, threeFileDiff)
+	staged[0].Staged, staged[0].Unstaged = staged[0].Unstaged, nil
+	staged[1].Staged, staged[1].Unstaged = staged[1].Unstaged, nil
+	backend.nextSession = sessionOf(staged)
+
+	m := newModel(t, backend, WithMoves(app.Moves{AfterStage: app.MoveOpen}))
+	press(t, m, "s")
+
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
+		t.Errorf("cursor is on %q, want beta.txt — under next-open a staged file left open is a stop", got)
+	}
+}
+
+// Set to stay, the cursor does not move at all: the file folds away under it and
+// the reviewer decides where to go next.
+func TestAfterStageStayLeavesTheCursorOnTheFileStaged(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	staged := parseFiles(t, twoFileDiff)
+	staged[0].Staged, staged[0].Unstaged = staged[0].Unstaged, nil
+	backend.nextSession = sessionOf(staged)
+
+	m := newModel(t, backend, WithMoves(app.Moves{AfterStage: app.MoveStay}))
+	press(t, m, "s")
+
+	if !m.doc.Files[0].Collapsed {
+		t.Fatal("s did not fold alpha.go away")
+	}
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "alpha.go" {
+		t.Errorf("cursor is on %q, want it left on alpha.go", got)
+	}
+}
+
+// The two settings are two settings: staging can be told to stay while folding
+// goes on carrying the pass down the diff.
+func TestFoldingKeepsItsOwnSettingWhenStagingStays(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	m := newModel(t, backend, WithMoves(app.Moves{AfterStage: app.MoveStay, AfterFold: app.MoveUnstaged}))
+
+	press(t, m, "space")
+
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
+		t.Errorf("folding left the cursor on %q, want beta.txt — afterFold was never set to stay", got)
+	}
+}
+
+// A pull request has no index to read the default against, so there the fold is
+// what the pass goes by: a file already folded away has been read, and one still
+// open has not.
+func TestAPassThatCannotStageMovesByTheFold(t *testing.T) {
+	backend := newFakeBackend(readOnlySession(t, threeFileDiff))
+	backend.folded = []string{"beta.txt"}
+	m := newModel(t, backend)
+
+	press(t, m, "space")
+
+	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "gamma.md" {
+		t.Errorf("cursor is on %q, want gamma.md — beta.txt is folded away and nothing here can be staged", got)
 	}
 }
 

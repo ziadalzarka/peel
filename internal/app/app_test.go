@@ -849,6 +849,99 @@ func TestOptionsOverrideDefaults(t *testing.T) {
 	}
 }
 
+// With nothing written, staging and folding both carry the pass on to the next
+// file with work still out of the index. That is what a review is: the files
+// nobody has staged are the files still to decide about.
+func TestMovesDefaultToTheNextUnstagedFile(t *testing.T) {
+	a, _ := openFixture(t, nil)
+
+	moves, err := a.Moves(context.Background())
+	if err != nil {
+		t.Fatalf("Moves: %v", err)
+	}
+	if want := app.DefaultMoves(); moves != want {
+		t.Errorf("Moves = %+v, want %+v", moves, want)
+	}
+}
+
+// The two are set apart, so a pass that stages and a pass that only folds can
+// move differently.
+func TestMovesAreReadPerKey(t *testing.T) {
+	a, _ := openFixture(t, map[string]string{
+		app.AfterStageKey: "stay",
+		app.AfterFoldKey:  "next-open",
+	})
+
+	moves, err := a.Moves(context.Background())
+	if err != nil {
+		t.Fatalf("Moves: %v", err)
+	}
+	if want := (app.Moves{AfterStage: app.MoveStay, AfterFold: app.MoveOpen}); moves != want {
+		t.Errorf("Moves = %+v, want %+v", moves, want)
+	}
+}
+
+// A value peel does not understand keeps its default and says so. Refusing to
+// open the review would cost the reviewer their pass over a typo in a config
+// file they can only fix by leaving.
+func TestAnUnreadableMoveKeepsTheDefaultAndSaysWhichKey(t *testing.T) {
+	a, _ := openFixture(t, map[string]string{
+		app.AfterStageKey: "onwards",
+		app.AfterFoldKey:  "stay",
+	})
+
+	moves, err := a.Moves(context.Background())
+	if err == nil {
+		t.Fatal("Moves accepted a value it does not know")
+	}
+	if !strings.Contains(err.Error(), app.AfterStageKey) {
+		t.Errorf("error = %q, want it to name the setting that was not read", err)
+	}
+	if moves.AfterStage != app.MoveUnstaged {
+		t.Errorf("AfterStage = %q, want the default kept", moves.AfterStage)
+	}
+	if moves.AfterFold != app.MoveStay {
+		t.Errorf("AfterFold = %q, want the setting that did parse to stand", moves.AfterFold)
+	}
+}
+
+// Git stores what it is given, so the value is read the way the rest of git
+// config is: case and surrounding space are not part of the setting.
+func TestAMoveIsReadWhateverItsCase(t *testing.T) {
+	a, _ := openFixture(t, map[string]string{app.AfterStageKey: "  Next-Open  "})
+
+	moves, err := a.Moves(context.Background())
+	if err != nil {
+		t.Fatalf("Moves: %v", err)
+	}
+	if moves.AfterStage != app.MoveOpen {
+		t.Errorf("AfterStage = %q, want %q", moves.AfterStage, app.MoveOpen)
+	}
+}
+
+// Against real git, since the whole setting rests on how git stores a key: the
+// last component comes back lower-cased whatever case it was written in, so
+// `peel.afterStage` is read as `peel.afterstage` or not at all.
+func TestMovesAreReadOutOfRealGitConfig(t *testing.T) {
+	repo := gittest.New(t)
+	repo.Git("config", "peel.afterStage", "next-open")
+
+	a, err := app.Open(context.Background(), repo.Dir)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	moves, err := a.Moves(context.Background())
+	if err != nil {
+		t.Fatalf("Moves: %v", err)
+	}
+	if moves.AfterStage != app.MoveOpen {
+		t.Errorf("AfterStage = %q, want %q", moves.AfterStage, app.MoveOpen)
+	}
+	if moves.AfterFold != app.MoveUnstaged {
+		t.Errorf("AfterFold = %q, want the default — only afterStage was written", moves.AfterFold)
+	}
+}
+
 // openFixture is an App whose git config the test writes, and whose opener is
 // recorded rather than run.
 func openFixture(t *testing.T, config map[string]string) (*app.App, *exec.FakeRunner) {

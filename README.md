@@ -15,9 +15,9 @@ The file tree on the left is the review queue and a `✓` marks a staged file �
 a whole directory once every file in it is staged. The footer is the whole
 keymap.
 
-- **Staging is the review.** `s` stages a file and moves you to the next one still
-  open, so a pass is `s` after `s`. Whole files only — no patch generation, so
-  nothing here can write the wrong lines into your index.
+- **Staging is the review.** `s` stages a file and moves you to the next one with
+  work still out of the index, so a pass is `s` after `s`. Whole files only — no
+  patch generation, so nothing here can write the wrong lines into your index.
 - **Comment where the code is.** `c` anywhere — changed line or not — opens the
   editor inline, in the diff, at the spot the note will sit.
 - **Notes keep up with the code.** Each note freezes the file it was written
@@ -250,13 +250,15 @@ to review; `space` on its heading reads it back. Edit a file after staging it an
 it unfolds on its own, on the new work alone — which happens only to a file folded
 because it was staged, never to one you folded by hand.
 
-Staging collapses the file and moves the cursor to the next one still open, never
-back to find where you were. Folded files are passed over on the way, since they
-have been read already; a file staged elsewhere but never folded here is not, its
-diff is still on screen to read. Only when nothing below is still open does the
-cursor stay put. The fold is display only: `space` reads a staged
-file back without touching the index, and a stage that fails leaves the file
-open, and the cursor on it, because it still has to be dealt with.
+Staging collapses the file and moves the cursor down the diff to the next file
+with work still out of the index, never back to find where you were. What is in
+the index has been decided about, so the pass goes over it — including a file
+somebody else staged. A folded file with work left in it is a stop like any
+other: a fold is where a file is on screen, not whether it is done. Only when
+nothing below is left does the cursor stay put. The fold is display only:
+`space` reads a staged file back without touching the index, and a stage that
+fails leaves the file open, and the cursor on it, because it still has to be
+dealt with.
 
 The fold and the move happen on the keypress, before git has been asked anything —
 as does a note appearing in the diff, and a comment resolving. None of it is in
@@ -268,10 +270,30 @@ off and the footer says why. `q` straight after `s` waits for that stage to land
 
 `space` does the same thing without the index. Not every file you read is a file
 to stage — a `--rev` or pull request session cannot stage at all, and a working
-tree has files you look at and leave alone — so folding one away moves you on to
-the next exactly as staging does. What is left open is what is left to read. On the
-heading of a half it folds that half instead, leaving the rest of the file where it
-is.
+tree has files you look at and leave alone — so folding one away moves you on
+exactly as staging does. Where there is no index to read that against, the fold
+is what the pass goes by instead: a folded file has been read and an open one has
+not. On the heading of a half it folds that half instead, leaving the rest of the
+file where it is.
+
+Where the cursor lands after either key is yours to set, since a pass that stages
+and a pass that only reads do not always walk the same way:
+
+```sh
+git config --global peel.afterStage next-unstaged   # the default, for both
+git config --global peel.afterFold next-open        # the next file still open
+git config --global peel.afterStage stay            # nowhere; stay on the file
+```
+
+`next-unstaged` is the next file below with work still out of the index, folded
+or not — and the next file still open in a session that cannot stage, which has
+no index to read. `next-open` is the next file below still open whatever the
+index holds, so a file staged outside peel is a stop because its diff has not
+been read here. `stay` leaves the cursor on the file just dealt with. The two
+keys are set separately, and setting either in a repository instead of
+`--global` narrows it to that one. Unlike `peel.open`, both are read once when
+the review opens: `s` draws before it asks git anything, and a config read there
+would be the one thing the keypress waited for.
 
 Folds are remembered between runs, per review — in `.git/peel/folds.json` for the
 working tree — so a

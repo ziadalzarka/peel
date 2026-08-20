@@ -75,11 +75,12 @@ func TestStageFromInsideTheDiffStagesTheFile(t *testing.T) {
 }
 
 // Against real git: `s` walks the review queue. Each press stages the file the
-// cursor is in and lands on the next one still open, so a three-file pass is
-// three presses.
+// cursor is in and lands on the next one with work still out of the index, so a
+// pass is a press a file — and a file somebody else put in the index is already
+// done, so the walk goes over it.
 func TestStagingWalksTheQueueOneFileAtATime(t *testing.T) {
 	repo := gittest.New(t)
-	paths := []string{"first.txt", "second.txt", "third.txt"}
+	paths := []string{"a-first.txt", "b-second.txt", "c-third.txt", "d-fourth.txt"}
 	for _, path := range paths {
 		repo.Write(path, "old\n")
 	}
@@ -87,31 +88,31 @@ func TestStagingWalksTheQueueOneFileAtATime(t *testing.T) {
 	for _, path := range paths {
 		repo.Write(path, "new\n")
 	}
-	// second.txt is staged already — an agent, or a git add outside peel — but its
-	// diff has not been read here, so the walk still stops on it.
-	repo.Git("add", "second.txt")
+	// b-second.txt is staged already — an agent, or a git add outside peel — so
+	// there is nothing left to decide about it and the walk passes over it.
+	repo.Git("add", "b-second.txt")
 
 	m := realModel(t, repo)
-	if got := m.currentPath(); got != "first.txt" {
-		t.Fatalf("the pass starts on %q, want first.txt", got)
+	if got := m.currentPath(); got != "a-first.txt" {
+		t.Fatalf("the pass starts on %q, want a-first.txt", got)
 	}
 
 	press(t, m, "s")
-	if got := m.currentPath(); got != "second.txt" {
-		t.Fatalf("after staging first.txt the cursor is on %q, want second.txt", got)
+	if got := m.currentPath(); got != "c-third.txt" {
+		t.Fatalf("after staging a-first.txt the cursor is on %q, want c-third.txt — b-second.txt is in the index already", got)
 	}
 
 	press(t, m, "s")
-	if got := m.currentPath(); got != "third.txt" {
-		t.Fatalf("after folding the staged second.txt the cursor is on %q, want third.txt", got)
+	if got := m.currentPath(); got != "d-fourth.txt" {
+		t.Fatalf("after staging c-third.txt the cursor is on %q, want d-fourth.txt", got)
 	}
 
 	press(t, m, "s")
-	if got := m.currentPath(); got != "third.txt" {
-		t.Errorf("staging the last file moved the cursor to %q, want it left on third.txt", got)
+	if got := m.currentPath(); got != "d-fourth.txt" {
+		t.Errorf("staging the last file moved the cursor to %q, want it left on d-fourth.txt", got)
 	}
-	if got := repo.StatusLines(); len(got) != 3 {
-		t.Fatalf("status = %v, want three files", got)
+	if got := repo.StatusLines(); len(got) != 4 {
+		t.Fatalf("status = %v, want four files", got)
 	}
 	for _, line := range repo.StatusLines() {
 		if line[1] != ' ' {
