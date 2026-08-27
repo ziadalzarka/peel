@@ -590,6 +590,63 @@ func TestANoteOnReadInCodeAnchorsToItsLine(t *testing.T) {
 	}
 }
 
+// A file staged is a file read again, and until that read lands the copies
+// already in hand are the ones on screen. Taking them down for the length of a
+// git call would blink every offer to read more, on every file, out and back in
+// each time the reviewer pressed `s`.
+func TestStagingLeavesTheRestOfTheDiffAloneWhileItIsReadBack(t *testing.T) {
+	backend := newFakeBackend(newSession(t, contextDiff+otherFileDiff))
+	backend.context = map[FileSide][]string{
+		wideSide:            contextFile(),
+		{Path: "other.txt"}: {"keep", "new"},
+	}
+	m := newModel(t, backend)
+	settle(t, m, m.Init(), 0)
+
+	offered := len(m.doc.Expands)
+	if offered == 0 {
+		t.Fatal("nothing offered to read more before staging")
+	}
+	m.moveTo(m.doc.RowOfFile(fileIndexOf(t, m, "other.txt")))
+
+	// The read-back is held here, on the frame the reviewer sees between the
+	// write landing and the files being read again.
+	_, cmd := m.Update(keyMsg("s"))
+	loaded, ok := cmd().(loadedMsg)
+	if !ok {
+		t.Fatalf("staging produced %T, want the read-back", cmd())
+	}
+	m.Update(loaded)
+
+	if got := len(m.doc.Expands); got != offered {
+		t.Errorf("offered %d runs while the files were being read, want the %d still on screen", got, offered)
+	}
+}
+
+// fileIndexOf finds a file in the document by path.
+func fileIndexOf(t *testing.T, m *Model, path string) int {
+	t.Helper()
+	for i, f := range m.doc.Files {
+		if f.Entry.Path == path {
+			return i
+		}
+	}
+	t.Fatalf("%s is not in the diff", path)
+	return -1
+}
+
+// otherFileDiff is a second file to stage, so a test can press `s` on one file
+// and watch what happens to another.
+const otherFileDiff = `diff --git a/other.txt b/other.txt
+index 3333333..4444444 100644
+--- a/other.txt
++++ b/other.txt
+@@ -1,2 +1,2 @@
+ keep
+-old
++new
+`
+
 // The diff moving on takes the copies with it: what was asked for is kept, but
 // it is drawn out of the file as it is now.
 func TestTheFilesAreReadAgainWhenTheDiffMovesOn(t *testing.T) {

@@ -200,6 +200,9 @@ type fakeBackend struct {
 	context      map[FileSide][]string
 	contextCalls []*app.Session
 	contextErr   error
+	// handed is what the last ask gave back, so the fake can say whether a read
+	// turned anything up the way the real backend does.
+	handed map[FileSide][]string
 
 	// agentHidden is whether the agent's notes were left out of the diff.
 	agentHidden      bool
@@ -375,12 +378,34 @@ func (f *fakeBackend) SetAgentCommentsHidden(hidden bool) error {
 
 // Context hands back whatever copies of the files the test set up, recording
 // each ask so a test can see the diff moving on send peel back for them.
-func (f *fakeBackend) Context(_ context.Context, s *app.Session) (map[FileSide][]string, error) {
+func (f *fakeBackend) Context(_ context.Context, s *app.Session) (Copies, error) {
 	f.contextCalls = append(f.contextCalls, s)
 	if f.contextErr != nil {
-		return nil, f.contextErr
+		return Copies{}, f.contextErr
 	}
-	return f.context, nil
+	fresh := !sameCopies(f.handed, f.context)
+	f.handed = f.context
+	return Copies{Files: f.context, Fresh: fresh}, nil
+}
+
+// sameCopies reports two sets of copies as holding the same files with the same
+// lines in them.
+func sameCopies(a, b map[FileSide][]string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for side, lines := range a {
+		other, ok := b[side]
+		if !ok || len(other) != len(lines) {
+			return false
+		}
+		for i := range lines {
+			if lines[i] != other[i] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func (f *fakeBackend) OpenFile(_ context.Context, path string) error {

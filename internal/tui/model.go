@@ -62,9 +62,10 @@ type Model struct {
 	// else takes the default.
 	sideFolds map[string]bool
 	// context is each side's own copy of the file its hunks are numbered
-	// against, which is what the unchanged code around a hunk is read out of. It
-	// is dropped whenever the diff moves on and read again behind the screen, so
-	// nothing is ever revealed out of a file that has since changed.
+	// against, which is what the unchanged code around a hunk is read out of. A
+	// copy is replaced behind the screen when the file it came out of moves on,
+	// and left alone when it has not, so a change to one file costs a read of
+	// that file rather than of the changeset around it.
 	context map[FileSide][]string
 	// revealed is how far each run of hidden code has been opened, by `space` on
 	// the row standing where it was left out.
@@ -1995,7 +1996,7 @@ type walkthroughMsg struct{ body string }
 
 // contextMsg carries the copies of the files the diff is measured against, for
 // reading in the unchanged code it leaves out.
-type contextMsg struct{ files map[FileSide][]string }
+type contextMsg struct{ copies Copies }
 
 type errMsg struct{ err error }
 
@@ -2013,19 +2014,25 @@ type tickMsg struct{}
 func (m *Model) contextCmd() tea.Cmd {
 	backend, ctx, session := m.backend, m.ctx, m.session
 	return func() tea.Msg {
-		files, err := backend.Context(ctx, session)
+		copies, err := backend.Context(ctx, session)
 		if err != nil {
 			return nil
 		}
-		return contextMsg{files: files}
+		return contextMsg{copies: copies}
 	}
 }
 
 // setContext draws the rows that offer to open what the diff left out, now that
 // there is something to open them from.
+//
+// A read that turned nothing up hands back the copies the screen is drawn from
+// already, so there is nothing to lay out again — which is every reload but the
+// ones where a file the review is about actually changed.
 func (m *Model) setContext(msg contextMsg) {
-	m.context = msg.files
-	m.relayout()
+	m.context = msg.copies.Files
+	if msg.copies.Fresh {
+		m.relayout()
+	}
 }
 
 // expansion is the code read in around the hunks, as the document takes it.
@@ -2072,11 +2079,12 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 	at := m.spot()
 	m.session = msg.session
 	m.comments = msg.comments
-	// The code read in around the hunks came out of files this load has just
-	// replaced. What has been asked for is kept — a run opened by hand stays open
-	// — but the copies it is drawn from are read again, so nothing on screen is
-	// text from a file as it was.
-	m.context = nil
+	// The copies the code around the hunks is read out of are left up while the
+	// read that follows this load goes out. Taking them down first would take
+	// every row offering to read more of every file with them — a whole
+	// changeset blanked and redrawn because one file was staged — and put them
+	// back a pass over the repository later. The copies that moved are the ones
+	// that come back changed; the rest are the same bytes either way.
 	if !msg.reconcile {
 		m.busy = ""
 		m.err = nil
@@ -2188,7 +2196,17 @@ func writeSideFingerprint(b *strings.Builder, side string, d *git.FileDiff) {
 	if d == nil {
 		return
 	}
-	fmt.Fprintf(b, "%s\t%v\t%t\t%s\t%s\n", side, d.Status, d.IsBinary, d.OldMode, d.NewMode)
+	fmt.Fprintf(b, "%s\t", side)
+	writeDiffFingerprint(b, d)
+}
+
+// writeDiffFingerprint writes one side's diff without saying which side it is,
+// so the same change hashes alike wherever it is held.
+func writeDiffFingerprint(b *strings.Builder, d *git.FileDiff) {
+	if d == nil {
+		return
+	}
+	fmt.Fprintf(b, "%v\t%t\t%s\t%s\n", d.Status, d.IsBinary, d.OldMode, d.NewMode)
 	for _, h := range d.Hunks {
 		fmt.Fprintf(b, "%s\n", h.Header())
 		for _, l := range h.Lines {

@@ -2,7 +2,9 @@ package tui_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ziadalzarka/peel/internal/ai"
@@ -357,11 +359,11 @@ func TestBackendWalkthroughReportsAMissingProvider(t *testing.T) {
 // the read itself fails.
 func contextOf(t *testing.T, backend tui.Backend, s *app.Session) map[tui.FileSide][]string {
 	t.Helper()
-	files, err := backend.Context(context.Background(), s)
+	copies, err := backend.Context(context.Background(), s)
 	if err != nil {
 		t.Fatalf("Context: %v", err)
 	}
-	return files
+	return copies.Files
 }
 
 // The code a hunk leaves out is read straight from the working tree, whole —
@@ -407,6 +409,151 @@ func TestBackendReadsEachHalfOfAPartStagedFile(t *testing.T) {
 	if working != "one|staged|three|on disk" {
 		t.Errorf("working half read %q, want the disk's copy", working)
 	}
+}
+
+// A change to one file is not a reason to read the rest of the changeset again:
+// every other file is byte for byte what it was, and on a large review reading
+// them all back costs a pass over the repository for nothing.
+//
+// The copies coming back in the same slices is the only proof that they were not
+// read a second time.
+func TestBackendReadsOnlyTheFilesThatMovedOn(t *testing.T) {
+	ctx := context.Background()
+	_, session, backend := backendOver(t, func(repo *gittest.Repo) {
+		repo.Write("touched.go", "package a\n\nfunc A() int { return 1 }\n")
+		repo.Write("still.go", "package b\n\nfunc B() int { return 1 }\n")
+		repo.Commit("initial")
+		repo.Write("touched.go", "package a\n\nfunc A() int { return 2 }\n")
+		repo.Write("still.go", "package b\n\nfunc B() int { return 2 }\n")
+	})
+
+	before := contextOf(t, backend, session)
+	if len(before) != 2 {
+		t.Fatalf("read %d copies, want one per file: %v", len(before), before)
+	}
+
+	if err := backend.StageFile(ctx, "touched.go"); err != nil {
+		t.Fatalf("StageFile: %v", err)
+	}
+	staged, err := backend.Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	after, err := backend.Context(ctx, staged)
+	if err != nil {
+		t.Fatalf("Context: %v", err)
+	}
+
+	still := tui.FileSide{Path: "still.go"}
+	if !sameLines(after.Files[still], before[still]) {
+		t.Error("the file nobody touched was read again")
+	}
+	// `git add` puts the disk's content into the index, so the index's copy of
+	// the staged file is the copy already read off the disk for it.
+	if !sameLines(after.Files[tui.FileSide{Path: "touched.go", Staged: true}], before[tui.FileSide{Path: "touched.go"}]) {
+		t.Error("the staged file was read again for a copy that was already in hand")
+	}
+	if !after.Fresh {
+		t.Error("a read that dropped a side reported nothing new")
+	}
+}
+
+// A file that actually changed is read again, and the read says so, since the
+// code drawn around its hunks has to come out of the file as it is now. A
+// reload with nothing behind it says the opposite, and costs neither a read nor
+// a redraw.
+func TestBackendReadsAFileAgainOnlyWhenItChanges(t *testing.T) {
+	ctx := context.Background()
+	var repo *gittest.Repo
+	_, session, backend := backendOver(t, func(r *gittest.Repo) {
+		repo = r
+		r.Write("main.go", "package main\n\nfunc main() {}\n")
+		r.Commit("initial")
+		r.Write("main.go", "package main\n\nfunc main() { println(1) }\n")
+	})
+
+	first, err := backend.Context(ctx, session)
+	if err != nil {
+		t.Fatalf("Context: %v", err)
+	}
+	if !first.Fresh {
+		t.Error("the first read reported nothing new")
+	}
+
+	same, err := backend.Context(ctx, session)
+	if err != nil {
+		t.Fatalf("Context: %v", err)
+	}
+	if same.Fresh {
+		t.Error("a read of a changeset that had not moved reported something new")
+	}
+	if !sameLines(same.Files[tui.FileSide{Path: "main.go"}], first.Files[tui.FileSide{Path: "main.go"}]) {
+		t.Error("a file that had not moved was read again")
+	}
+
+	repo.Write("main.go", "package main\n\nfunc main() { println(2) }\n")
+	moved, err := backend.Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	got, err := backend.Context(ctx, moved)
+	if err != nil {
+		t.Fatalf("Context: %v", err)
+	}
+	if !got.Fresh {
+		t.Error("the file changed and the read reported nothing new")
+	}
+	if lines := strings.Join(got.Files[tui.FileSide{Path: "main.go"}], "|"); !strings.Contains(lines, "println(2)") {
+		t.Errorf("read %q, want the file as it is now", lines)
+	}
+}
+
+// The files are read several at a time, and the reads that follow a change land
+// beside each other: a poll and a stage's read-back are two goroutines the UI
+// runs at once. This is the shape that says so under -race.
+func TestBackendReadsManyFilesAtOnce(t *testing.T) {
+	ctx := context.Background()
+	const files = 24
+	_, session, backend := backendOver(t, func(repo *gittest.Repo) {
+		for i := range files {
+			repo.Write(fmt.Sprintf("file%02d.go", i), fmt.Sprintf("package p\n\nfunc F%02d() int { return 1 }\n", i))
+		}
+		repo.Commit("initial")
+		for i := range files {
+			repo.Write(fmt.Sprintf("file%02d.go", i), fmt.Sprintf("package p\n\nfunc F%02d() int { return 2 }\n", i))
+		}
+	})
+
+	var wg sync.WaitGroup
+	reads := make([]tui.Copies, 4)
+	for i := range reads {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got, err := backend.Context(ctx, session)
+			if err != nil {
+				t.Errorf("Context: %v", err)
+				return
+			}
+			reads[i] = got
+		}()
+	}
+	wg.Wait()
+
+	for i, got := range reads {
+		if len(got.Files) != files {
+			t.Errorf("read %d came back with %d copies, want %d", i, len(got.Files), files)
+		}
+	}
+}
+
+// sameLines reports two reads as having handed back the very same lines rather
+// than two copies that happen to match.
+func sameLines(a, b []string) bool {
+	if len(a) != len(b) || len(a) == 0 {
+		return false
+	}
+	return &a[0] == &b[0]
 }
 
 // A pull request's files are not in this working tree. A local file at the same
