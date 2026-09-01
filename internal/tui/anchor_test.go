@@ -128,3 +128,92 @@ func TestACommentWhoseCodeIsGoneLandsUnderItsFile(t *testing.T) {
 		t.Errorf("the note is drawn against %q, want it parked under its file rather than on code it is not about", got)
 	}
 }
+
+// Staging a file takes the half a note was written on off the screen and puts
+// the same code on the other one. The note has to go with it: parked under its
+// file, it reads as a note about code nobody can point at, which is the failure
+// the anchor exists to prevent wearing the reviewer's own decision as a cause.
+func TestACommentFollowsItsFileIntoTheIndex(t *testing.T) {
+	ctx := context.Background()
+	_, backend := openReview(t)
+
+	if _, err := backend.AddComment(ctx, store.Comment{
+		File: "svc.go", Line: 4, Side: store.SideNew, Origin: store.OriginWorktree,
+		Body: "pass a real ctx", Author: store.AuthorUser,
+	}); err != nil {
+		t.Fatalf("AddComment: %v", err)
+	}
+
+	if err := backend.StageFile(ctx, "svc.go"); err != nil {
+		t.Fatalf("StageFile: %v", err)
+	}
+	session, comments := reread(t, backend)
+	if comments[0].Outdated {
+		t.Fatal("staging outdated the note; nothing about the code changed")
+	}
+
+	doc := tui.Build(session, comments, nil, tui.LayoutUnified)
+	if got := codeUnderComment(t, doc); !strings.Contains(got, "doWork(ctx)") {
+		t.Errorf("the note is drawn against %q, want the doWork(ctx) it was written on", got)
+	}
+
+	// And back again: the reviewer who changes their mind gets their note back
+	// exactly as it was, not a second copy of it under a header.
+	if err := backend.UnstageFile(ctx, "svc.go"); err != nil {
+		t.Fatalf("UnstageFile: %v", err)
+	}
+	session, comments = reread(t, backend)
+	doc = tui.Build(session, comments, nil, tui.LayoutUnified)
+	if got := codeUnderComment(t, doc); !strings.Contains(got, "doWork(ctx)") {
+		t.Errorf("after unstaging the note is drawn against %q, want doWork(ctx)", got)
+	}
+}
+
+// The same the other way round: a note written while the file was staged, on a
+// file the reviewer then takes back out of the index.
+func TestACommentFollowsItsFileBackOutOfTheIndex(t *testing.T) {
+	ctx := context.Background()
+	_, backend := openReview(t)
+
+	if err := backend.StageFile(ctx, "svc.go"); err != nil {
+		t.Fatalf("StageFile: %v", err)
+	}
+	if _, err := backend.Reload(ctx); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if _, err := backend.AddComment(ctx, store.Comment{
+		File: "svc.go", Line: 4, Side: store.SideNew, Origin: store.OriginIndex,
+		Body: "pass a real ctx", Author: store.AuthorUser,
+	}); err != nil {
+		t.Fatalf("AddComment: %v", err)
+	}
+
+	if err := backend.UnstageFile(ctx, "svc.go"); err != nil {
+		t.Fatalf("UnstageFile: %v", err)
+	}
+	session, comments := reread(t, backend)
+	if comments[0].Outdated {
+		t.Fatal("unstaging outdated the note; the code it is about is still on disk")
+	}
+
+	doc := tui.Build(session, comments, nil, tui.LayoutUnified)
+	if got := codeUnderComment(t, doc); !strings.Contains(got, "doWork(ctx)") {
+		t.Errorf("the note is drawn against %q, want the doWork(ctx) it was written on", got)
+	}
+}
+
+// reread is what the UI does after a change lands: the session and its notes,
+// read back from git.
+func reread(t *testing.T, backend tui.Backend) (*app.Session, []store.Comment) {
+	t.Helper()
+	ctx := context.Background()
+	session, err := backend.Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	comments, err := backend.Comments(ctx)
+	if err != nil {
+		t.Fatalf("Comments: %v", err)
+	}
+	return session, comments
+}

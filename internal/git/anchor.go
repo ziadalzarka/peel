@@ -103,6 +103,102 @@ func (r *Repo) revBlob(ctx context.Context, spec string) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+// Blobs resolves many object names at once, keyed by the name asked for. A name
+// this repository does not hold is left out rather than failing the rest.
+//
+// A review with notes on a dozen files asks a dozen of these on every re-read,
+// and in follow mode that is every couple of seconds. One process answering all
+// of them costs what one of them used to.
+//
+// A name with a newline in it is left out: the batch is line-delimited, so such
+// a name would answer for the one after it.
+func (r *Repo) Blobs(ctx context.Context, specs []string) (map[string]string, error) {
+	ask := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		if spec != "" && !strings.ContainsAny(spec, "\n\x00") {
+			ask = append(ask, spec)
+		}
+	}
+	if len(ask) == 0 {
+		return nil, nil
+	}
+
+	res, err := r.runner.Run(ctx, exec.Command{
+		Name:  "git",
+		Args:  []string{"cat-file", "--batch-check"},
+		Dir:   r.dir,
+		Stdin: strings.NewReader(strings.Join(ask, "\n") + "\n"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resolve %d objects: %w", len(ask), err)
+	}
+
+	// git answers one line per line asked, in order, so the reply is paired with
+	// the question by position. A name it does not hold answers "<name> missing"
+	// and simply goes unanswered here.
+	lines := strings.Split(strings.TrimSuffix(string(res.Stdout), "\n"), "\n")
+	if len(lines) != len(ask) {
+		return nil, fmt.Errorf("resolve %d objects: git answered %d", len(ask), len(lines))
+	}
+	out := make(map[string]string, len(ask))
+	for i, line := range lines {
+		name, kind, ok := strings.Cut(strings.TrimSpace(line), " ")
+		if !ok || !strings.HasPrefix(kind, "blob ") {
+			continue
+		}
+		out[ask[i]] = name
+	}
+	return out, nil
+}
+
+// HashFiles returns the hash each path's working-tree copy would have as a git
+// object, without writing any of them.
+//
+// It is how a note's snapshot is told apart from the file on disk without
+// diffing them: equal hashes mean equal content, and content that has not moved
+// needs no mapping at all. One process covers every path, which is the point —
+// the diff it saves is two processes each.
+//
+// A path that cannot be read is left out; git stops at the first one it cannot
+// hash, so they are dropped before it is asked.
+func (r *Repo) HashFiles(ctx context.Context, paths []string) (map[string]string, error) {
+	ask := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if path == "" || strings.ContainsAny(path, "\n\x00") {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(r.dir, path)); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		ask = append(ask, path)
+	}
+	if len(ask) == 0 {
+		return nil, nil
+	}
+
+	res, err := r.runner.Run(ctx, exec.Command{
+		Name:  "git",
+		Args:  []string{"hash-object", "--stdin-paths"},
+		Dir:   r.dir,
+		Stdin: strings.NewReader(strings.Join(ask, "\n") + "\n"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("hash %d files: %w", len(ask), err)
+	}
+
+	lines := strings.Split(strings.TrimSuffix(string(res.Stdout), "\n"), "\n")
+	if len(lines) != len(ask) {
+		return nil, fmt.Errorf("hash %d files: git answered %d", len(ask), len(lines))
+	}
+	out := make(map[string]string, len(ask))
+	for i, line := range lines {
+		if hash := strings.TrimSpace(line); hash != "" {
+			out[ask[i]] = hash
+		}
+	}
+	return out, nil
+}
+
 // MapLinesBetween returns how numbering moves from one blob to another. Both are
 // already in the object store, so git diffs them directly and nothing is written.
 func (r *Repo) MapLinesBetween(ctx context.Context, from, to string) (LineMap, error) {
