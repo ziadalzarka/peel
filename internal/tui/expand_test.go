@@ -288,6 +288,126 @@ func TestAFullyOpenedRunLeavesTheCodeContinuous(t *testing.T) {
 	}
 }
 
+// sectionDiff changes a line at the top of a file and another forty-two lines
+// below it, with a second declaration in the run between them: the hunk at the
+// bottom is the one git names a section for.
+const sectionDiff = `diff --git a/pagination.kt b/pagination.kt
+index 1111111..2222222 100644
+--- a/pagination.kt
++++ b/pagination.kt
+@@ -1,7 +1,7 @@
+ sealed interface Pagination {
+     val v2 = 0
+     val v3 = 0
+-    val v4 = 0
++    val v4 = 1
+     val v5 = 0
+     val v6 = 0
+     val v7 = 0
+@@ -50,7 +50,7 @@ sealed interface Cursor {
+     val v50 = 0
+     val v51 = 0
+     val v52 = 0
+-    val v53 = 0
++    val v53 = 1
+     val v54 = 0
+     val v55 = 0
+     val v56 = 0
+`
+
+// cursorSection is what git named the second hunk after its @@.
+const cursorSection = "sealed interface Cursor {"
+
+// sectionFile is the working tree's copy of that file, with the declaration the
+// second hunk is named after sitting on line 30, inside the run of code the diff
+// leaves out.
+func sectionFile() []string {
+	lines := make([]string, 0, 60)
+	for i := 1; i <= 60; i++ {
+		lines = append(lines, fmt.Sprintf("    val v%d = 0", i))
+	}
+	lines[0] = "sealed interface Pagination {"
+	lines[3] = "    val v4 = 1"
+	lines[29] = cursorSection
+	lines[52] = "    val v53 = 1"
+	lines[59] = "}"
+	return lines
+}
+
+var sectionSide = FileSide{Path: "pagination.kt"}
+
+// sectionDown and sectionUp name the run between sectionDiff's two hunks, from
+// the hunk above it and from the hunk below it.
+func sectionDown(hunk int) ExpandKey { return hunkKey(sectionDiff, sectionSide, hunk, false) }
+func sectionUp(hunk int) ExpandKey   { return hunkKey(sectionDiff, sectionSide, hunk, true) }
+
+// sectionDoc builds that diff with the run opened as far as revealed says.
+func sectionDoc(t *testing.T, revealed map[ExpandKey]int) Document {
+	t.Helper()
+	return Build(newSession(t, sectionDiff), nil, nil, LayoutUnified, WithExpansion(Expansion{
+		Files:    map[FileSide][]string{sectionSide: sectionFile()},
+		Revealed: revealed,
+	}))
+}
+
+// The diff cuts the file off above the hunk, so the header says what encloses
+// it.
+func TestAHunkHeaderNamesTheSectionTheDiffCutOff(t *testing.T) {
+	doc := sectionDoc(t, nil)
+
+	if doc.Hunks[1].SectionShown {
+		t.Fatalf("hunk %+v reads as already showing its section, with the run above it closed", doc.Hunks[1].Hunk.Section)
+	}
+	if got := plainRenderer(80).Row(doc, doc.RowOfHunk(1), RowState{}); !strings.Contains(got, cursorSection) {
+		t.Errorf("hunk header = %q, want it to name %q", got, cursorSection)
+	}
+}
+
+// Once the run above the hunk is open the declaration is on screen a few rows
+// up, and the header repeating it is one more line of the same words.
+func TestAHunkHeaderDropsASectionThatHasBeenReadIn(t *testing.T) {
+	doc := sectionDoc(t, map[ExpandKey]int{sectionDown(0): 42})
+
+	if !doc.Hunks[1].SectionShown {
+		t.Fatalf("hunk reads as still hiding %q, with the code up to it open", doc.Hunks[1].Hunk.Section)
+	}
+	got := plainRenderer(80).Row(doc, doc.RowOfHunk(1), RowState{})
+	if strings.Contains(got, cursorSection) {
+		t.Errorf("hunk header = %q, want the section dropped: the line is drawn above it", got)
+	}
+	if !strings.Contains(got, "⋯") {
+		t.Errorf("hunk header = %q, want a separator mark in place of the section", got)
+	}
+}
+
+// The same holds for a hunk read back towards the declaration from below: the
+// line arrives under the header rather than over it, and is just as much on
+// screen.
+func TestAHunkHeaderDropsASectionItsOwnHeadReadsBackTo(t *testing.T) {
+	doc := sectionDoc(t, map[ExpandKey]int{sectionUp(1): 20})
+
+	if !doc.Hunks[1].SectionShown {
+		t.Errorf("hunk reads as still hiding %q, with its head read back past the line", doc.Hunks[1].Hunk.Section)
+	}
+}
+
+// Code still left out between the declaration and the hunk is the case the
+// header is for: something else could start inside what is hidden, so git's
+// answer still says more than the screen does.
+func TestAHunkHeaderKeepsASectionWithCodeStillHiddenUnderIt(t *testing.T) {
+	doc := sectionDoc(t, map[ExpandKey]int{sectionDown(0): 25})
+
+	if !strings.Contains(strings.Join(lineTexts(doc), "\n"), cursorSection) {
+		t.Fatalf("the read-in code does not reach %q, so there is nothing to repeat", cursorSection)
+	}
+	if doc.Hunks[1].SectionShown {
+		t.Errorf("hunk reads as showing its section with lines still hidden between them")
+	}
+	if got := plainRenderer(80).Row(doc, doc.RowOfHunk(1), RowState{}); !strings.Contains(got, cursorSection) {
+		t.Errorf("hunk header = %q, want it to keep naming %q across the gap", got, cursorSection)
+	}
+}
+
 // insertDiff adds a line, so the two sides stop counting alike: a line read in
 // below the change is a different number on each of them, and taking the new
 // one for both would put a note on the wrong line of the old file.

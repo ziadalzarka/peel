@@ -231,7 +231,7 @@ func (r *Renderer) hunk(d Document, row Row, st RowState) string {
 		style = r.theme.Cursor
 	}
 	title := ref.Hunk.Section
-	if title == "" {
+	if title == "" || ref.SectionShown {
 		title = "⋯"
 	}
 	head := r.marker(st) + codeIndent(d.Layout) + style.Render(title)

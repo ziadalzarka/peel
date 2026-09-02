@@ -113,6 +113,10 @@ type HunkRef struct {
 	Staged bool
 	ID     git.HunkID
 	Hunk   git.Hunk
+	// SectionShown reports that the line git named after the @@ is itself drawn
+	// with the hunk, read in by an expansion, so the header has nothing left to
+	// say by repeating it.
+	SectionShown bool
 }
 
 // Origin names the diff this hunk was read from, which is what a note left on
@@ -630,17 +634,27 @@ func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *co
 	gaps := gapsOf(FileSide{Path: entry.Path, Staged: s.staged}, s.diff.Hunks, s.diff.ID, d.expand)
 	count := len(s.diff.Hunks)
 
+	// above is the code drawn up to this hunk with nothing left out of it, which
+	// is what a reveal that closed a run leaves behind. It empties again at the
+	// first run still holding lines back: past a gap the reviewer is no longer
+	// reading one continuous piece of the file.
+	var above []git.Line
 	for i, h := range s.diff.Hunks {
 		hi := len(d.Hunks)
 		shown := h
 		shown.Lines = withContext(gaps.bottom(i), h.Lines, gaps.top(i+1))
+		if gaps.hidden(i) > 0 {
+			above = nil
+		}
 		d.Hunks = append(d.Hunks, HunkRef{
-			File:   fi,
-			Path:   entry.Path,
-			Staged: s.staged,
-			ID:     s.diff.ID(h),
-			Hunk:   shown,
+			File:         fi,
+			Path:         entry.Path,
+			Staged:       s.staged,
+			ID:           s.diff.ID(h),
+			Hunk:         shown,
+			SectionShown: sectionShown(h.Section, above, gaps.bottom(i)),
 		})
+		above = append(above, shown.Lines...)
 		d.Files[fi].Hunks = append(d.Files[fi].Hunks, hi)
 		if si >= 0 {
 			d.Sides[si].Hunks = append(d.Sides[si].Hunks, hi)
@@ -661,6 +675,32 @@ func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *co
 		}
 		d.addExpand(fi, gaps, i+1, count, gaps.below)
 	}
+}
+
+// sectionShown reports that the line git named after a hunk's @@ is one of the
+// lines drawn with the hunk itself.
+//
+// git prints that line because the diff cuts the file off above the hunk and the
+// reviewer cannot see what encloses it. Once a reveal has read it back in — the
+// run above the hunk opened all the way, or the hunk's own head read further
+// back — the header would be naming a line that is on screen a few rows away,
+// and the file says it better than the header does.
+//
+// The lines are matched by their text: the @@ carries no number for its section,
+// only the words, and a funcname driver hands them back with the indent dropped
+// and cut off at the end of what its pattern matched.
+func sectionShown(section string, runs ...[]git.Line) bool {
+	if section == "" {
+		return false
+	}
+	for _, run := range runs {
+		for _, l := range run {
+			if strings.HasPrefix(strings.TrimSpace(l.Text), section) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // addExpand marks one end of a run of hidden lines, when that end has a row.
