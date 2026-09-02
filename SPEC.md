@@ -388,17 +388,27 @@ passed over rather than counted, since the cursor never lands on one either way.
 
 Ten is the most it moves rather than always what it moves. Anything that heads
 what comes under it stops the jump there instead — a file, one of the two halves
-of a part-staged file, a walkthrough group — and so does a row standing where the
-diff left code out. They are the places the reading changes, and arriving at one
-is worth more than the rest of the ten. Ten lines from the fourth line of a file
-is the next file's header, not six lines into a file whose name went by on the
-way; `[` from the fifth line of a file is that file's own header, not a row of the
-file above it. Landing under a heading the jump crossed is where a review goes
-wrong quietly — the index's half of a file read as the working tree's is a line
-number pointing at the wrong line — and a run of hidden code crossed without
-stopping is code nothing on screen says was skipped. The next press carries on
-past whichever stopped it, so a leap held down still walks the whole review — it
-just breaks where something happens.
+of a part-staged file, a walkthrough group — and so does a note already on the
+diff, and a row standing where the diff left code out. They are the places the
+reading changes, and arriving at one is worth more than the rest of the ten. Ten
+lines from the fourth line of a file is the next file's header, not six lines
+into a file whose name went by on the way; `[` from the fifth line of a file is
+that file's own header, not a row of the file above it. Landing under a heading
+the jump crossed is where a review goes wrong quietly — the index's half of a
+file read as the working tree's is a line number pointing at the wrong line — a
+run of hidden code crossed without stopping is code nothing on screen says was
+skipped, and a note crossed is the one thing on the screen that is not the code
+scrolled past unread. The next press carries on past whichever stopped it, so a
+leap held down still walks the whole review — it just breaks where something
+happens.
+
+The one place it goes further than the ten it counted is a run of lines a note
+was already written about. Ending on one of them is ending on the code with the
+note still a row ahead — the reviewer looking at the lines and not at what was
+said about them — so the count is given up rather than the note, and `]` carries
+on to it. What that crosses is the rest of the run, which is what the note it
+arrives on covers. It reaches for the note ahead only: `[` out of a note walks up
+into the run it was written about rather than being pulled back down onto it.
 
 `opt`+`↓`/`↑` move a whole file at a time and `cmd`+`↓`/`↑` reach the ends of the
 diff, so the modifier held says how far the arrow goes, the way it does in an

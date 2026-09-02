@@ -302,7 +302,7 @@ func nthLine(lines []string, n int) string {
 var helpBindings = []struct{ keys, action string }{
 	{"j / k", "next / previous hunk, file or comment"},
 	{"↓ / ↑", "move the cursor one line (the wheel scrolls the diff)"},
-	{"] / [", "ten lines down / up, stopping short at any heading or ▴/▾ row on the way"},
+	{"] / [", "ten lines down / up, stopping short at any heading, note or ▴/▾ row"},
 	{"opt+↓ / opt+↑", "next / previous file"},
 	{"cmd+p", "go to a file by name, in the terminals that report the key"},
 	{"} / {", "scroll the file tree on its own"},

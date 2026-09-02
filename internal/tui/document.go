@@ -948,11 +948,16 @@ func (d Document) PrevStop(from int) int {
 //
 // The ends of the document stop it the same way a heading does: past them there
 // is nothing left to count, and it returns the last position it reached.
+//
+// The one place it goes further than it counted is a run of lines somebody has
+// already written about: a jump down that runs out inside one carries on to the
+// note, since the note is what the run is there for.
 func (d Document) Leap(row, n int) int {
-	step := d.NextStop
+	step, down := d.NextStop, true
 	if n < 0 {
-		step, n = d.PrevStop, -n
+		step, down, n = d.PrevStop, false, -n
 	}
+	start := row
 	for range n {
 		next := step(row)
 		if next == row {
@@ -960,16 +965,58 @@ func (d Document) Leap(row, n int) int {
 		}
 		row = next
 		if d.endsLeap(row) {
-			break
+			return row
+		}
+	}
+	if down && row != start {
+		if note := d.noteOn(row); note >= 0 {
+			return note
 		}
 	}
 	return row
 }
 
+// noteOn returns the note a jump that ran out on row should take instead, or -1
+// when row is not a line a note was written about.
+//
+// A note is drawn under the last line of the run it covers, and every line of
+// that run is barred as one somebody wrote about. So a jump that ends on one has
+// ended on code a note is about with the note itself still ahead — the reviewer
+// left looking at the lines and not at what was said about them, which is the
+// one thing on the screen the diff does not already say. The count is given up
+// there rather than the note: what the rest of the jump crosses to reach it is
+// the rest of the run, and the note it lands on is what covers those lines.
+//
+// It reaches for the note ahead only, so a jump up out of a note stays inside
+// the run it is walking rather than being pulled back down to where it started.
+func (d Document) noteOn(row int) int {
+	if row < 0 || row >= len(d.Rows) || !d.notedLine(row) {
+		return -1
+	}
+	for i := row + 1; i < len(d.Rows); i++ {
+		switch r := d.Rows[i]; {
+		case r.Kind == RowComment:
+			if r.Head {
+				return i
+			}
+		case d.notedLine(i):
+		default:
+			return -1
+		}
+	}
+	return -1
+}
+
+// notedLine reports that row is a line of a hunk some saved note was written
+// about.
+func (d Document) notedLine(row int) bool {
+	return row >= 0 && row < len(d.Rows) && d.Rows[row].Kind == RowLine && d.Rows[row].Noted
+}
+
 // endsLeap reports that a row stops a leap short of its full distance: anything
 // that heads what comes under it — a file, one of the two halves of a file git
-// holds in both places at once, a walkthrough group — or a row standing where
-// the diff left code out.
+// holds in both places at once, a walkthrough group — a note already written on
+// the diff, or a row standing where the diff left code out.
 //
 // They are the places the reading changes rather than continues, and the ten
 // lines are worth less than arriving at one of them. A leap that ran past a
@@ -977,9 +1024,11 @@ func (d Document) Leap(row, n int) int {
 // where a review goes wrong quietly: the index's half of a file read as the
 // working tree's is a line number pointing at the wrong line. One that ran past
 // hidden code would put the reviewer below a gap they were given a row to open,
-// the row being what says the code the jump crossed was never shown. Landing on
-// any of them leaves the next press to carry on past it, which is the same jump
-// split where something happened.
+// the row being what says the code the jump crossed was never shown. A note is
+// the one thing on the screen that is not the diff, written to be read against
+// the line it hangs off, so a jump that crossed it read the code and missed what
+// the last pass said about it. Landing on any of them leaves the next press to
+// carry on past it, which is the same jump split where something happened.
 func (d Document) endsLeap(row int) bool {
 	if row < 0 || row >= len(d.Rows) {
 		return false
@@ -987,6 +1036,8 @@ func (d Document) endsLeap(row int) bool {
 	switch d.Rows[row].Kind {
 	case RowFile, RowSide, RowStep, RowExpand:
 		return true
+	case RowComment:
+		return d.Rows[row].Head
 	default:
 		return false
 	}
