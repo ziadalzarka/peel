@@ -391,20 +391,112 @@ func TestAHunkHeaderDropsASectionItsOwnHeadReadsBackTo(t *testing.T) {
 	}
 }
 
-// Code still left out between the declaration and the hunk is the case the
-// header is for: something else could start inside what is hidden, so git's
-// answer still says more than the screen does.
-func TestAHunkHeaderKeepsASectionWithCodeStillHiddenUnderIt(t *testing.T) {
+// Code still left out between the declaration and the hunk does not put the
+// declaration back out of sight. It has been read in, it is on the screen, and
+// the header naming it again is the same words twice however far up they sit.
+func TestAHunkHeaderDropsASectionOnScreenAcrossAGap(t *testing.T) {
 	doc := sectionDoc(t, map[ExpandKey]int{sectionDown(0): 25})
 
 	if !strings.Contains(strings.Join(lineTexts(doc), "\n"), cursorSection) {
 		t.Fatalf("the read-in code does not reach %q, so there is nothing to repeat", cursorSection)
 	}
-	if doc.Hunks[1].SectionShown {
-		t.Errorf("hunk reads as showing its section with lines still hidden between them")
+	if !doc.Hunks[1].SectionShown {
+		t.Fatalf("hunk reads as still hiding %q, with the line drawn above the gap", cursorSection)
 	}
-	if got := plainRenderer(80).Row(doc, doc.RowOfHunk(1), RowState{}); !strings.Contains(got, cursorSection) {
-		t.Errorf("hunk header = %q, want it to keep naming %q across the gap", got, cursorSection)
+	if got := plainRenderer(80).Row(doc, doc.RowOfHunk(1), RowState{}); strings.Contains(got, cursorSection) {
+		t.Errorf("hunk header = %q, want the section dropped: the line is drawn above it", got)
+	}
+}
+
+// repeatedDiff changes two lines far apart inside one declaration, which is what
+// git names both hunks after: a driver that only matches an unindented line has
+// nothing nearer to either of them to give.
+const repeatedDiff = `diff --git a/ledger.kt b/ledger.kt
+index 1111111..2222222 100644
+--- a/ledger.kt
++++ b/ledger.kt
+@@ -20,7 +20,7 @@ class Ledger @Inject constructor(
+     val v20 = 0
+     val v21 = 0
+     val v22 = 0
+-    val v23 = 0
++    val v23 = 1
+     val v24 = 0
+     val v25 = 0
+     val v26 = 0
+@@ -50,7 +50,7 @@ class Ledger @Inject constructor(
+     val v50 = 0
+     val v51 = 0
+     val v52 = 0
+-    val v53 = 0
++    val v53 = 1
+     val v54 = 0
+     val v55 = 0
+     val v56 = 0
+`
+
+// ledgerSection is what git named both of repeatedDiff's hunks after.
+const ledgerSection = "class Ledger @Inject constructor("
+
+// repeatedFile is the working tree's copy, with that declaration on line 1 —
+// above everything the diff prints, so nothing on screen says it until a header
+// does.
+func repeatedFile() []string {
+	lines := make([]string, 0, 60)
+	for i := 1; i <= 60; i++ {
+		lines = append(lines, fmt.Sprintf("    val v%d = 0", i))
+	}
+	lines[0] = ledgerSection
+	lines[22] = "    val v23 = 1"
+	lines[52] = "    val v53 = 1"
+	lines[59] = "}"
+	return lines
+}
+
+var repeatedSide = FileSide{Path: "ledger.kt"}
+
+// repeatedDoc builds that diff with the run above the first hunk opened as far
+// as revealed says.
+func repeatedDoc(t *testing.T, revealed map[ExpandKey]int) Document {
+	t.Helper()
+	return Build(newSession(t, repeatedDiff), nil, nil, LayoutUnified, WithExpansion(Expansion{
+		Files:    map[FileSide][]string{repeatedSide: repeatedFile()},
+		Revealed: revealed,
+	}))
+}
+
+// git names every hunk inside a declaration after it, so the words would come
+// down the screen once per hunk. The first header answers what the change sits
+// inside; under it the answer has been read already.
+func TestOnlyTheFirstOfTheHunksGitNamesAlikeCarriesTheSection(t *testing.T) {
+	doc := repeatedDoc(t, nil)
+
+	if doc.Hunks[0].SectionShown {
+		t.Fatalf("the first hunk reads as already showing %q, with nothing above it drawn", ledgerSection)
+	}
+	if got := plainRenderer(80).Row(doc, doc.RowOfHunk(0), RowState{}); !strings.Contains(got, ledgerSection) {
+		t.Errorf("first hunk header = %q, want it to name %q", got, ledgerSection)
+	}
+	if !doc.Hunks[1].SectionShown {
+		t.Fatalf("the second hunk reads as still hiding %q, with the header above it naming it", ledgerSection)
+	}
+	if got := plainRenderer(80).Row(doc, doc.RowOfHunk(1), RowState{}); strings.Contains(got, ledgerSection) {
+		t.Errorf("second hunk header = %q, want the section dropped: the header above it said so", got)
+	}
+}
+
+// The line itself outranks the header that stood in for it: once the code is
+// read in, neither hunk has anything left to name.
+func TestNoHunkNamesASectionTheReadInCodeShows(t *testing.T) {
+	doc := repeatedDoc(t, map[ExpandKey]int{hunkKey(repeatedDiff, repeatedSide, 0, true): 20})
+
+	if !strings.Contains(strings.Join(lineTexts(doc), "\n"), ledgerSection) {
+		t.Fatalf("the read-in code does not reach %q, so there is nothing to repeat", ledgerSection)
+	}
+	for i := range doc.Hunks {
+		if !doc.Hunks[i].SectionShown {
+			t.Errorf("hunk %d reads as still hiding %q, with the line drawn above it", i, ledgerSection)
+		}
 	}
 }
 

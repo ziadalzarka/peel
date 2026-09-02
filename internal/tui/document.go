@@ -113,9 +113,10 @@ type HunkRef struct {
 	Staged bool
 	ID     git.HunkID
 	Hunk   git.Hunk
-	// SectionShown reports that the line git named after the @@ is itself drawn
-	// with the hunk, read in by an expansion, so the header has nothing left to
-	// say by repeating it.
+	// SectionShown reports that the line git named after the @@ has already been
+	// said above — drawn as code an expansion read in, or named by the first
+	// header of a run of hunks git named alike — so the header has nothing left
+	// to add by repeating it.
 	SectionShown bool
 }
 
@@ -634,26 +635,30 @@ func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *co
 	gaps := gapsOf(FileSide{Path: entry.Path, Staged: s.staged}, s.diff.Hunks, s.diff.ID, d.expand)
 	count := len(s.diff.Hunks)
 
-	// above is the code drawn up to this hunk with nothing left out of it, which
-	// is what a reveal that closed a run leaves behind. It empties again at the
-	// first run still holding lines back: past a gap the reviewer is no longer
-	// reading one continuous piece of the file.
+	// above is every line this side has drawn before the hunk being laid out. It
+	// runs across the gaps: a run still holding code back leaves the declaration
+	// further off, but it does not take it back off the screen.
 	var above []git.Line
+	// said holds the sections a header has already named. A run of hunks inside
+	// one declaration is named after it every time, so the same words would come
+	// down the screen once per hunk; the first header answers what the change
+	// sits inside, and the ones under it repeat an answer already read.
+	said := map[string]bool{}
 	for i, h := range s.diff.Hunks {
 		hi := len(d.Hunks)
 		shown := h
 		shown.Lines = withContext(gaps.bottom(i), h.Lines, gaps.top(i+1))
-		if gaps.hidden(i) > 0 {
-			above = nil
-		}
 		d.Hunks = append(d.Hunks, HunkRef{
 			File:         fi,
 			Path:         entry.Path,
 			Staged:       s.staged,
 			ID:           s.diff.ID(h),
 			Hunk:         shown,
-			SectionShown: sectionShown(h.Section, above, gaps.bottom(i)),
+			SectionShown: said[h.Section] || sectionShown(h.Section, above, gaps.bottom(i)),
 		})
+		if h.Section != "" {
+			said[h.Section] = true
+		}
 		above = append(above, shown.Lines...)
 		d.Files[fi].Hunks = append(d.Files[fi].Hunks, hi)
 		if si >= 0 {
@@ -678,13 +683,14 @@ func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *co
 }
 
 // sectionShown reports that the line git named after a hunk's @@ is one of the
-// lines drawn with the hunk itself.
+// lines already on screen.
 //
 // git prints that line because the diff cuts the file off above the hunk and the
-// reviewer cannot see what encloses it. Once a reveal has read it back in — the
-// run above the hunk opened all the way, or the hunk's own head read further
-// back — the header would be naming a line that is on screen a few rows away,
-// and the file says it better than the header does.
+// reviewer cannot see what encloses it. Once a reveal has read it back in — code
+// above the hunk opened down to it, or the hunk's own head read further back —
+// the header would be naming a line drawn a few rows away, and the file says it
+// better than the header does. Code still hidden between the two does not put it
+// back out of sight: the reviewer has read the declaration either way.
 //
 // The lines are matched by their text: the @@ carries no number for its section,
 // only the words, and a funcname driver hands them back with the indent dropped
