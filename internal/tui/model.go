@@ -141,6 +141,16 @@ type Model struct {
 	// setting for `s` and one for `space`. It is read from git config at
 	// startup, since the keys it governs draw before they ask git anything.
 	moves app.Moves
+	// keys is which key stages a whole file and which stages one hunk. They are
+	// the only two keys a reviewer can move, and they are read from git config
+	// at startup with the moves, for the same reason.
+	keys app.Keys
+	// staged is the last hunk staged and when, which is what a second press of
+	// the hunk key is read against.
+	staged lastStage
+	// now is the clock the double press is measured on, so a test can press a key
+	// twice without the two presses being a microsecond apart.
+	now func() time.Time
 
 	// follow re-reads the repository on a timer, for watching a build or an
 	// agent change files while reviewing.
@@ -173,6 +183,22 @@ type Model struct {
 // a build finishing feels immediate.
 const defaultPollEvery = 2 * time.Second
 
+// lastStage is the hunk stage a second press of the key is measured against: the
+// file it was in, and when it was pressed.
+type lastStage struct {
+	path string
+	at   time.Time
+}
+
+// doubleWindow is how close two presses of the hunk key have to be to mean the
+// whole file.
+//
+// Short enough that a pass down a file, reading each hunk before deciding about
+// it, never trips it — nobody reads a hunk in a third of a second — and long
+// enough that a deliberate double press is one movement of the finger rather
+// than a race.
+const doubleWindow = 300 * time.Millisecond
+
 // options are the knobs New accepts.
 type options struct {
 	theme     Theme
@@ -184,6 +210,7 @@ type options struct {
 	pollEvery time.Duration
 	provider  string
 	moves     app.Moves
+	keys      app.Keys
 }
 
 // Option customises a Model.
@@ -219,6 +246,10 @@ func WithPollInterval(d time.Duration) Option {
 // one has been folded away.
 func WithMoves(m app.Moves) Option { return func(o *options) { o.moves = m } }
 
+// WithKeys sets which key stages the file the cursor is in and which stages the
+// hunk it is in.
+func WithKeys(k app.Keys) Option { return func(o *options) { o.keys = k } }
+
 // New builds the review UI for a session and the comments already on it.
 func New(ctx context.Context, backend Backend, session *app.Session, comments []store.Comment, opts ...Option) *Model {
 	cfg := options{theme: DefaultTheme(), syntax: NewHighlighter(), width: 100, height: 30}
@@ -241,6 +272,8 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 		input:       newInput(cfg.theme),
 		walkFolded:  map[int]bool{},
 		moves:       cfg.moves.OrDefault(),
+		keys:        cfg.keys.OrDefault(),
+		now:         time.Now,
 		follow:      cfg.follow,
 		pollEvery:   cfg.pollEvery,
 	}
@@ -586,6 +619,24 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 // keep the row it lands on in sight of the one it left.
 const leapLines = 10
 
+// fixedKeys are the keys browseKey binds itself — everything but the two a
+// reviewer can move.
+//
+// They are listed so a stage key set to one of them can be refused rather than
+// quietly taking it over: a key that stages where the reviewer expected a note
+// is worse than a setting that does not take. The switch below is the other half
+// of this list, and a key added there belongs here too.
+var fixedKeys = []string{
+	"q", "ctrl+c", "?",
+	"j", "k", "down", "up", "]", "[", "g", "home", "G", "end",
+	"ctrl+d", "pgdown", "ctrl+u", "pgup",
+	"shift+down", "shift+up", "alt+down", "alt+up", "}", "{",
+	"h", "left", "l", "right", "0", "$", "b", " ",
+	"u", "a", "U", "o",
+	"c", "e", "x", "D", "C", "A", "X", "P",
+	`\`, "w", "W", "r", "f",
+}
+
 func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 	m.status, m.err = "", nil
 
@@ -594,6 +645,16 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 	// or writing the note it was marked for lets it go.
 	if !keepsSelection(key) {
 		m.sel = nil
+	}
+
+	// The two staging keys are read from git config, so they are matched before
+	// the fixed keymap rather than inside it. fixedKeys below is what keeps a
+	// setting from taking one of that keymap's own keys.
+	switch key {
+	case m.keys.StageFile:
+		return m.stageAt()
+	case m.keys.StageHunk:
+		return m.stageHunkAt()
 	}
 
 	switch key {
@@ -645,8 +706,6 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 		m.moveTo(m.doc.Nearest(m.cursor - m.bodyHeight()/2))
 	case " ":
 		m.toggleCollapse()
-	case "s":
-		return m.stageAt()
 	case "u":
 		return m.unstageAt()
 	case "o":
@@ -1036,12 +1095,12 @@ func (m *Model) quit() tea.Cmd {
 
 // stageAt stages the file the cursor is in.
 //
-// A file is the smallest thing that can be staged, so a hunk header or a diff
-// line stages the file it belongs to. The file folds away once it is staged and
-// the cursor carries on to the next file with work still out of the index,
-// since this one has been dealt with — `space` opens it again. Where the cursor
-// goes is `peel.afterStage`, for the passes that read the diff in another
-// order.
+// It acts on the whole file from anywhere inside it, so a hunk header or a diff
+// line stages the file it belongs to rather than asking the cursor to be moved
+// to the header first. The file folds away once it is staged and the cursor
+// carries on to the next file with work still out of the index, since this one
+// has been dealt with — `space` opens it again. Where the cursor goes is
+// `peel.afterStage`, for the passes that read the diff in another order.
 func (m *Model) stageAt() tea.Cmd {
 	file, ok := m.doc.FileTargetAt(m.cursor)
 	if !ok {
@@ -1071,6 +1130,153 @@ func (m *Model) stageAt() tea.Cmd {
 	}, func(ctx context.Context) error {
 		return m.backend.StageFile(ctx, path)
 	})
+}
+
+// stageHunkAt stages the one hunk the cursor is in and leaves the rest of the
+// file out of the index.
+//
+// It is the same decision as the file key at the size a diff is read in: a file
+// often holds one change that is finished and one that is not, and the only
+// other way to say so is to leave the whole file open and read it again later.
+// What is staged moves into the file's index half, which opens folded, so the
+// press leaves exactly the work still out of the index on screen, and the cursor
+// carries on to the next hunk still out of it — the rule the file key follows
+// between files, inside one.
+//
+// Like every other change it is drawn on the keypress. What moving a hunk does to
+// the two diffs is arithmetic rather than a question for git — the working tree's
+// diff loses it and is renumbered under it, the index's gains it — so the screen
+// goes where the write is about to take it and the read-back behind it confirms
+// it. Where the hunk turns out not to be where the screen had it, nothing is
+// drawn and the read-back is left to say what happened.
+//
+// Pressing the key twice, close together and in the same file, means the file:
+// two decisions about hunks that fast are one decision about all of them, and it
+// puts the whole file in without reaching for the other key.
+func (m *Model) stageHunkAt() tea.Cmd {
+	file, ok := m.doc.FileTargetAt(m.cursor)
+	if !ok {
+		m.status = "nothing to stage here"
+		return nil
+	}
+	path := file.Entry.Path
+	if ref, inside := m.doc.HunkTargetAt(m.cursor); inside && ref.Staged {
+		m.status = "that hunk is in the index already"
+		return nil
+	}
+	if file.Orphan {
+		m.status = path + " has no changes to stage — its notes outlived them"
+		return nil
+	}
+	if file.Entry.Untracked {
+		m.status = path + " is untracked — " + m.keys.StageFile + " puts it in whole"
+		return nil
+	}
+	if m.doubledOn(path) {
+		// One double press is one decision. What follows it is a press of its own,
+		// measured from nothing.
+		m.staged = lastStage{}
+		return m.stageAt()
+	}
+	if !m.canStage() {
+		return nil
+	}
+	id, ok := m.hunkToStage(file)
+	if !ok {
+		m.status = path + " has nothing out of the index"
+		return nil
+	}
+
+	m.staged = lastStage{path: path, at: m.now()}
+	return m.apply(func() {
+		session, entry, ok := restagedHunk(m.session, id)
+		if !ok {
+			m.status = "staged one hunk of " + path
+			return
+		}
+		m.session = session
+		if entry.Unstaged == nil {
+			// Nothing of the file is left out of the index, so the press has
+			// finished it — which is what the file key does, and it ends the same
+			// way.
+			m.status = "staged " + path
+			m.foldStaged(path)
+			return
+		}
+		m.status = "staged one hunk of " + path
+		m.carryOnInside(path)
+	}, func(ctx context.Context) error {
+		return m.backend.StageHunk(ctx, id)
+	})
+}
+
+// hunkToStage is the hunk the key acts on: the one the cursor is in, or the
+// first of the file's still out of the index when the cursor is not in one.
+//
+// The cursor arrives on a file's header without being put there — finishing the
+// file above leaves it exactly there — so a key that only worked from inside a
+// hunk would stop the pass at every file, one press short of the change it was
+// about to make. From the header it takes the change at the top of what is left,
+// which is the one the reviewer is reading.
+func (m *Model) hunkToStage(file FileRef) (git.HunkID, bool) {
+	if ref, ok := m.doc.HunkTargetAt(m.cursor); ok {
+		return ref.ID, true
+	}
+	work := file.Entry.Unstaged
+	if work == nil || len(work.Hunks) == 0 {
+		return git.HunkID{}, false
+	}
+	return work.ID(work.Hunks[0]), true
+}
+
+// doubledOn reports that this press of the hunk key follows one close enough
+// behind it, in the same file, to be a decision about the file rather than a
+// second one about a hunk.
+//
+// The file is what it takes, not the file plus a guess about which hunks: `s`
+// then `s` leaves the same index as `S` alone, and one of them is the key already
+// under the finger. It is the same file or nothing — the cursor moves on by
+// itself once a file is finished, and a press that lands in the next file is a
+// new decision about a file nobody has read yet.
+func (m *Model) doubledOn(path string) bool {
+	return m.staged.path == path && m.now().Sub(m.staged.at) < doubleWindow
+}
+
+// carryOnInside puts the cursor on the next hunk of a file still out of the
+// index, once the one it was on has gone into it.
+//
+// Forwards first, since the pass runs down the diff and what is behind the cursor
+// was left behind on purpose; backwards only when the hunk staged was the last
+// one, so the cursor lands on work rather than on the header of a file that still
+// has some. A file with nothing left open to it is not this function's case —
+// that file is finished, and it folds.
+func (m *Model) carryOnInside(path string) {
+	at := m.spot()
+	m.rebuild()
+
+	file := m.fileIndex(path)
+	if file >= 0 {
+		var back int = -1
+		for _, hunk := range m.doc.Files[file].Hunks {
+			if m.doc.Hunks[hunk].Staged {
+				continue
+			}
+			row := m.doc.RowOfHunk(hunk)
+			if row < 0 {
+				continue
+			}
+			if row >= m.cursor {
+				m.moveTo(row)
+				return
+			}
+			back = row
+		}
+		if back >= 0 {
+			m.moveTo(back)
+			return
+		}
+	}
+	m.moveToSpot(at)
 }
 
 // unstageAt takes the file the cursor is in back out of the index, and opens it

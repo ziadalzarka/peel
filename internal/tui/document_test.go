@@ -1046,7 +1046,8 @@ func TestTargetAtDistinguishesFilesFromHunks(t *testing.T) {
 	}
 }
 
-// Staging is whole-file, so every row inside a file has to resolve to it.
+// The file key acts on the whole file, so every row inside one has to resolve to
+// it — the cursor is never asked to be moved to the header first.
 func TestFileTargetAtResolvesEveryRowOfAFileToTheFile(t *testing.T) {
 	doc := Build(newSession(t, twoFileDiff), nil, nil, LayoutUnified)
 

@@ -805,7 +805,7 @@ func TestANoteOnReadInCodeAnchorsToItsLine(t *testing.T) {
 // A file staged is a file read again, and until that read lands the copies
 // already in hand are the ones on screen. Taking them down for the length of a
 // git call would blink every offer to read more, on every file, out and back in
-// each time the reviewer pressed `s`.
+// each time the reviewer staged one.
 func TestStagingLeavesTheRestOfTheDiffAloneWhileItIsReadBack(t *testing.T) {
 	backend := newFakeBackend(newSession(t, contextDiff+otherFileDiff))
 	backend.context = map[FileSide][]string{
@@ -823,7 +823,7 @@ func TestStagingLeavesTheRestOfTheDiffAloneWhileItIsReadBack(t *testing.T) {
 
 	// The read-back is held here, on the frame the reviewer sees between the
 	// write landing and the files being read again.
-	_, cmd := m.Update(keyMsg("s"))
+	_, cmd := m.Update(keyMsg("S"))
 	loaded, ok := cmd().(loadedMsg)
 	if !ok {
 		t.Fatalf("staging produced %T, want the read-back", cmd())

@@ -6,8 +6,8 @@ Every local diff-review tool is read-only, so reviewing and `git add` end up as
 two separate passes over the same diff: you read it in a viewer, then walk the
 whole thing again in the terminal, re-deciding what you decided five minutes ago.
 
-`peel` is one pass. Read a file, press `s`, and it is staged, folded away, and the
-next file is in front of you — what is left open is what is left to review.
+`peel` is one pass. Read a change, press `s`, and it is staged, folded away, and the
+next one is in front of you — what is left open is what is left to review.
 
 ![peel reviewing its own working tree](docs/screenshots/review.png)
 
@@ -15,9 +15,10 @@ The file tree on the left is the review queue and a `✓` marks a staged file �
 a whole directory once every file in it is staged. The footer is the whole
 keymap.
 
-- **Staging is the review.** `s` stages a file and moves you to the next one with
-  work still out of the index, so a pass is `s` after `s`. Whole files only — no
-  patch generation, so nothing here can write the wrong lines into your index.
+- **Staging is the review.** `s` stages the hunk you just read and moves to the
+  next one, so a pass is `s` after `s`. `S` — or `s` twice — takes the whole file
+  and moves on to the next one with work still out of the index. Which key does
+  which is a setting, for the pass that reads whole files.
 - **Comment where the code is.** `c` anywhere — changed line or not — opens the
   editor inline, in the diff, at the spot the note will sit.
 - **Notes keep up with the code.** Each note freezes the file it was written
@@ -123,7 +124,9 @@ repository changes.
 | `b` | hide or show the file tree, giving the diff the whole width |
 | `space` | fold away the file, the half already staged, or a walkthrough note — or open it again |
 | `space` on a `▴`/`▾` row | read in twenty more lines of the code the diff left out |
-| `s` | stage the file the cursor is in, folding it away and moving to the next |
+| `s` | stage the hunk the cursor is in, moving to the next one still out of the index |
+| `s` `s` | the same key twice: stage the whole file |
+| `S` | stage the file the cursor is in, folding it away and moving to the next |
 | `u` | unstage that file, opening it again |
 | `a` / `U` | stage everything / unstage everything |
 | `o` | open the file the cursor is in, outside peel — in the editor you configure |
@@ -143,8 +146,9 @@ repository changes.
 
 There is one cursor and it rests anywhere — file headers, hunk headers, comments,
 and every line of a diff body, changed or not. Nothing to enter first: `s`
-anywhere inside a file stages that file, `c` anywhere leaves a note there,
-including on the untouched code a change breaks.
+anywhere inside a hunk stages that hunk, `S` anywhere inside a file stages the
+whole file, `c` anywhere leaves a note there, including on the untouched code a
+change breaks. The two staging keys can be swapped — see below.
 
 ### Reading past the hunk
 
@@ -243,21 +247,57 @@ two-finger swipe, or shift and the wheel — slides the code, in terminals that
 report one: Ghostty, kitty, iTerm2, WezTerm and Alacritty all do. Where yours
 does not, `h` and `l` do the same thing.
 
-### Staging is whole-file
+### Staging a hunk, and staging a file
 
-A file is the unit a review decision is actually made in, so that is the unit
-peel stages: `git add` and `git restore --staged`, one path at a time. If you
-want to split a file, `git add -p` already does that well.
+A hunk is the size a diff is read in, so that is the size `s` stages: the one
+hunk the cursor is in, leaving the rest of the file out of the index, for the file
+that holds a change you are finished with and one you are not. `S` stages the
+whole file — `git add`, one path at a time — and so does `s` pressed twice, which
+is the same decision without reaching for shift. Anything finer than a hunk is
+what `git add -p` is for.
 
-A file staged in part elsewhere — `git add -p`, or an edit made after `s` — is in
-both of git's diffs at once, and peel draws it as both: two halves under their own
+The cursor lands on a file's header when the file above it is finished, and `s`
+works from there too: it takes the change at the top of what the file has left,
+which is the one being read. Inside a hunk it takes that hunk. So a pass down a
+diff is `s` after `s` whether the changes are one to a file or six.
+
+A hunk goes into the index as a patch, which is the one patch peel generates. It
+is built from the diff whose old side is the index already, with the hunk's own
+line numbers worked out again rather than trusted — a header numbers its new side
+as though the hunks above it had landed, and staging one hunk lands none of them.
+An untracked file is refused instead: `git apply --cached` cannot write a path the
+index has never heard of, so `S` puts that one in whole. What is staged folds into
+the file's index half, which opens folded, so what stays on screen is what is
+still out of the index — and the file's last hunk folds the whole file away and
+moves on, exactly as `S` does, because that is what it means.
+
+Which key does which is yours to set, since a pass that reads hunk by hunk and one
+that reads whole files do not want the same key under the same finger:
+
+```sh
+git config --global peel.stageFile s    # the file on s, the hunk on S
+git config --global peel.stageHunk S    # the same swap, said the other way
+git config --global peel.stageHunk H    # or put either one anywhere else
+```
+
+Naming one of them the key the other has swaps the pair: there are two keys and
+two things to stage, so there is no other reading of it. Writing both to the same
+key is refused, and so is a key the review already binds — a stage key that
+quietly took `c` would stage where a note was meant. The defaults stand where a
+setting will not read, and the footer says which one it was. Both are read when
+the review opens, like `peel.afterStage` below, and the help screen names the keys
+you actually have. The double press follows the hunk key wherever it goes, since
+what it means is "that again, all of it".
+
+A file staged in part — by `s`, by `git add -p`, or by an edit made after staging
+it — is in both of git's diffs at once, and peel draws it as both: two halves under their own
 headings, with the file header counting each one separately. The staged half opens
 folded, because it has been read already, so what is left on screen is what is left
 to review; `space` on its heading reads it back. Edit a file after staging it and
 it unfolds on its own, on the new work alone — which happens only to a file folded
 because it was staged, never to one you folded by hand.
 
-Staging collapses the file and moves the cursor down the diff to the next file
+Staging a file collapses it and moves the cursor down the diff to the next file
 with work still out of the index, never back to find where you were. What is in
 the index has been decided about, so the pass goes over it — including a file
 somebody else staged. A folded file with work left in it is a stop like any
@@ -268,12 +308,16 @@ fails leaves the file open, and the cursor on it, because it still has to be
 dealt with.
 
 The fold and the move happen on the keypress, before git has been asked anything —
-as does a note appearing in the diff, and a comment resolving. None of it is in
-doubt, only slow: `git add` and the re-read behind it are a few hundred
-milliseconds in a large repository, and waiting for them before redrawing makes a
-decision you have already made look like peel thinking about it. The write goes on
-behind the screen and the re-read confirms it; if it fails, the change comes back
-off and the footer says why. `q` straight after `s` waits for that stage to land.
+as does a hunk moving into the index, a note appearing in the diff, and a comment
+resolving. What staging a hunk does to the two diffs is arithmetic rather than a
+question for git: the working tree's loses it and is renumbered under it, the
+index's gains it. None of it is in doubt, only slow: the write and the re-read
+behind it are a few hundred milliseconds in a large repository, and waiting for
+them before redrawing makes a decision you have already made look like peel
+thinking about it. So the screen goes where the write is about to take it, git is
+asked behind it, and the read-back only confirms what you are already looking at;
+if the write fails, the change comes back off and the footer says why. `q`
+straight after `s` waits for that stage to land.
 
 `space` does the same thing without the index. Not every file you read is a file
 to stage — a `--rev` or pull request session cannot stage at all, and a working
@@ -402,7 +446,7 @@ or `clip.exe`.
 ## Layout
 
 ```
-internal/git       diff parsing, status, and whole-file staging
+internal/git       diff parsing, status, staging, and the one patch builder
 internal/store     comments, folds, views, and the walkthrough cache — in .git/peel/
                    for the working tree, one file per pull request outside it
 internal/ai        walkthrough providers (claude-code, codex)

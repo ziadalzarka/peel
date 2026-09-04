@@ -2,7 +2,9 @@ package git_test
 
 import (
 	"context"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/ziadalzarka/peel/internal/exec"
@@ -74,6 +76,36 @@ func itoa(n int) string {
 	return string(digits)
 }
 
+// commit writes a file and commits it, for the tree a change is measured from.
+func (h *harness) commit(path, content string) {
+	h.t.Helper()
+	h.fixture.Write(path, content)
+	h.fixture.Commit("base")
+}
+
+// write replaces a file in the working tree.
+func (h *harness) write(path, content string) {
+	h.t.Helper()
+	h.fixture.Write(path, content)
+}
+
+// read returns a file as the working tree has it.
+func (h *harness) read(path string) string {
+	h.t.Helper()
+	return h.fixture.Read(path)
+}
+
+// unstagedHunks returns a file's working-tree diff and the hunks in it, which
+// is what a hunk is addressed out of.
+func (h *harness) unstagedHunks(path string) (git.FileDiff, []git.Hunk) {
+	h.t.Helper()
+	entry := h.entry(path)
+	if entry.Unstaged == nil {
+		h.t.Fatalf("%s has nothing out of the index", path)
+	}
+	return *entry.Unstaged, entry.Unstaged.Hunks
+}
+
 // --- Whole-file staging ---
 
 // A file is the unit: every hunk in it goes to the index together, and nothing
@@ -121,6 +153,227 @@ func TestStageFileLeavesOtherFilesUnstaged(t *testing.T) {
 	}
 	if got := h.entry("b.txt").State(); got != git.StateUnstaged {
 		t.Errorf("b.txt State() = %v, want unstaged", got)
+	}
+}
+
+// --- Hunk staging ---
+
+// counting wraps the real runner and records what a change costs, so the price of
+// a keypress is something a test can hold to.
+type counting struct {
+	inner exec.Runner
+	mu    sync.Mutex
+	ran   []string
+}
+
+func (c *counting) Run(ctx context.Context, cmd exec.Command) (exec.Result, error) {
+	c.mu.Lock()
+	c.ran = append(c.ran, strings.Join(cmd.Args, " "))
+	c.mu.Unlock()
+	return c.inner.Run(ctx, cmd)
+}
+
+// The screen is already drawn by the time this runs, so what it costs is what
+// stands between a keypress and the index: the file the reviewer is in, and the
+// apply. The whole tree is read once behind it, by the reload every change ends
+// in — reading it here as well would be reading it twice.
+func TestStagingAHunkCostsTheFileAndTheApply(t *testing.T) {
+	h := newHarness(t)
+	h.commit("f.txt", numbered(30))
+	h.write("f.txt", edited(numbered(30), "line3", "line25"))
+
+	file, hunks := h.unstagedHunks("f.txt")
+	counter := &counting{inner: exec.NewOSRunner()}
+	stager := git.NewStager(git.NewRepo(h.fixture.Dir, counter))
+
+	if err := stager.StageHunk(h.ctx, file.ID(hunks[0])); err != nil {
+		t.Fatalf("StageHunk: %v", err)
+	}
+
+	if len(counter.ran) != 2 {
+		t.Fatalf("staging one hunk ran %d git commands, want two:\n%s", len(counter.ran), strings.Join(counter.ran, "\n"))
+	}
+	if !strings.HasPrefix(counter.ran[0], "diff ") || !strings.HasSuffix(counter.ran[0], "-- f.txt") {
+		t.Errorf("the first command was %q, want the one file's diff", counter.ran[0])
+	}
+	if !strings.HasPrefix(counter.ran[1], "apply --cached") {
+		t.Errorf("the second command was %q, want the apply", counter.ran[1])
+	}
+}
+
+// The point of the key: one change in a file goes to the index and the rest of
+// the file stays out of it, on disk, exactly as it was.
+func TestStageHunkLeavesTheRestOfTheFileOutOfTheIndex(t *testing.T) {
+	h := newHarness(t)
+	h.fixture.Write("f.txt", numbered(30))
+	h.fixture.Commit("base")
+
+	// Two well-separated edits, so git reads them as two hunks.
+	content := strings.Replace(numbered(30), "line3\n", "line3-EDITED\n", 1)
+	content = strings.Replace(content, "line25\n", "line25-EDITED\n", 1)
+	h.fixture.Write("f.txt", content)
+
+	file, hunks := h.unstagedHunks("f.txt")
+	if len(hunks) != 2 {
+		t.Fatalf("got %d hunks, want 2", len(hunks))
+	}
+
+	if err := h.stager.StageHunk(h.ctx, file.ID(hunks[0])); err != nil {
+		t.Fatalf("StageHunk: %v", err)
+	}
+
+	staged := h.fixture.Staged("f.txt")
+	if !strings.Contains(staged, "line3-EDITED") {
+		t.Error("the index is missing the hunk that was staged")
+	}
+	if strings.Contains(staged, "line25-EDITED") {
+		t.Error("the index has the hunk that was not staged")
+	}
+	if !strings.Contains(h.fixture.Read("f.txt"), "line25-EDITED") {
+		t.Error("staging a hunk changed the working tree")
+	}
+	if got := h.entry("f.txt").State(); got != git.StatePartial {
+		t.Errorf("State() = %v, want the file in both places at once", got)
+	}
+}
+
+// Staging a later hunk on its own is where the offsets have to be worked out
+// again: the hunk above it never landed, so the file it applies to is shorter
+// than its header says.
+func TestStageHunkAloneUsesItsOwnOffsets(t *testing.T) {
+	h := newHarness(t)
+	h.fixture.Write("f.txt", numbered(40))
+	h.fixture.Commit("base")
+
+	content := strings.Replace(numbered(40), "line3\n", "line3\nINSERTED-A\nINSERTED-B\n", 1)
+	content = strings.Replace(content, "line35\n", "line35-EDITED\n", 1)
+	h.fixture.Write("f.txt", content)
+
+	file, hunks := h.unstagedHunks("f.txt")
+	if len(hunks) != 2 {
+		t.Fatalf("got %d hunks, want 2", len(hunks))
+	}
+
+	if err := h.stager.StageHunk(h.ctx, file.ID(hunks[1])); err != nil {
+		t.Fatalf("StageHunk: %v", err)
+	}
+
+	// Every line: the one edit, and nothing else moved.
+	want := strings.Replace(numbered(40), "line35\n", "line35-EDITED\n", 1)
+	if got := h.fixture.Staged("f.txt"); got != strings.TrimRight(want, "\n") {
+		t.Errorf("index contents wrong:\ngot:\n%s", got)
+	}
+}
+
+// The file's last hunk leaves nothing out of the index, so the file reads as
+// staged — the same place the file key would have left it.
+func TestStagingEveryHunkLeavesTheFileStaged(t *testing.T) {
+	h := newHarness(t)
+	h.fixture.Write("f.txt", numbered(30))
+	h.fixture.Commit("base")
+
+	content := strings.Replace(numbered(30), "line3\n", "line3-EDITED\n", 1)
+	content = strings.Replace(content, "line25\n", "line25-EDITED\n", 1)
+	h.fixture.Write("f.txt", content)
+
+	file, hunks := h.unstagedHunks("f.txt")
+	if err := h.stager.StageHunk(h.ctx, file.ID(hunks[0])); err != nil {
+		t.Fatalf("StageHunk: %v", err)
+	}
+	// The first apply moved the tree, so the second hunk is addressed again out
+	// of the diff as it reads now.
+	file, hunks = h.unstagedHunks("f.txt")
+	if len(hunks) != 1 {
+		t.Fatalf("got %d hunks left, want 1", len(hunks))
+	}
+	if err := h.stager.StageHunk(h.ctx, file.ID(hunks[0])); err != nil {
+		t.Fatalf("StageHunk: %v", err)
+	}
+
+	if got := h.entry("f.txt").State(); got != git.StateStaged {
+		t.Errorf("State() = %v, want staged with nothing left out", got)
+	}
+	if got, want := h.fixture.StagedRaw("f.txt"), content; got != want {
+		t.Errorf("index contents = %q, want the whole file", got)
+	}
+}
+
+// A file with no newline at its end is the fixture a generated patch gets wrong:
+// the marker has to be carried through or git writes a newline the file never
+// had.
+func TestStageHunkKeepsAFileEndingWithoutANewline(t *testing.T) {
+	h := newHarness(t)
+	h.fixture.Write("f.txt", "one\ntwo\nthree")
+	h.fixture.Commit("base")
+	h.fixture.Write("f.txt", "one\ntwo\nTHREE")
+
+	file, hunks := h.unstagedHunks("f.txt")
+	if err := h.stager.StageHunk(h.ctx, file.ID(hunks[0])); err != nil {
+		t.Fatalf("StageHunk: %v", err)
+	}
+	if got, want := h.fixture.StagedRaw("f.txt"), "one\ntwo\nTHREE"; got != want {
+		t.Errorf("index contents = %q, want %q", got, want)
+	}
+}
+
+// An ID is line offsets, so a file that has moved since it was read leaves it
+// naming a hunk that is not there. Saying so beats applying something to the
+// lines that took its place.
+func TestStageHunkRefusesAnIDTheTreeHasMovedPast(t *testing.T) {
+	h := newHarness(t)
+	h.fixture.Write("f.txt", numbered(10))
+	h.fixture.Commit("base")
+	h.fixture.Write("f.txt", strings.Replace(numbered(10), "line4\n", "line4-EDITED\n", 1))
+
+	file, hunks := h.unstagedHunks("f.txt")
+	id := file.ID(hunks[0])
+
+	// The edit is taken back before the hunk is staged.
+	h.fixture.Write("f.txt", numbered(10))
+
+	err := h.stager.StageHunk(h.ctx, id)
+	if err == nil {
+		t.Fatal("StageHunk applied a hunk the tree no longer has")
+	}
+	if !strings.Contains(err.Error(), "reload") {
+		t.Errorf("error = %v, want it to say the tree moved", err)
+	}
+}
+
+// `git apply --cached` cannot write a path the index has never heard of, and the
+// `git add -N` that would let it is a change to the index of its own.
+func TestStageHunkRefusesAnUntrackedFile(t *testing.T) {
+	h := newHarness(t)
+	h.fixture.Write("kept.txt", "a\n")
+	h.fixture.Commit("base")
+	h.fixture.Write("new.txt", "one\ntwo\n")
+
+	file, hunks := h.unstagedHunks("new.txt")
+	err := h.stager.StageHunk(h.ctx, file.ID(hunks[0]))
+	if err == nil {
+		t.Fatal("StageHunk staged part of an untracked file")
+	}
+	if !strings.Contains(err.Error(), "untracked") {
+		t.Errorf("error = %v, want it to say the file is untracked", err)
+	}
+	if lines := h.fixture.StatusLines(); !slices.Contains(lines, "?? new.txt") {
+		t.Errorf("status = %v, want new.txt still untracked and untouched", lines)
+	}
+}
+
+// A hunk of the index's own diff is already where staging would put it.
+func TestStageHunkOfAStagedChangeIsRefused(t *testing.T) {
+	h := newHarness(t)
+	h.fixture.Write("f.txt", numbered(10))
+	h.fixture.Commit("base")
+	h.fixture.Write("f.txt", strings.Replace(numbered(10), "line4\n", "line4-EDITED\n", 1))
+
+	file, hunks := h.unstagedHunks("f.txt")
+	if err := h.stager.StageHunk(h.ctx, file.ID(hunks[0])); err != nil {
+		t.Fatalf("StageHunk: %v", err)
+	}
+	if err := h.stager.StageHunk(h.ctx, file.ID(hunks[0])); err == nil {
+		t.Fatal("StageHunk staged a hunk that is already in the index")
 	}
 }
 

@@ -178,6 +178,32 @@ func restaged(s *app.Session, stage bool, wanted func(path string) bool) *app.Se
 	return &out
 }
 
+// restagedHunk returns the session as it will read once one hunk has moved into
+// the index, and the entry that moved.
+//
+// A whole file is a swap of sides and needs nothing from git to draw; one hunk
+// out of several needs the two diffs renumbered around it, which is what the git
+// package works out. It is false where that cannot be worked out — the hunk is
+// not where the screen thinks it is, which means the tree has moved and the
+// read-back is the only thing that can answer.
+func restagedHunk(s *app.Session, id git.HunkID) (*app.Session, git.FileEntry, bool) {
+	for i, entry := range s.Files {
+		if entry.Path != id.Path {
+			continue
+		}
+		moved, ok := entry.WithHunkStaged(id)
+		if !ok {
+			return s, git.FileEntry{}, false
+		}
+		out := *s
+		out.Files = make([]git.FileEntry, len(s.Files))
+		copy(out.Files, s.Files)
+		out.Files[i] = moved
+		return &out, moved, true
+	}
+	return s, git.FileEntry{}, false
+}
+
 // only names one file for restaged, and every names all of them.
 func only(path string) func(string) bool {
 	return func(p string) bool { return p == path }

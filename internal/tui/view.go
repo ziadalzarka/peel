@@ -151,7 +151,8 @@ func (m *Model) hints() string {
 	case modeReviewEvent:
 		return "a approve · r request changes · c comment · esc cancel"
 	default:
-		hints := `j/k hunk · ↓/↑ line · [/] ten lines · opt+↓/↑ file · cmd+p go to file · shift+↓/↑ mark · s stage file · u unstage · space fold · c comment · b files · \ layout · w walkthrough`
+		hints := `j/k hunk · ↓/↑ line · [/] ten lines · opt+↓/↑ file · cmd+p go to file · shift+↓/↑ mark · ` +
+			m.keys.StageHunk + ` stage hunk · ` + m.keys.StageFile + ` stage file · u unstage · space fold · c comment · b files · \ layout · w walkthrough`
 		// The key that posts is only worth a place in the footer where there is
 		// something to post to.
 		if m.session != nil && m.session.PR != nil {
@@ -297,46 +298,56 @@ func nthLine(lines []string, n int) string {
 	return lines[n]
 }
 
+// binding is one row of the help screen: the keys, and what they do.
+type binding struct{ keys, action string }
+
 // helpBindings is the single source of truth for the help screen. The footer
 // hints are deliberately shorter; this is the full list.
-var helpBindings = []struct{ keys, action string }{
-	{"j / k", "next / previous hunk, file or comment"},
-	{"↓ / ↑", "move the cursor one line (the wheel scrolls the diff)"},
-	{"] / [", "ten lines down / up, stopping short at any heading, note or ▴/▾ row"},
-	{"opt+↓ / opt+↑", "next / previous file"},
-	{"cmd+p", "go to a file by name, in the terminals that report the key"},
-	{"} / {", "scroll the file tree on its own"},
-	{"h / l", "scroll sideways, for a line or a path too long for the pane"},
-	{"0 / $", "back to the first column / out to the longest row's end"},
-	{"b", "hide or show the file tree, giving the diff the whole width"},
-	{"g / G", "first / last row — cmd+↑ / cmd+↓ too, where the terminal sends them"},
-	{"ctrl+d / ctrl+u", "half a page down / up"},
-	{"space", "fold a file, a staged half or a note away — or, on a ▴/▾ row, read in more code"},
-	{"s", "stage the file the cursor is in — it folds away and the next one opens"},
-	{"u", "unstage that file, opening it again"},
-	{"a / U", "stage everything / unstage everything"},
-	{"o", "open the file the cursor is in, outside peel"},
-	{"shift+↓ / shift+↑", "mark a run of lines to write one note about — any other key lets it go"},
-	{"c", "comment at the cursor, or on the run of lines marked"},
-	{"enter / shift+enter", "in the editor: save the comment / write another line"},
-	{"e", "edit a comment of your own, where it stands"},
-	{"x / D", "resolve or reopen / delete the comment at the cursor"},
-	{"C", "copy your own comments as text, to paste into an agent"},
-	{"A", "hide or show the comments an agent left, leaving your own"},
-	{"X", "delete every agent comment — it asks first"},
-	{"P", "post the review to the pull request: a summary, then approve / request changes / comment"},
-	{`\`, "toggle unified and side-by-side"},
-	{"w", "walkthrough: group the diff into steps, with a note before each"},
-	{"W", "regenerate the walkthrough"},
-	{"r", "reload from git"},
-	{"f", "follow: re-read the repository as it changes"},
-	{"? / q", "help / quit"},
+//
+// The two staging rows are the reviewer's own keys rather than peel's, since
+// they are the two that can be moved — a help screen naming a key that stages
+// nothing here would be worse than no help at all.
+func (m *Model) helpBindings() []binding {
+	return []binding{
+		{"j / k", "next / previous hunk, file or comment"},
+		{"↓ / ↑", "move the cursor one line (the wheel scrolls the diff)"},
+		{"] / [", "ten lines down / up, stopping short at any heading, note or ▴/▾ row"},
+		{"opt+↓ / opt+↑", "next / previous file"},
+		{"cmd+p", "go to a file by name, in the terminals that report the key"},
+		{"} / {", "scroll the file tree on its own"},
+		{"h / l", "scroll sideways, for a line or a path too long for the pane"},
+		{"0 / $", "back to the first column / out to the longest row's end"},
+		{"b", "hide or show the file tree, giving the diff the whole width"},
+		{"g / G", "first / last row — cmd+↑ / cmd+↓ too, where the terminal sends them"},
+		{"ctrl+d / ctrl+u", "half a page down / up"},
+		{"space", "fold a file, a staged half or a note away — or, on a ▴/▾ row, read in more code"},
+		{m.keys.StageHunk, "stage the hunk the cursor is in — twice over takes the whole file"},
+		{m.keys.StageFile, "stage the file the cursor is in — it folds away and the next one opens"},
+		{"u", "unstage that file, opening it again"},
+		{"a / U", "stage everything / unstage everything"},
+		{"o", "open the file the cursor is in, outside peel"},
+		{"shift+↓ / shift+↑", "mark a run of lines to write one note about — any other key lets it go"},
+		{"c", "comment at the cursor, or on the run of lines marked"},
+		{"enter / shift+enter", "in the editor: save the comment / write another line"},
+		{"e", "edit a comment of your own, where it stands"},
+		{"x / D", "resolve or reopen / delete the comment at the cursor"},
+		{"C", "copy your own comments as text, to paste into an agent"},
+		{"A", "hide or show the comments an agent left, leaving your own"},
+		{"X", "delete every agent comment — it asks first"},
+		{"P", "post the review to the pull request: a summary, then approve / request changes / comment"},
+		{`\`, "toggle unified and side-by-side"},
+		{"w", "walkthrough: group the diff into steps, with a note before each"},
+		{"W", "regenerate the walkthrough"},
+		{"r", "reload from git"},
+		{"f", "follow: re-read the repository as it changes"},
+		{"? / q", "help / quit"},
+	}
 }
 
 // helpLines is the whole help screen, however tall the terminal is.
 func (m *Model) helpLines() []string {
 	lines := []string{fit(" "+m.theme.Header.Render("Keys"), m.width), fit("", m.width)}
-	for _, b := range helpBindings {
+	for _, b := range m.helpBindings() {
 		lines = append(lines, fit(" "+m.theme.Key.Render(padRight(b.keys, 17))+" "+b.action, m.width))
 	}
 	return append(lines,

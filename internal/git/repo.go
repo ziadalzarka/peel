@@ -19,6 +19,7 @@ import (
 //	--no-renames  a rename reads as a delete and an add, which is the diff
 //	              there is to review
 //	--unified=3   fixed context, so a hunk reads the same in every repository
+//	              and a patch generated from one never needs --unidiff-zero
 //	--no-textconv textconv output is a rendering, not the change itself
 var diffFlags = []string{
 	"--no-color",
@@ -242,6 +243,56 @@ func (r *Repo) IndexLines(ctx context.Context, path string) ([]string, error) {
 		return nil, fmt.Errorf("read staged %s: %w", path, err)
 	}
 	return splitLines(string(res.Stdout)), nil
+}
+
+// UnstagedFile returns one path's working-tree changes — `git diff` narrowed to
+// the file — and false where it has none.
+//
+// It is what staging one hunk resolves that hunk against, so the read behind a
+// keypress costs the file the reviewer is in rather than the whole tree.
+func (r *Repo) UnstagedFile(ctx context.Context, path string) (FileDiff, bool, error) {
+	args := append([]string{"diff"}, diffFlags...)
+	args = append(args, "--", path)
+	out, err := r.git(ctx, args...)
+	if err != nil {
+		return FileDiff{}, false, fmt.Errorf("git diff -- %s: %w", path, err)
+	}
+	d, err := ParseDiff(out)
+	if err != nil {
+		return FileDiff{}, false, fmt.Errorf("%s: %w", path, err)
+	}
+	if len(d.Files) == 0 {
+		return FileDiff{}, false, nil
+	}
+	return d.Files[0], true, nil
+}
+
+// IsUntracked reports whether git is not tracking path.
+//
+// It is asked only where a path turns out to have no diff, to tell "there is
+// nothing left to stage" from "git has never heard of this file" — two different
+// things to say, and only one of them worth a second git call.
+func (r *Repo) IsUntracked(ctx context.Context, path string) bool {
+	out, err := r.git(ctx, "ls-files", "--others", "--exclude-standard", "--", path)
+	return err == nil && strings.TrimSpace(out) != ""
+}
+
+// ApplyToIndex pipes a patch into the index and stops there, leaving the
+// working tree the patch was read out of alone.
+//
+// --unidiff-zero is deliberately not passed: it turns off git's overlap checks,
+// and it is only needed for patches with no context, which diffFlags rules out.
+func (r *Repo) ApplyToIndex(ctx context.Context, patch string) error {
+	_, err := r.runner.Run(ctx, exec.Command{
+		Name:  "git",
+		Args:  []string{"apply", "--cached", "--whitespace=nowarn", "-"},
+		Dir:   r.dir,
+		Stdin: strings.NewReader(patch),
+	})
+	if err != nil {
+		return fmt.Errorf("apply to the index: %w", err)
+	}
+	return nil
 }
 
 // StageFile stages every change to one path, including deletions and untracked

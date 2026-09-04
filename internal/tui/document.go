@@ -1336,12 +1336,13 @@ func (d Document) TargetAt(row int) Target {
 	return Target{Kind: TargetFile, Path: d.Files[r.File].Entry.Path, File: r.File, Hunk: -1}
 }
 
-// FileTargetAt resolves the row under the cursor to the file staging acts on.
+// FileTargetAt resolves the row under the cursor to the file staging a whole
+// file acts on.
 //
-// Staging is whole-file, so a hunk header or a diff line resolves to the file it
-// belongs to rather than to itself. A walkthrough row resolves to nothing: it
-// names a group of files, and staging a whole group from one keypress is not
-// what the row looks like it means.
+// A hunk header or a diff line resolves to the file it belongs to rather than to
+// itself, so the cursor never has to be moved to a header first. A walkthrough
+// row resolves to nothing: it names a group of files, and staging a whole group
+// from one keypress is not what the row looks like it means.
 func (d Document) FileTargetAt(row int) (FileRef, bool) {
 	if row < 0 || row >= len(d.Rows) {
 		return FileRef{}, false
@@ -1354,6 +1355,31 @@ func (d Document) FileTargetAt(row int) (FileRef, bool) {
 		return FileRef{}, false
 	}
 	return d.Files[r.File], true
+}
+
+// HunkTargetAt resolves the row under the cursor to the hunk staging one hunk
+// acts on, and false where the cursor is not inside one.
+//
+// A hunk header, a line of its body and a note left on one of those lines all
+// resolve to that hunk — the same rows `c` writes a note about — since anywhere
+// inside a hunk is somewhere the reviewer can see which hunk it is. A file
+// header resolves to nothing rather than to the first hunk under it: staging the
+// file is its own key, and a file with one hunk would be the only place the two
+// ever agreed.
+func (d Document) HunkTargetAt(row int) (HunkRef, bool) {
+	if row < 0 || row >= len(d.Rows) {
+		return HunkRef{}, false
+	}
+	r := d.Rows[row]
+	switch r.Kind {
+	case RowHunk, RowLine, RowComment:
+	default:
+		return HunkRef{}, false
+	}
+	if r.Hunk < 0 || r.Hunk >= len(d.Hunks) {
+		return HunkRef{}, false
+	}
+	return d.Hunks[r.Hunk], true
 }
 
 // LineAt returns the hunk and the index of the line a row addresses, for

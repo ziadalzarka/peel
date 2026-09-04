@@ -193,7 +193,10 @@ type fakeBackend struct {
 	session  *app.Session
 	comments []store.Comment
 
-	stagedFiles   []string
+	stagedFiles []string
+	// stagedHunks is every hunk staged on its own, in the order the keys were
+	// pressed, by the ID the screen named it with.
+	stagedHunks   []git.HunkID
 	unstagedFiles []string
 	stageAll      int
 	unstageAll    int
@@ -335,6 +338,14 @@ func (f *fakeBackend) StageFile(_ context.Context, path string) error {
 		return err
 	}
 	f.stagedFiles = append(f.stagedFiles, path)
+	return nil
+}
+
+func (f *fakeBackend) StageHunk(_ context.Context, id git.HunkID) error {
+	if err := f.take(); err != nil {
+		return err
+	}
+	f.stagedHunks = append(f.stagedHunks, id)
 	return nil
 }
 

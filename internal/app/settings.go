@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 )
 
@@ -110,4 +111,130 @@ func (a *App) Moves(ctx context.Context) (Moves, error) {
 		return moves, fmt.Errorf("%s", strings.Join(bad, "; "))
 	}
 	return moves, nil
+}
+
+// Keys is which key stages the file the cursor is in and which stages the one
+// hunk it is in.
+//
+// They are one setting rather than two independent ones because they are the
+// same decision at two sizes, and which of them deserves the unshifted key
+// depends on the pass: a review that goes hunk by hunk wants `s` on the hunk, and
+// one that reads whole files and stages them wants it on the file. Nothing else
+// peel binds is a setting — the rest of the keymap is not a preference, it is the
+// same review everywhere.
+type Keys struct {
+	StageFile string
+	StageHunk string
+}
+
+// StageFileKey and StageHunkKey are the git config settings behind them, each
+// naming a key rather than a behaviour. Git stores the last component of a key
+// lower-cased, so `peel.stageFile` is what is written and this is what comes
+// back.
+const (
+	StageFileKey = ConfigSection + ".stagefile"
+	StageHunkKey = ConfigSection + ".stagehunk"
+)
+
+// DefaultKeys is what peel does with neither setting written: `s` on the hunk,
+// which is the size a diff is read in and the smaller of the two decisions, and
+// the same key shifted on the file around it. Pressing the unshifted key twice
+// reaches the file as well, so the shift is a convenience rather than the only
+// way there.
+func DefaultKeys() Keys { return Keys{StageFile: "S", StageHunk: "s"} }
+
+// OrDefault fills in whichever of the two was left unset, so a caller holding
+// half a setting does not get a key that stages nothing.
+func (k Keys) OrDefault() Keys {
+	d := DefaultKeys()
+	if k.StageFile == "" {
+		k.StageFile = d.StageFile
+	}
+	if k.StageHunk == "" {
+		k.StageHunk = d.StageHunk
+	}
+	return k
+}
+
+// ParseKey reads one key setting's value.
+//
+// A key is written the way peel writes its own: the character it is, or a name
+// with the modifier in front of it. taken is the keys the review already binds,
+// which a setting cannot have — a stage key that quietly took `c` would leave a
+// reviewer pressing it for a note and staging instead.
+func ParseKey(s string, taken []string) (string, error) {
+	key := strings.TrimSpace(s)
+	if key == "" {
+		return "", fmt.Errorf("no key")
+	}
+	if strings.ContainsAny(key, " \t") {
+		return "", fmt.Errorf("%q is more than one key", s)
+	}
+	// A terminal has no way to say shift and a letter: it sends the capital. A
+	// setting written the other way would never fire and never say why.
+	if mod, rest, ok := strings.Cut(key, "+"); ok &&
+		strings.EqualFold(mod, "shift") && len([]rune(rest)) == 1 && strings.ToLower(rest) != strings.ToUpper(rest) {
+		return "", fmt.Errorf("%q arrives as the capital — write %q", s, strings.ToUpper(rest))
+	}
+	if slices.Contains(taken, key) {
+		return "", fmt.Errorf("%q is already bound to something else", key)
+	}
+	return key, nil
+}
+
+// Keys reads both settings from git config, most specific file last, the way
+// every other peel setting is read. taken is the keys the review binds itself,
+// which neither setting may take over.
+//
+// Setting one of them to the other's default swaps the pair: there are two keys
+// and two things to stage, so `peel.stageFile s` has only one reading, and
+// making the reviewer write both halves of a swap to get it would be asking them
+// to say the same thing twice. Writing both to the same key is a different
+// thing — it says what the other key does nowhere at all — so it is refused and
+// both defaults stand.
+func (a *App) Keys(ctx context.Context, taken []string) (Keys, error) {
+	keys := DefaultKeys()
+	cfg, err := a.Repo.ConfigSection(ctx, ConfigSection)
+	if err != nil {
+		return keys, err
+	}
+
+	var bad []string
+	set := map[string]string{}
+	for _, key := range []string{StageFileKey, StageHunkKey} {
+		raw := strings.TrimSpace(cfg[key])
+		if raw == "" {
+			continue
+		}
+		parsed, err := ParseKey(raw, taken)
+		if err != nil {
+			bad = append(bad, fmt.Sprintf("%s: %v", key, err))
+			continue
+		}
+		set[key] = parsed
+	}
+
+	if file, hunk := set[StageFileKey], set[StageHunkKey]; file != "" && file == hunk {
+		bad = append(bad, fmt.Sprintf("%s and %s are both %q", StageFileKey, StageHunkKey, file))
+		set = map[string]string{}
+	}
+
+	if file, ok := set[StageFileKey]; ok {
+		keys.StageFile = file
+	}
+	if hunk, ok := set[StageHunkKey]; ok {
+		keys.StageHunk = hunk
+	}
+	if keys.StageFile == keys.StageHunk {
+		if _, ok := set[StageFileKey]; ok {
+			keys.StageHunk = DefaultKeys().StageFile
+		} else {
+			keys.StageFile = DefaultKeys().StageHunk
+		}
+	}
+
+	if len(bad) > 0 {
+		return keys, fmt.Errorf("%s", strings.Join(bad, "; "))
+	}
+	return keys, nil
 }

@@ -19,7 +19,7 @@ Today those are two separate passes over the same diff. You read it in a viewer
 thing again* in `git add -p`, re-deciding file by file what you already decided
 five minutes ago.
 
-`peel` is one pass. You read a file, and if it's good you press `s`: it is staged
+`peel` is one pass. You read a change, and if it's good you press `s`: it is staged
 and folded away, leaving what you have not dealt with yet. Same screen, same
 keystroke flow.
 
@@ -83,11 +83,11 @@ it doesn't get relitigated.
 | **Form factor** | Terminal TUI | Stays in the terminal, works over ssh, ~30ms start. Browser UI was the alternative — rejected as a context switch |
 | **Language** | Go + bubbletea/lipgloss | Go 1.26.4 already installed. One static ~10MB binary, no runtime. `revdiff` proves the shape works |
 | **Diff layout** | Unified default, `\` toggles side-by-side | Unified matches `git diff` and fits a narrow terminal; side-by-side for spotting edits inside a long line |
-| **Staging granularity** | **whole files only** | Revised 2026-07-30, after building hunk and line staging. A file is the unit a review decision is actually made in, and reviewing one then pressing `s` reads the same either way. Hunk and line staging bought a patch engine whose failure mode is writing the wrong lines into the index, to split a file the way `git add -p` already splits it |
-| **Staging mechanism** | `git add` / `git restore --staged` per path | The whole-file decision removes the need to generate patches at all: no `git apply --cached`, no `@@` arithmetic, no intent-to-add dance for untracked files |
-| **Staged files fold away** | `s` collapses the file, moves to the next one with work still out of the index; `space` reopens it | The list left open is the list still to review, so the diff shrinks as the pass goes on, and the one key that ends a file also starts the next. Collapsing is display only — `space` reads a staged file back without touching the index. Revised 2026-08-04, and reversed 2026-08-20: the move went by the fold and not the index, so that a file staged outside peel was still a stop, but that made the pass stop twice on everything an agent had staged and skip anything folded with work left in it — and the fold is where a file is on screen, not whether it has been decided about. The index is the record: what is in it is done, and what is not is what the pass is for. The reviewer who wanted the old rule can have it back — see the row below |
+| **Staging granularity** | **one whole hunk, and whole files** | Revised 2026-09-04. Whole files only from 2026-07-30, after a patch engine that staged selected hunks *and selected lines* was built and removed. The line half is what carried the risk: a hunk rebuilt from a set of line indexes, unselected lines demoted to context or dropped depending on which side the tree was on, and all of it rebased onto a tree that had moved — to split a file the way `git add -p` already splits it. A whole hunk is none of that. It is what git printed, applied as git printed it, with nothing recomputed but the new side's start line, against an index that is the old side of the diff peel is already reading. The hunk is what the unshifted key stages, because it is the size a diff is read in: a file holding one change to keep and one to think about is otherwise a file left open to be read a second time. The file is a press of shift, or the same key twice. Below a hunk is still `git add -p` |
+| **Staging mechanism** | `git add` / `git restore --staged` per path; `git apply --cached` for one hunk | Everything whole-file needs no patch at all, and gets a rename half, a binary file, a deletion and CRLF right because that is `git add`'s job. The hunk path generates exactly one patch — one hunk, forwards, into the index — and is the only place peel generates one. What that keeps out is as much as what it does: no line selection, no reverse apply (unstaging is whole-file), and no intent-to-add dance, since an untracked file is refused rather than escalated with `git add -N` behind a keypress that said nothing about it |
+| **Staged files fold away** | staging the last of a file's work collapses it, moves to the next file with work still out of the index; `space` reopens it | The list left open is the list still to review, so the diff shrinks as the pass goes on, and the one key that ends a file also starts the next. Collapsing is display only — `space` reads a staged file back without touching the index. Revised 2026-08-04, and reversed 2026-08-20: the move went by the fold and not the index, so that a file staged outside peel was still a stop, but that made the pass stop twice on everything an agent had staged and skip anything folded with work left in it — and the fold is where a file is on screen, not whether it has been decided about. The index is the record: what is in it is done, and what is not is what the pass is for. The reviewer who wanted the old rule can have it back — see the row below |
 | **Where the cursor goes next is a setting** | `peel.afterStage` and `peel.afterFold`, each `next-unstaged` (default), `next-open` or `stay` | Added 2026-08-20. Reversing the 2026-08-04 rule is right for the pass peel is built around and wrong for at least two others — reviewing a branch somebody else has already staged in pieces, and reading a diff with no intention of staging at all — and neither of those is a reviewer peel should make choose a different tool. The two keys are set apart because they are not the same pass: `s` walks the index down, `space` only walks the diff. `stay` exists because the third answer to "where next" is "nowhere, I will say" — a review read out of order, where every jump peel makes is a jump back. It is git config, like `peel.open`, so it is set once for every repository; unlike `peel.open` it is read at startup rather than on the keypress, since `s` draws before it asks git anything and a config read there would be the one thing the press waited for. An unparseable value keeps the default and says which key it was, rather than costing a pass over a typo only fixable by leaving |
-| **Folding is the same decision without the index** | `space` folds a file away and moves on exactly as `s` does, by its own setting | Not every file read is a file to stage — a read-only session has none, and a working tree has files you have looked at and left alone. Folding is how a pass records what has been read, so it moves on the way staging does. Where there is no index to move by, `next-unstaged` reads as `next-open`: a pull request has every file out of an index it does not have, so going by that would make the fold mean nothing and stop the pass on every file twice |
+| **Folding is the same decision without the index** | `space` folds a file away and moves on exactly as staging it does, by its own setting | Not every file read is a file to stage — a read-only session has none, and a working tree has files you have looked at and left alone. Folding is how a pass records what has been read, so it moves on the way staging does. Where there is no index to move by, `next-unstaged` reads as `next-open`: a pull request has every file out of an index it does not have, so going by that would make the fold mean nothing and stop the pass on every file twice |
 | **Moving on scrolls only when it has to** | the cursor lands on the next file below the pass stops on, either way; the window moves only when that file is off screen, and then far enough to bring its first twelve rows in rather than its header to the first row | Revised 2026-08-05. Folding a file pulls everything under it up, so the file the pass carries on with is usually already in front of the reviewer — and opening the window on it anyway scrolled the diff around it away to show something that was on screen the whole time. Once the window does have to move, stopping at the top of the file is the same mistake in the other direction: the file fills the window, and what the reviewer had just read is gone. Twelve rows is a header and the start of the first hunk, which is enough to carry on reading with and leaves what came before still above it — where scrolling there by hand would have left it. The file jumps, `opt+↓`/`opt+↑`, still open the window on the file: there the jump is the whole point of the keypress, and nothing was being read around it |
 | **A part-staged file reads as two halves** | a heading rules across the pane above each one — `staged · already in the index` and `unstaged · not in the index yet` — and the index's half opens folded, `space` on the heading showing it | Added 2026-08-05. git can put one file in both places at once, and peel drew the two changes as one run of hunks with the word `index` or `worktree` at the end of each hunk header. Fifty green `+` lines that are already staged, then four that are not, read as one change of fifty-four: the new work is at the bottom of something that looks reviewed, and nothing on screen says where the reviewed part stopped. The heading is a break rather than a label because that is the actual question — where does one change end — and the fold answers it by removing the reviewed half from the pass, which is the same rule `s` follows on a whole file. Only a file in both places at once is headed at all: a file whose changes are all in one place has one half, and a heading over the only change there is names nothing to tell it from — the `staged` rule over a file already marked `✓` was a line to read with nothing to read it for, and once its fold was remembered it could hide the file's whole diff behind itself. The file header carries the split too (`index +47 -0  worktree +4 -0`), since a folded file shows nothing else |
 | **The code a hunk left out can be read in** | a `▴`/`▾` row at each end of every run of unchanged code the diff skipped, saying how much is hidden; `space` reads twenty more lines in, and they join the hunk rather than becoming one | Added 2026-08-05. Three lines of context is what `git diff` prints, not what a reviewer needs to answer the question a hunk raises — whether the early return above it already covers the case, what the signature it is inside actually takes, where the lock was taken twenty lines up. Every reviewer's workaround is to leave peel and open the file, which is the review leaving the tool. GitHub's expander is the reference, down to the arrow saying which way the code will arrive. The lines are merged into the hunk's own, head or tail, because everything that already works on a hunk's lines then keeps working on them unchanged — the cursor, a note and its anchor, the split layout's pairing, a marked run — where a row kind of their own would need every one of those again. The hunk's ID stays the four range numbers of the hunk git printed, so what the CLI and an agent address does not move because somebody pressed space. The code is read out of the file the diff was measured against rather than asked of git as a wider diff: `--unified=<n>` re-runs the diff and lets git re-split and re-number the hunks, which would change hunk IDs under a review in progress, and it still could not say how much code follows the last hunk — only the file itself knows where it ends. A part-staged file is read twice, the index's copy for the staged half and the disk's for the rest, for the same reason a note records which of the two it was written against. A pull request is not read at all: its paths name local files that are not the files under review. Twenty lines a press, and a run of twenty or fewer is one row that finishes it rather than two rows and two presses. What has been read in is recorded against the hunk it was read from and the direction it grew, not against the run's position among the others: peel re-reads the repository while the review is open, and counting the runs meant a change arriving anywhere above renumbered every run below it, so code opened at the bottom of a file reappeared around whichever run had taken its number. Naming the pair of hunks either side would lose it instead, since a change landing between them splits the run in two. Hanging it off the one hunk it was read towards survives both, and a hunk rewritten under it has a new ID, so what was read around it reads as closed rather than as another hunk's |
@@ -101,10 +101,11 @@ it doesn't get relitigated.
 | **A note whose file has left the diff is still drawn** | a header of its own at the foot of the diff, `not in this change` where the counts go, with the notes under it | Added 2026-08-19. A file's changes can be committed, stashed or put back while a note on them is still in the review, and the note is then anchored to a file the session does not hold: no line to hang off, no hunk, not even a header to fall through to. It was drawn nowhere at all — while the store kept it, `C` handed it to an agent, and `x` and `D` act on a row, so the one note the reviewer could not see was also the one they could not resolve or delete; and it came back the moment the file changed again, onto whatever had taken its number. So the file is drawn anyway, with a header pointing at no diff, which is the thing being said: what the note was about is not in the change any more. There is nothing under it to stage, so `s` says that rather than reporting a staging that stages nothing, and the file pane leaves the counts off rather than showing `+0 -0`, which reads as a change that came to nothing. What `C` hands over carries the same warning in words, since which of committed, stashed or put back it was decides whether the line number still names the same code, and peel cannot tell those apart from here |
 | **A note is drawn under the code it is about** | side by side, a note hangs under the half of the row that holds its line — the new side, or the old side for a note on a line the change took away — and is wrapped to that half | Added 2026-08-05. Drawn across the pane, every note started in the old side's column, so a note about the code arriving read as a note about the code leaving: the column a note starts in is the one thing on screen saying which side it is about, and for almost every note it was saying the wrong one. Hanging it under the half that holds its line says it without a word, and it is the same rule the anchor already follows — the new side for an addition and for context, the old side for a removal, where the new side holds either the line that replaced it or nothing at all. A note about the file rather than about a line of it still rules across the pane, since the header it hangs off does. The editor opens in that half too, sized to it: the point of writing in the diff is that the note stands where it will be read, and an editor drawn across the pane would move on being saved. The text is wrapped to the half rather than to the pane, or every note long enough to wrap would be cut off at the divider instead |
 | **peel's objects are held by refs, and let go with the note** | one `refs/peel/anchors/<blob>` per snapshot; the ref set is made equal to the blobs the stored notes name after every write | Added 2026-08-05. A blob nothing points at is what `git gc` exists to delete, so an unreferenced snapshot is an anchor that rots — the same bug arriving later and harder to explain. One ref per blob fixes that and is also the whole cleanup story, in the same mechanism: what peel costs the repository is one blob per file version somebody commented on, deduplicated by content, and removing the last note naming one drops the ref and hands the object straight back. peel never runs `gc` in someone else's repository; it only stops holding on. Reading a review writes nothing at all — the working tree is compared by streaming the blob to a temporary file, because follow mode re-reads continuously and hashing on every read would litter the repository being reviewed. The refs sit outside `refs/heads` and `refs/tags`, so `status`, `branch`, `tag`, `log --all` and a default `push` never see them |
-| **A file changed after it was staged opens again** | a fold made by `s` reopens on the reload that finds working-tree changes in it; a fold made by `space` does not | Added 2026-08-05. Staging says "done with this file" about the changes that went into the index and nothing about the ones that arrive afterwards — and a `✓` in the tree is the one place a change can hide from a pass, since the pass skips what is folded. What opens is the new work alone: the index's half stays folded, so the file shows exactly what arrived. A file put away with `space` was put away deliberately and stays that way, which is the difference between the two keys that otherwise do the same thing |
+| **A file changed after it was staged opens again** | a fold made by staging reopens on the reload that finds working-tree changes in it; a fold made by `space` does not | Added 2026-08-05. Staging says "done with this file" about the changes that went into the index and nothing about the ones that arrive afterwards — and a `✓` in the tree is the one place a change can hide from a pass, since the pass skips what is folded. What opens is the new work alone: the index's half stays folded, so the file shows exactly what arrived. A file put away with `space` was put away deliberately and stays that way, which is the difference between the two keys that otherwise do the same thing |
 | **Folds persist** | JSON at `.git/peel/folds.json`, per target | A pass through a large diff rarely finishes in one sitting, and reopening to a diff that has forgotten every file already read starts the pass again. Folds of files no longer in the diff are dropped, so the next change to a file is not hidden by a fold left from the last one |
-| **Changes are drawn before they are written** | optimistic, with rollback: the screen moves on the keypress, git is asked behind it | Added 2026-07-30. A stage is `git add` plus a full re-read — 50ms in a small repository, several hundred in a large one — and the answer is never in doubt, only slow. Waiting for it before redrawing makes a decision that has already been made look like peel thinking about it, and staging is a key pressed file after file. The guess is a prediction of a whole-file stage and nothing cleverer; the re-read behind it stays authoritative, and a write that fails restores the screen it was drawn over. Two rules keep the guess from being seen: writes are queued, so peel's own git calls cannot race for the index lock, and a read-back landing while another write is out is dropped rather than undrawing it. `q` waits for the writes it has already reported |
+| **Changes are drawn before they are written** | optimistic, with rollback: the screen moves on the keypress, git is asked behind it | Added 2026-07-30. A stage is `git add` plus a full re-read — 50ms in a small repository, several hundred in a large one — and the answer is never in doubt, only slow. Waiting for it before redrawing makes a decision that has already been made look like peel thinking about it, and staging is a key pressed file after file. The guess is arithmetic on the two diffs — sides swapped for a whole file, one hunk moved across and everything it renumbers renumbered for a hunk — and never a patch: the re-read behind it stays authoritative, and a write that fails restores the screen it was drawn over. Two rules keep the guess from being seen: writes are queued, so peel's own git calls cannot race for the index lock, and a read-back landing while another write is out is dropped rather than undrawing it. `q` waits for the writes it has already reported |
 | **The files behind the diff are re-read only where they moved** | a copy is named by the path and the diff standing between HEAD and it; a read-back hands back every copy it already holds under that name, reads the rest several at a time, and leaves the screen alone when it turned nothing up | Added 2026-08-27. Every change used to drop the copies and read them all again — a file read per side, a `git cat-file` per part-staged one, one after another — so staging one file among three hundred cost a pass over the whole repository, and every row offering to read more code, on every file, went off the screen and came back a third of a second later on each `s`. What a copy holds is decided by HEAD and the diff on top of it, so two reads with the same name are the same bytes and the second one is not made; it is what peel already assumes when it drops a reload whose fingerprint has not moved. A file staged whole keeps the copy read off the disk for it, since `git add` puts exactly the disk's content into the index. The copies are left up while the read goes out rather than taken down first, so the file that moved is the only one that can be a moment behind, and it is the file that has just been dealt with |
+| **Which key stages what is a setting** | `peel.stageFile` and `peel.stageHunk`, each naming a key rather than a behaviour; `s` on the hunk and `S` on the file with neither written, and the hunk key twice over for the file | Added 2026-09-04, with hunk staging. Which of the two deserves the unshifted key is not a fact about peel, it is which pass the reviewer is on: a review that goes hunk by hunk wants `s` on the hunk, and one that reads whole files and stages them wants it on the file, and both are peel being used properly. Nothing else in the keymap is a setting — the rest is the same review everywhere, and a keymap that is all preference is a keymap nobody can be told about. Setting one of the two to the key the other has swaps the pair, because there are two keys and two things to stage and there is no other reading of it; writing both to one key is refused, since it says what the other key does nowhere at all. A key the review already binds is refused too: a stage key that quietly took `c` would stage where a note was meant, which is the one mistake in a keymap worth costing a setting over. Read at startup with the moves, and the footer and help screen name the keys the reviewer actually has. The hunk key pressed twice inside 300ms, in the same file, means the file: it reaches what shift reaches without leaving the key the pass is already on, and the window is short enough that reading a hunk between presses can never be one — nobody reads a hunk in a third of a second |
 | **What `o` opens a file with** | git config: `peel.open` for everything, `peel.open.<extension>` to override it for one kind of file, the desktop opener when neither is set | Added 2026-07-31. The desktop opener is the right default and the wrong answer for source: a repository is mostly code, which belongs in the editor, and mostly-not-code — a screenshot, a PDF, a `.md` worth reading rendered — which belongs to whatever the desktop already sends it to. One command for the whole tree cannot be both, so the setting is per extension with a fallback under it. It lives in git config rather than a config file of peel's own because peel has no config file and does not want one: git config is already per-user with a per-repository override, already in the reviewer's dotfiles, and already something peel shells out to. Read on each `o` rather than at startup, so changing it lands in the session already open. Split on spaces, not run through a shell — `open -a Marked` works, `cmd && other` does not, and nothing in a config value reaches a shell |
 | **Agent → index** | **Read-only. No flag, no escape hatch** | Claude Code can already run `git add` directly, so `peel hunks add` adds no capability — only a way for things to enter the index unreviewed |
 | **Comment store** | JSON at `.git/peel/comments.json` for the working tree | Per-repo, survives restarts, invisible to `git status`, readable with no daemon running |
@@ -163,10 +164,10 @@ worth getting right, and the part a future web frontend would reuse.
 
 ## 5. Staging
 
-Staging is whole-file. It was not always: a patch engine that staged selected
-hunks and selected lines was built, passed the corpus below, and was then removed
-on 2026-07-30 — see the granularity decision in §3. What is left is the part that
-was never the risk.
+Staging is whole-file, with one whole hunk beside it. It was not always: a patch
+engine that staged selected hunks *and selected lines* was built, passed the
+corpus below, and was then removed on 2026-07-30 — see the granularity decision
+in §3. What came back on 2026-09-04 is the half of it that was never the risk.
 
 ### The two diffs
 
@@ -192,6 +193,7 @@ nothing to report — which is consistent, since that session cannot stage anywa
 1. move the file's side in the in-memory model, draw it   (the guess)
 2. git add -- <path>              (stage)
    git restore --staged -- <path> (unstage)
+   git apply --cached < patch     (stage one hunk)
 3. re-run git diff / git diff --cached, rebuild state from scratch   (the truth)
 ```
 
@@ -201,11 +203,39 @@ can be drawn before git has been asked — but the guess is never allowed to sta
 what the reviewer ends up looking at came from git, and a write that fails puts
 back the screen it was drawn over. See the optimistic-updates decision in §3.
 
-No patch is generated, so none of the `git apply` hazards apply: no `@@`
-recomputation, no `--unidiff-zero` question, no intent-to-add escalation to make
-an untracked file addressable, no `\ No newline at end of file` marker to carry
-through by hand. `git add` handles a rename half, a binary file, a deletion and
-CRLF because that is its job.
+A hunk is drawn ahead of its write like everything else. Moving one across
+renumbers the hunks under it in *both* of git's diffs — the working tree's loses
+it and is measured from an index that has just changed size, the index's gains it
+moved back by whatever is staged above it — and that is arithmetic rather than a
+question for git, so peel does it and draws the answer. Being wrong there costs a
+redraw and never an index: the patch that is actually applied is built from the
+diff git printed, not from the guess. `FileEntry.WithHunkStaged` is the guess, and
+it is checked against real git for every shape in the corpus below.
+
+### The one patch
+
+Staging a hunk generates a patch. Nothing else does, and it is deliberately the
+smallest patch there is:
+
+| Rule | Why |
+|---|---|
+| **One hunk, never a line selection** | The body goes out as git printed it: nothing demoted to context, nothing dropped, no hunk rebuilt out of line indexes |
+| **Forwards only** | It comes from `git diff`, whose old side *is* the index. Unstaging is whole-file, so nothing is ever applied in reverse |
+| **The new side's start is recomputed** | A header numbers the new side as though the hunks above it had landed, and staging one hunk lands none of them |
+| **Declared counts are checked against the body** | A hunk that disagrees with itself is refused before it reaches git, rather than applied as however many lines git counts |
+| **`\ No newline at end of file` goes through verbatim** | Otherwise the index gets a newline nobody typed |
+| **Untracked files are refused** | `git apply --cached` cannot write a path the index has never heard of, and the `git add -N` that would let it is a change to the index the keypress did not ask for. The file key puts it in whole |
+| **`--unidiff-zero` is not passed** | It turns off git's overlap checks, and is only needed for zero-context patches, which `--unified=3` rules out |
+
+The hunk is named by ID and looked up again, inside the stager, against a diff
+read there and then — never taken from the caller. An ID is line offsets, so
+anything that has touched the file since the screen was drawn leaves it naming a
+hunk that is no longer there, and finding that out is a refusal in words instead
+of `git apply` failing against a file it cannot match.
+
+That read is `git diff -- <path>`, not a status of the whole tree: a keypress
+costs the file the reviewer is in, and the tree is read once behind it by the
+reload every change already ends in.
 
 ### What still has to behave
 
@@ -214,13 +244,14 @@ CRLF because that is its job.
 | **Renames** | Read with `--no-renames`, so a rename is a delete plus an add: two files, staged separately, which reproduces the rename in the index |
 | **Untracked files** | Have no diff. Synthesize one with `git diff --no-index /dev/null <path>` for display only, so the contents are reviewable before the index is touched |
 | **Binary files** | No diff to show. The row says so, and staging works like any other file |
-| **Partial-stage same file** | peel can no longer create it, but git can. One file can be simultaneously staged *and* unstaged, so the file list needs a tri-state indicator (`●` partial), not a checkbox — and `s` on it stages the working-tree half without disturbing the index half. In the diff the two halves are drawn under their own headings, the index's folded away, and a note left on either records which one it was numbered against — see §3 |
+| **Partial-stage same file** | The hunk key creates it, and so can git. One file can be simultaneously staged *and* unstaged, so the file list needs a tri-state indicator (`●` partial), not a checkbox — and the file key on it stages the working-tree half without disturbing the index half. In the diff the two halves are drawn under their own headings, the index's folded away, and a note left on either records which one it was numbered against — see §3 |
 | **Re-read after every write** | Hunk IDs, line offsets and stage state are all invalidated by any change to the tree, including peel's own writes |
 
 ### Hunk IDs
 
-Hunks are read and addressed, never staged: the IDs exist so `peel hunks list`
-is scriptable and so the UI can put the cursor back after a reload.
+Hunks are read, addressed, and staged one at a time: the IDs are how `peel hunks
+list` stays scriptable, how the UI puts the cursor back after a reload, and how a
+keypress names the hunk it is staging.
 
 Format borrowed from `critique` — makes the CLI scriptable:
 
@@ -243,7 +274,9 @@ A fixture repo containing:
 
 All five still have to behave, and `internal/git/stage_test.go` still covers
 them — they are the shapes a working tree actually contains, whatever the staging
-granularity is.
+granularity is. The hunk path is tested against the same repository rather than a
+mock, since a corrupt patch, a rejected apply and a mangled line ending only
+appear when git itself reads what was generated.
 
 ---
 
@@ -361,8 +394,9 @@ Vim-ish, close enough to `hunk` and `lazygit` to not need learning.
 
 There is one cursor and it rests anywhere: file headers, hunk headers, comments
 and every line of a diff body, changed or not. There is no mode to enter first —
-`s` from anywhere inside a file stages that file, and `c` anywhere means a note
-there, including on the untouched code a change breaks. Only the blank between
+`s` from anywhere inside a hunk stages that hunk, `S` from anywhere inside a file
+stages that file, and `c` anywhere means a note there, including on the untouched
+code a change breaks. Only the blank between
 files and the continuation lines of a multi-line comment are skipped.
 
 The file tree on the left is a map, not a pane you move into — but it is on
@@ -460,7 +494,9 @@ that report one; `h`/`l` are the path that always works.
 | `g` / `G` | first / last row |
 | `ctrl+d` / `ctrl+u` | half a page down / up |
 | `space` | fold the file away and move on to the next, or expand it again — on a `▴`/`▾` row, read in twenty more lines of the code the diff left out |
-| `s` | stage the file the cursor is in, folding it away and moving to the next |
+| `s` | stage the hunk the cursor is in, moving to the next one still out of the index |
+| `s` `s` | the hunk key twice over: stage the whole file |
+| `S` | stage the file the cursor is in, folding it away and moving to the next |
 | `u` | unstage that file, opening it again |
 | `a` / `U` | stage everything, folding it all away / unstage everything, opening it all |
 | `o` | open the file the cursor is in, outside peel — with `peel.open.<extension>`, `peel.open`, or the desktop opener |
@@ -493,7 +529,7 @@ land on the note that introduces the next file rather than skipping past it,
 in git's order. Staging keeps the notes; when the code itself moves on under them
 the header says `stale` and `W` writes new ones.
 
-Staging folds and moves on. `s` stages the file the cursor is in, collapses it and
+Staging folds and moves on. `S` stages the file the cursor is in, collapses it and
 puts the cursor on the next file with work still out of the index — so what is
 left to stage is what is left to review, the diff shrinks as the pass goes on, and
 one key both ends a file and starts the next. The window follows only when it has
@@ -514,15 +550,45 @@ that way on purpose. The fold is display only:
 index. A stage that fails leaves the file open and the cursor on it, because it
 still has to be dealt with.
 
+`s` is the same decision at the size the diff is read in, and it ends in the same
+place by a different route: what it stages moves into the file's index half, which
+opens folded, so the press leaves exactly the work still out of the index on
+screen, and the cursor carries on to the next hunk still out of it — the rule `S`
+follows between files, inside one. A file's last unstaged hunk folds the file away
+and moves on exactly as `S` does: there is nothing left in it to review, so there
+is nothing to leave open. From a file's header — where finishing the file above
+leaves the cursor — it takes the change at the top of what that file has left,
+since a key that only worked from inside a hunk would stop the pass at every file
+one press short of the change it was about to make. It is refused where a patch
+cannot be applied rather than half-applied: an untracked file has nothing in the
+index to apply against, a binary file has no hunks at all, and a hunk that has
+moved since the screen was drawn is named by an ID that no longer resolves.
+
+Two presses of it inside 300ms, in the same file, mean the file. It is the same
+index `S` leaves, reached without the shift, and the window is short because a
+pass that reads each hunk before deciding about it never presses twice that fast
+— nobody reads a hunk in a third of a second. The file has to be the same one:
+the cursor moves on by itself once a file is finished, and a press that lands in
+the next file is a first decision about a file nobody has read.
+
+Which key stages which is `peel.stageFile` and `peel.stageHunk`, each naming a key
+rather than a behaviour, because which of them deserves the unshifted key is which
+pass the reviewer is on rather than a fact about peel. Naming one of them the key
+the other has swaps the pair; both on one key is refused, and so is a key the
+review already binds, since a stage key that took `c` would stage where a note was
+meant. Nothing else in the keymap is a setting: the rest is the same review
+everywhere, and the footer and the help screen name the keys the reviewer actually
+has rather than the ones peel ships with.
+
 Where the cursor lands after either key is `peel.afterStage` and `peel.afterFold`,
 one git config setting each: `next-unstaged` is the rule above and the default,
 `next-open` is the next file below still open whatever the index holds, and `stay`
 does not move the cursor at all. The two are set apart because they are not the
-same pass — `s` walks the index down and `space` only walks the diff — and a
+same pass — staging walks the index down and `space` only walks the diff — and a
 session with no index to stage into reads `next-unstaged` as `next-open`, since a
 pull request has every file outside an index it does not have and the fold is the
 only record of the pass there is. Both are read when the review opens rather than
-on the keypress: `s` draws before it asks git anything, and a config read there
+on the keypress: staging draws before it asks git anything, and a config read there
 would be the one thing the press waited for. A value peel cannot read keeps its
 default and names the key in the footer, which costs a line of the screen rather
 than the pass.
@@ -538,7 +604,7 @@ written rather than taking the process down with it in flight.
 
 A hunk header and a diff line are still cursor stops and still addressable — they
 are what `j`/`k` step between and what a comment anchors to. They are just not
-staging units: `s` on either one stages the file around it. A side-by-side row
+staging units: the file key on either one stages the file around it. A side-by-side row
 can hold a removal beside the addition that replaced it; a comment on it lands on
 the new side.
 
@@ -610,11 +676,11 @@ the next those are lines the diff never showed.
 
 | Repo | What to take |
 |---|---|
-| `remorses/critique` | Hunk-ID scheme; and the `git apply --cached` engine, before staging narrowed to whole files |
+| `remorses/critique` | Hunk-ID scheme; and the `git apply --cached` engine, of which one hunk's worth is back |
 | `umputun/revdiff` | Go TUI structure, annotation→stdout contract, Homebrew/deb/rpm packaging |
 | `modem-dev/hunk` | Agent CLI surface; skill file is on disk locally |
 | `nilbuild/diffity` | Comment-resolution UX and tour format |
-| `jesseduffield/lazygit` | Battle-tested line-level staging in Go — the reference if partial staging is ever wanted back |
+| `jesseduffield/lazygit` | Battle-tested line-level staging in Go — the reference if staging below a hunk is ever wanted |
 
 ---
 

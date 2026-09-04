@@ -2,7 +2,9 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/ziadalzarka/peel/internal/app"
@@ -26,9 +28,13 @@ func Run(ctx context.Context, a *app.App, s *app.Session, opts ...Option) error 
 	// waited for. A setting that will not parse is not worth refusing the review
 	// over — the defaults stand and the footer says which key was not read.
 	moves, moveErr := a.Moves(ctx)
-	model := New(ctx, backend, s, comments, append(opts, WithMoves(moves))...)
-	if moveErr != nil {
-		model.err = moveErr
+	// Which key stages a file and which stages a hunk is read here for the same
+	// reason, and against the keys the review binds itself, so a setting can only
+	// move the two keys that are the reviewer's to move.
+	keys, keyErr := a.Keys(ctx, fixedKeys)
+	model := New(ctx, backend, s, comments, append(opts, WithMoves(moves), WithKeys(keys))...)
+	if err := settingsErr(moveErr, keyErr); err != nil {
+		model.err = err
 	}
 	// Mouse reporting is on so the wheel arrives as a wheel event. Without it
 	// the terminal emulates arrow keys instead, which scroll by whatever the
@@ -42,4 +48,22 @@ func Run(ctx context.Context, a *app.App, s *app.Session, opts ...Option) error 
 		return fmt.Errorf("review UI: %w", err)
 	}
 	return nil
+}
+
+// settingsErr is what the footer says when a setting would not read.
+//
+// Both settings are read at once and a reviewer fixing one is in the same file
+// as the other, so both are worth saying — and the footer is a line rather than
+// a screen, so they go onto it joined rather than listed.
+func settingsErr(errs ...error) error {
+	var msgs []string
+	for _, err := range errs {
+		if err != nil {
+			msgs = append(msgs, err.Error())
+		}
+	}
+	if len(msgs) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(msgs, "; "))
 }

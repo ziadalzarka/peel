@@ -31,6 +31,11 @@ type Backend interface {
 	SetResolved(id string, resolved bool) error
 
 	StageFile(ctx context.Context, path string) error
+	// StageHunk stages one hunk of what a file has out of the index. The hunk is
+	// named by ID, which is line offsets, so it is only good against the diff the
+	// screen was drawn from — a hunk that has moved since is refused rather than
+	// guessed at.
+	StageHunk(ctx context.Context, id git.HunkID) error
 	UnstageFile(ctx context.Context, path string) error
 	StageAll(ctx context.Context) error
 	UnstageAll(ctx context.Context) error
@@ -183,6 +188,13 @@ func (b *appBackend) StageFile(ctx context.Context, path string) error {
 		return err
 	}
 	return b.app.Stager.StageFile(ctx, path)
+}
+
+func (b *appBackend) StageHunk(ctx context.Context, id git.HunkID) error {
+	if err := b.stageable(); err != nil {
+		return err
+	}
+	return b.app.Stager.StageHunk(ctx, id)
 }
 
 func (b *appBackend) UnstageFile(ctx context.Context, path string) error {

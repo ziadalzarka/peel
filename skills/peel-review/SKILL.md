@@ -30,10 +30,10 @@ and needs nothing else running.
 peel does not stage from the command line, on purpose. `peel hunks add`,
 `stage`, `unstage` and `rm` all refuse and point here.
 
-Staging is the user's decision, made in the TUI against a file they just read,
-and it is whole-file: peel stages files, never hunks or lines. If you need to
-stage something, use `git add` — say so first, and only when the user asked for
-it.
+Staging is the user's decision, made in the TUI against code they just read: one
+hunk with `s`, the whole file with `S`, and never anything smaller than a hunk.
+If you need to stage something, use `git add` — say so first, and only when the
+user asked for it.
 
 ## Inspect
 
@@ -58,8 +58,8 @@ peel providers
 ```
 
 - A partially staged file appears twice — once with `"staged": true` for what is
-  in the index, once with `false` for what is not. Both are real; the split comes
-  from git, since peel itself only stages whole files.
+  in the index, once with `false` for what is not. Both are real: the user can
+  stage one hunk of a file in the TUI, and so can `git add -p`.
 - `id` is derived from line offsets, so **it changes whenever the tree changes**.
   Re-run `hunks list` after anything touches the index; never reuse an ID from an
   earlier call.
