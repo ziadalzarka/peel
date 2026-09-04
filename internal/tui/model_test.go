@@ -2447,6 +2447,27 @@ func TestScrollingCodeSidewaysStopsAtTheLongestLine(t *testing.T) {
 	}
 }
 
+// TestALongPathScrollsWhereTheCodeDoesNot is the case the offset used to refuse:
+// every line of code fits the pane and only the header runs past it, so a scroll
+// measured against the code alone left the rest of the path unreachable.
+func TestALongPathScrollsWhereTheCodeDoesNot(t *testing.T) {
+	m := newModel(t, newFakeBackend(newSession(t, longPathDiff)), WithSize(60, 20))
+	if m.doc.CodeWidth > m.renderer.CodeColumns(m.layout) {
+		t.Fatalf("the code in this diff overflows the pane, so it is not the header being tested")
+	}
+	if got := m.renderer.Row(m.doc, 0, RowState{}); strings.Contains(got, "handler.go") {
+		t.Fatalf("the whole path fits the pane, so there is nothing to scroll to: %q", got)
+	}
+
+	press(t, m, "$")
+	if m.xoff <= 0 {
+		t.Fatalf("$ left the diff at column %d, want it out at the end of the path", m.xoff)
+	}
+	if got := m.renderer.Row(m.doc, 0, RowState{}); !strings.Contains(got, "handler.go") {
+		t.Errorf("scrolled out to the path's end the header reads %q, want the end of the path in it", got)
+	}
+}
+
 func TestScrollingCodeBackStopsAtTheFirstColumn(t *testing.T) {
 	m := wideModel(t)
 

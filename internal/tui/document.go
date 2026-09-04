@@ -257,6 +257,11 @@ type Document struct {
 	// columns and with tabs already expanded. It bounds how far the diff can be
 	// scrolled sideways, so scrolling right cannot empty the pane.
 	CodeWidth int
+	// HeadWidth is the widest file header the document holds, in screen columns
+	// past the symbols pinned in front of it. It bounds the scroll alongside
+	// CodeWidth, so a path too long for the pane can be read out to its end
+	// even where every line of code under it is short.
+	HeadWidth int
 	// Draft is the comment being written, if one is.
 	Draft Draft
 	// DraftRow is the first row of the editor, and -1 when nothing is being
@@ -306,6 +311,7 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 		}
 	}
 	doc.addOrphans(s, idx, collapsed)
+	doc.measureHeads()
 	return doc
 }
 
@@ -735,6 +741,13 @@ func (d *Document) addExpand(fi int, g gaps, i, hunks int, where func(int, int) 
 func (d *Document) measure(lines []git.Line) {
 	for _, l := range lines {
 		d.CodeWidth = max(d.CodeWidth, ansi.StringWidth(expandTabs(l.Text)))
+	}
+}
+
+// measureHeads widens HeadWidth to hold the longest file header.
+func (d *Document) measureHeads() {
+	for _, f := range d.Files {
+		d.HeadWidth = max(d.HeadWidth, fileHeadWidth(f))
 	}
 }
 

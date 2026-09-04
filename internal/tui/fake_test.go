@@ -124,6 +124,19 @@ var longLineDiff = "diff --git a/wide.go b/wide.go\n" +
 	"-var short = 1\n" +
 	"+" + wideLine + "\n"
 
+// longPath is deeper than any pane the tests open, so reading the end of it
+// means scrolling sideways.
+var longPath = "internal/" + strings.Repeat("nested/", 8) + "handler.go"
+
+// longPathDiff is a one-line change to a file whose path is far too long for the
+// pane, so the header is the only thing in it with anything to scroll to.
+var longPathDiff = "diff --git a/" + longPath + " b/" + longPath + "\n" +
+	"index 1111111..2222222 100644\n--- a/" + longPath + "\n+++ b/" + longPath + "\n" +
+	"@@ -1,2 +1,2 @@\n" +
+	" package nested\n" +
+	"-var n = 1\n" +
+	"+var n = 2\n"
+
 // parseFiles turns a diff into file entries on the working-tree side.
 func parseFiles(t *testing.T, diff string) []git.FileEntry {
 	t.Helper()

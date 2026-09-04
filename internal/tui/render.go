@@ -79,6 +79,16 @@ func (r *Renderer) SetOffset(off int) {
 	r.xoff = max(off, 0)
 }
 
+// fileHeadIndent is what every file header spends before its path: the indent
+// the state symbol stands in, and the fold arrow with a space on each side.
+const fileHeadIndent = 6
+
+// FileColumns is how much of a file header fits on screen, after the state
+// symbol and the fold arrow have taken their columns.
+func (r *Renderer) FileColumns() int {
+	return max(r.width-fileHeadIndent, 1)
+}
+
 // CodeColumns is how much of a line of code fits on screen, after the gutter and
 // the origin character have taken their columns. It is what an offset is
 // measured against, so scrolling right cannot run past the longest line.
@@ -157,13 +167,18 @@ func (r *Renderer) file(d Document, row Row, st RowState) string {
 		summary = r.theme.Dim.Render(orphanLabel)
 	}
 
-	return r.fit(strings.Join([]string{
-		" ",
-		r.stateSymbol(entry.State()),
-		r.theme.Dim.Render(arrow),
-		name,
-		summary,
-	}, " "))
+	head := "  " + r.stateSymbol(entry.State()) + " " + r.theme.Dim.Render(arrow) + " "
+	return r.fit(head + shift(name+" "+summary, r.headOffset(f)))
+}
+
+// headOffset is how far a file header slides for the offset the diff is at.
+//
+// A header goes no further than its own end, so scrolling out along a long line
+// of code does not carry the path off the screen with it: a name that fits sits
+// still through the whole scroll, and a name too long for the pane slides only
+// as far as it takes to read the rest of it.
+func (r *Renderer) headOffset(f FileRef) int {
+	return min(max(r.xoff, 0), max(fileHeadWidth(f)-r.FileColumns(), 0))
 }
 
 // fileSummary counts what changed, split in two when the file is in both places
@@ -174,15 +189,40 @@ func (r *Renderer) file(d Document, row Row, st RowState) string {
 // new reads as one change of 51 lines, and the reviewer has no way to tell that
 // only four of them are theirs to look at.
 func (r *Renderer) fileSummary(e git.FileEntry, added, removed int) string {
+	parts := fileSummaryParts(e, added, removed)
+	if len(parts) == 1 {
+		return r.theme.Dim.Render(parts[0])
+	}
+	return r.theme.Dim.Render(parts[0]) +
+		"  " + r.theme.Staged.Render(parts[1]) +
+		"  " + r.theme.Partial.Render(parts[2])
+}
+
+// fileSummaryParts is the summary as plain text, so the width of a header can be
+// measured without a theme to render it through.
+func fileSummaryParts(e git.FileEntry, added, removed int) []string {
 	label := fileLabel(e)
 	if e.State() != git.StatePartial {
-		return r.theme.Dim.Render(fmt.Sprintf("%s +%d -%d", label, added, removed))
+		return []string{fmt.Sprintf("%s +%d -%d", label, added, removed)}
 	}
 	staged, stagedGone := e.Staged.Stats()
 	work, workGone := e.Unstaged.Stats()
-	return r.theme.Dim.Render(label) +
-		"  " + r.theme.Staged.Render(fmt.Sprintf("index +%d -%d", staged, stagedGone)) +
-		"  " + r.theme.Partial.Render(fmt.Sprintf("worktree +%d -%d", work, workGone))
+	return []string{
+		label,
+		fmt.Sprintf("index +%d -%d", staged, stagedGone),
+		fmt.Sprintf("worktree +%d -%d", work, workGone),
+	}
+}
+
+// fileHeadWidth is how wide a file header is past the columns pinned in front of
+// it, in screen columns.
+func fileHeadWidth(f FileRef) int {
+	summary := orphanLabel
+	if !f.Orphan {
+		added, removed := f.Entry.Stats()
+		summary = strings.Join(fileSummaryParts(f.Entry, added, removed), "  ")
+	}
+	return ansi.StringWidth(f.Entry.Path) + 1 + ansi.StringWidth(summary)
 }
 
 // side heads one half of a part-staged file.

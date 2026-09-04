@@ -485,6 +485,42 @@ func TestRenderScrolledCodeSlidesUnderAPinnedGutter(t *testing.T) {
 	}
 }
 
+func TestRenderAScrolledFileHeaderSlidesUnderAPinnedSymbol(t *testing.T) {
+	doc := Build(newSession(t, longPathDiff), nil, nil, LayoutUnified)
+	r := plainRenderer(60)
+
+	at0 := r.Row(doc, 0, RowState{})
+	if !strings.Contains(at0, longPath[:20]) {
+		t.Fatalf("row 0 is not the file header: %q", at0)
+	}
+	r.SetOffset(20)
+
+	got := r.Row(doc, 0, RowState{})
+	if want := at0[:fileHeadIndent]; !strings.HasPrefix(got, want) {
+		t.Errorf("scrolled header starts %q, want the symbol and arrow left where they were: %q",
+			got[:fileHeadIndent], want)
+	}
+	if strings.Contains(got, longPath[:20]) {
+		t.Errorf("scrolled header still shows the columns scrolled past: %q", got)
+	}
+	if !strings.Contains(got, longPath[20:40]) {
+		t.Errorf("scrolled header does not show the path scrolled to: %q", got)
+	}
+}
+
+// TestRenderAFileHeaderStopsAtItsOwnEnd keeps the path on screen through a scroll
+// that is not about it: a header slides only as far as it has to, so reading out
+// along a long line of code does not take the name of the file with it.
+func TestRenderAFileHeaderStopsAtItsOwnEnd(t *testing.T) {
+	doc := Build(newSession(t, longLineDiff), nil, nil, LayoutUnified)
+	r := plainRenderer(60)
+
+	r.SetOffset(80)
+	if got := r.Row(doc, 0, RowState{}); !strings.Contains(got, "wide.go") {
+		t.Errorf("scrolling the code out left the header as %q, want it still naming wide.go", got)
+	}
+}
+
 func TestRenderScrolledCodeSlidesBothSidesOfASplitRow(t *testing.T) {
 	doc := Build(newSession(t, longLineDiff), nil, nil, LayoutSplit)
 	r := plainRenderer(80)

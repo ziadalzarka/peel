@@ -1197,6 +1197,20 @@ func TestDocumentMeasuresTheWidestLineWithTabsExpanded(t *testing.T) {
 	}
 }
 
+func TestDocumentMeasuresTheWidestFileHeader(t *testing.T) {
+	doc := Build(newSession(t, longPathDiff), nil, nil, LayoutUnified)
+	if want := ansi.StringWidth(longPath + " modified +1 -1"); doc.HeadWidth != want {
+		t.Errorf("HeadWidth = %d, want %d", doc.HeadWidth, want)
+	}
+
+	// The counts are part of the header, so a header is only read to its end
+	// once they are on screen too.
+	if doc.HeadWidth <= ansi.StringWidth(longPath) {
+		t.Errorf("HeadWidth = %d, want more than the %d columns the path alone takes",
+			doc.HeadWidth, ansi.StringWidth(longPath))
+	}
+}
+
 // A note outlives the change it was written on when the file is committed, put
 // back, or stashed: the session stops holding it, and before this the note was
 // drawn nowhere while the store, `C` and the code host all still had it. It is

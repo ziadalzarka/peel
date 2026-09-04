@@ -2469,10 +2469,15 @@ func (m *Model) clampCode() {
 	m.renderer.SetOffset(m.xoff)
 }
 
-// maxCodeOffset stops the code sliding past its own longest line, so scrolling
-// right can never leave the pane blank with nothing to scroll back to.
+// maxCodeOffset stops the diff sliding past the longest thing it has to read,
+// so scrolling right can never leave the pane blank with nothing to scroll back
+// to. A file header counts as well as a line of code: a path too long for the
+// pane is as unreadable as a line is, and a diff of long paths over short lines
+// would otherwise refuse to scroll at all.
 func (m *Model) maxCodeOffset() int {
-	return max(0, m.doc.CodeWidth-m.renderer.CodeColumns(m.layout))
+	code := m.doc.CodeWidth - m.renderer.CodeColumns(m.layout)
+	head := m.doc.HeadWidth - m.renderer.FileColumns()
+	return max(0, max(code, head))
 }
 
 // markedFile is the file the pane marks: the one the diff window opens on, so
