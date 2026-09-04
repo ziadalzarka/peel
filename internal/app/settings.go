@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"slices"
 	"strings"
 )
 
@@ -113,128 +112,88 @@ func (a *App) Moves(ctx context.Context) (Moves, error) {
 	return moves, nil
 }
 
-// Keys is which key stages the file the cursor is in and which stages the one
-// hunk it is in.
+// StageMode is what `s` takes: the whole file the cursor is in, or the one hunk
+// it is in.
 //
-// They are one setting rather than two independent ones because they are the
-// same decision at two sizes, and which of them deserves the unshifted key
-// depends on the pass: a review that goes hunk by hunk wants `s` on the hunk, and
-// one that reads whole files and stages them wants it on the file. Nothing else
-// peel binds is a setting — the rest of the keymap is not a preference, it is the
-// same review everywhere.
-type Keys struct {
-	StageFile string
-	StageHunk string
-}
+// It is a mode rather than a key each because it is one decision about the pass
+// rather than a decision about each file — a review that reads whole files
+// stages whole files, and a review that goes hunk by hunk goes hunk by hunk, and
+// either way the key under the finger is the same one. `S` switches it where a
+// file wants the other size, so a pass does not have to be declared in advance,
+// and the mode a review opens in is `peel.stageMode` for the reviewer who is
+// always on one of them. Nothing else peel binds is a setting — the rest of the
+// keymap is not a preference, it is the same review everywhere.
+type StageMode string
 
-// StageFileKey and StageHunkKey are the git config settings behind them, each
-// naming a key rather than a behaviour. Git stores the last component of a key
-// lower-cased, so `peel.stageFile` is what is written and this is what comes
-// back.
 const (
-	StageFileKey = ConfigSection + ".stagefile"
-	StageHunkKey = ConfigSection + ".stagehunk"
+	// StageModeFile is `s` on the whole file the cursor is in: `git add`, one path
+	// at a time. It is the size the diff is dealt with in more often than not, so
+	// it is what a review opens on.
+	StageModeFile StageMode = "file"
+	// StageModeHunk is `s` on the one hunk the cursor is in, leaving the rest of
+	// the file out of the index — the file that holds a change you are finished
+	// with and one you are not. Pressing it twice over takes the whole file.
+	StageModeHunk StageMode = "hunk"
 )
 
-// DefaultKeys is what peel does with neither setting written: `s` on the hunk,
-// which is the size a diff is read in and the smaller of the two decisions, and
-// the same key shifted on the file around it. Pressing the unshifted key twice
-// reaches the file as well, so the shift is a convenience rather than the only
-// way there.
-func DefaultKeys() Keys { return Keys{StageFile: "S", StageHunk: "s"} }
+// StageModeKey is the git config setting behind it. Git stores the last
+// component of a key lower-cased, so `peel.stageMode` is what is written and
+// this is what comes back.
+const StageModeKey = ConfigSection + ".stagemode"
 
-// OrDefault fills in whichever of the two was left unset, so a caller holding
-// half a setting does not get a key that stages nothing.
-func (k Keys) OrDefault() Keys {
-	d := DefaultKeys()
-	if k.StageFile == "" {
-		k.StageFile = d.StageFile
+// DefaultStageMode is what `s` takes with nothing written.
+func DefaultStageMode() StageMode { return StageModeFile }
+
+// Other is the mode `S` switches to. There are two of them, so a switch has only
+// one place to go.
+func (m StageMode) Other() StageMode {
+	if m == StageModeHunk {
+		return StageModeFile
 	}
-	if k.StageHunk == "" {
-		k.StageHunk = d.StageHunk
-	}
-	return k
+	return StageModeHunk
 }
 
-// ParseKey reads one key setting's value.
-//
-// A key is written the way peel writes its own: the character it is, or a name
-// with the modifier in front of it. taken is the keys the review already binds,
-// which a setting cannot have — a stage key that quietly took `c` would leave a
-// reviewer pressing it for a note and staging instead.
-func ParseKey(s string, taken []string) (string, error) {
-	key := strings.TrimSpace(s)
-	if key == "" {
-		return "", fmt.Errorf("no key")
+// OrDefault fills in a mode left unset, so a caller holding nothing does not get
+// a key that stages nothing.
+func (m StageMode) OrDefault() StageMode {
+	if m == "" {
+		return DefaultStageMode()
 	}
-	if strings.ContainsAny(key, " \t") {
-		return "", fmt.Errorf("%q is more than one key", s)
-	}
-	// A terminal has no way to say shift and a letter: it sends the capital. A
-	// setting written the other way would never fire and never say why.
-	if mod, rest, ok := strings.Cut(key, "+"); ok &&
-		strings.EqualFold(mod, "shift") && len([]rune(rest)) == 1 && strings.ToLower(rest) != strings.ToUpper(rest) {
-		return "", fmt.Errorf("%q arrives as the capital — write %q", s, strings.ToUpper(rest))
-	}
-	if slices.Contains(taken, key) {
-		return "", fmt.Errorf("%q is already bound to something else", key)
-	}
-	return key, nil
+	return m
 }
 
-// Keys reads both settings from git config, most specific file last, the way
-// every other peel setting is read. taken is the keys the review binds itself,
-// which neither setting may take over.
+// stageModeValues names what the setting takes, for the error a typo gets.
+const stageModeValues = `"file" or "hunk"`
+
+// ParseStageMode reads the setting's value.
+func ParseStageMode(s string) (StageMode, error) {
+	switch mode := StageMode(strings.ToLower(strings.TrimSpace(s))); mode {
+	case StageModeFile, StageModeHunk:
+		return mode, nil
+	}
+	return "", fmt.Errorf("%q is not %s", s, stageModeValues)
+}
+
+// StageMode reads the setting from git config, most specific file last, the way
+// every other peel setting is read.
 //
-// Setting one of them to the other's default swaps the pair: there are two keys
-// and two things to stage, so `peel.stageFile s` has only one reading, and
-// making the reviewer write both halves of a swap to get it would be asking them
-// to say the same thing twice. Writing both to the same key is a different
-// thing — it says what the other key does nowhere at all — so it is refused and
-// both defaults stand.
-func (a *App) Keys(ctx context.Context, taken []string) (Keys, error) {
-	keys := DefaultKeys()
+// A value peel does not understand is worth saying and not worth refusing a
+// review over: the mode stays the default, the reviewer is told which setting was
+// not read, and the pass goes on. It is read once at startup with the moves,
+// since staging draws before it asks git anything and a config read on the
+// keypress would be the one thing it waited for.
+func (a *App) StageMode(ctx context.Context) (StageMode, error) {
 	cfg, err := a.Repo.ConfigSection(ctx, ConfigSection)
 	if err != nil {
-		return keys, err
+		return DefaultStageMode(), err
 	}
-
-	var bad []string
-	set := map[string]string{}
-	for _, key := range []string{StageFileKey, StageHunkKey} {
-		raw := strings.TrimSpace(cfg[key])
-		if raw == "" {
-			continue
-		}
-		parsed, err := ParseKey(raw, taken)
-		if err != nil {
-			bad = append(bad, fmt.Sprintf("%s: %v", key, err))
-			continue
-		}
-		set[key] = parsed
+	raw := strings.TrimSpace(cfg[StageModeKey])
+	if raw == "" {
+		return DefaultStageMode(), nil
 	}
-
-	if file, hunk := set[StageFileKey], set[StageHunkKey]; file != "" && file == hunk {
-		bad = append(bad, fmt.Sprintf("%s and %s are both %q", StageFileKey, StageHunkKey, file))
-		set = map[string]string{}
+	mode, err := ParseStageMode(raw)
+	if err != nil {
+		return DefaultStageMode(), fmt.Errorf("%s: %v", StageModeKey, err)
 	}
-
-	if file, ok := set[StageFileKey]; ok {
-		keys.StageFile = file
-	}
-	if hunk, ok := set[StageHunkKey]; ok {
-		keys.StageHunk = hunk
-	}
-	if keys.StageFile == keys.StageHunk {
-		if _, ok := set[StageFileKey]; ok {
-			keys.StageHunk = DefaultKeys().StageFile
-		} else {
-			keys.StageFile = DefaultKeys().StageHunk
-		}
-	}
-
-	if len(bad) > 0 {
-		return keys, fmt.Errorf("%s", strings.Join(bad, "; "))
-	}
-	return keys, nil
+	return mode, nil
 }

@@ -823,7 +823,7 @@ func TestStagingLeavesTheRestOfTheDiffAloneWhileItIsReadBack(t *testing.T) {
 
 	// The read-back is held here, on the frame the reviewer sees between the
 	// write landing and the files being read again.
-	_, cmd := m.Update(keyMsg("S"))
+	_, cmd := m.Update(keyMsg("s"))
 	loaded, ok := cmd().(loadedMsg)
 	if !ok {
 		t.Fatalf("staging produced %T, want the read-back", cmd())

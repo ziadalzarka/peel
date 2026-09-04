@@ -942,131 +942,73 @@ func TestMovesAreReadOutOfRealGitConfig(t *testing.T) {
 	}
 }
 
-// openFixture is an App whose git config the test writes, and whose opener is
-// recorded rather than run.
-// With nothing written, the file is on `s` — the pass peel is built around —
-// and the hunk inside it is on the same key shifted.
-func TestStageKeysDefaultToTheFileOnTheUnshiftedKey(t *testing.T) {
+// With nothing written, `s` takes the whole file — the size a diff is dealt with
+// in more often than not.
+func TestStagingOpensOnTheWholeFile(t *testing.T) {
 	a, _ := openFixture(t, nil)
 
-	keys, err := a.Keys(context.Background(), nil)
+	mode, err := a.StageMode(context.Background())
 	if err != nil {
-		t.Fatalf("Keys: %v", err)
+		t.Fatalf("StageMode: %v", err)
 	}
-	if want := app.DefaultKeys(); keys != want {
-		t.Errorf("Keys = %+v, want %+v", keys, want)
-	}
-}
-
-// A review that reads whole files wants the unshifted key on the file. Saying so
-// once is enough: there are two keys and two things to stage, so moving one onto
-// the other's key says where the other went.
-func TestSettingOneStageKeyToTheOthersSwapsThem(t *testing.T) {
-	for _, tt := range []struct{ name, key, value string }{
-		{"the file moved onto the hunk's key", app.StageFileKey, "s"},
-		{"the hunk moved onto the file's key", app.StageHunkKey, "S"},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			a, _ := openFixture(t, map[string]string{tt.key: tt.value})
-
-			keys, err := a.Keys(context.Background(), nil)
-			if err != nil {
-				t.Fatalf("Keys: %v", err)
-			}
-			if want := (app.Keys{StageFile: "s", StageHunk: "S"}); keys != want {
-				t.Errorf("Keys = %+v, want %+v", keys, want)
-			}
-		})
+	if want := app.StageModeFile; mode != want {
+		t.Errorf("StageMode = %q, want %q", mode, want)
 	}
 }
 
-// Either key can go anywhere, which is the point of it being a key rather than a
-// choice between two arrangements.
-func TestStageKeysCanBeMovedAnywhere(t *testing.T) {
-	a, _ := openFixture(t, map[string]string{
-		app.StageFileKey: "ctrl+s",
-		app.StageHunkKey: "H",
-	})
+// A review that goes hunk by hunk says so once instead of pressing `S` every
+// time it opens.
+func TestTheReviewCanOpenOnTheHunk(t *testing.T) {
+	a, _ := openFixture(t, map[string]string{app.StageModeKey: "hunk"})
 
-	keys, err := a.Keys(context.Background(), nil)
+	mode, err := a.StageMode(context.Background())
 	if err != nil {
-		t.Fatalf("Keys: %v", err)
+		t.Fatalf("StageMode: %v", err)
 	}
-	if want := (app.Keys{StageFile: "ctrl+s", StageHunk: "H"}); keys != want {
-		t.Errorf("Keys = %+v, want %+v", keys, want)
-	}
-}
-
-// One key cannot do both: which of the two it did would be peel's guess, and the
-// other would be bound to nothing at all.
-func TestBothStageKeysOnOneKeyIsRefused(t *testing.T) {
-	a, _ := openFixture(t, map[string]string{
-		app.StageFileKey: "S",
-		app.StageHunkKey: "S",
-	})
-
-	keys, err := a.Keys(context.Background(), nil)
-	if err == nil {
-		t.Fatal("Keys accepted one key for both")
-	}
-	if want := app.DefaultKeys(); keys != want {
-		t.Errorf("Keys = %+v, want both defaults kept at %+v", keys, want)
+	if want := app.StageModeHunk; mode != want {
+		t.Errorf("StageMode = %q, want %q", mode, want)
 	}
 }
 
-// A stage key that took a key the review already binds would stage where the
-// reviewer expected the other thing — the one mistake in a keymap worth refusing.
-func TestAStageKeyCannotTakeAKeyTheReviewBinds(t *testing.T) {
-	a, _ := openFixture(t, map[string]string{app.StageHunkKey: "c"})
+// A typo is worth saying and not worth refusing a review over: the mode stays
+// the one peel ships with, and the footer names the setting that would not read.
+func TestAStageModeThatWillNotReadKeepsTheDefault(t *testing.T) {
+	a, _ := openFixture(t, map[string]string{app.StageModeKey: "hunks"})
 
-	keys, err := a.Keys(context.Background(), []string{"c", "u", "o"})
+	mode, err := a.StageMode(context.Background())
 	if err == nil {
-		t.Fatal("Keys accepted a key that is already bound")
+		t.Fatal("StageMode accepted a value it does not know")
 	}
-	if !strings.Contains(err.Error(), app.StageHunkKey) {
+	if !strings.Contains(err.Error(), app.StageModeKey) {
 		t.Errorf("error = %q, want it to name the setting that was not read", err)
 	}
-	if keys.StageHunk != app.DefaultKeys().StageHunk {
-		t.Errorf("StageHunk = %q, want the default kept", keys.StageHunk)
+	if want := app.DefaultStageMode(); mode != want {
+		t.Errorf("StageMode = %q, want the default kept at %q", mode, want)
 	}
 }
 
-// A terminal has no way to send shift and a letter — it sends the capital — so a
-// setting written that way would never fire, and never say why.
-func TestShiftAndALetterIsRefusedForTheCapital(t *testing.T) {
-	a, _ := openFixture(t, map[string]string{app.StageHunkKey: "shift+s"})
-
-	keys, err := a.Keys(context.Background(), nil)
-	if err == nil {
-		t.Fatal("Keys accepted shift and a letter")
-	}
-	if !strings.Contains(err.Error(), `"S"`) {
-		t.Errorf("error = %q, want it to say which key to write instead", err)
-	}
-	if keys != app.DefaultKeys() {
-		t.Errorf("Keys = %+v, want the defaults kept", keys)
-	}
-}
-
-// Against real git, since the setting rests on how git stores a key: the last
-// component comes back lower-cased whatever case it was written in.
-func TestStageKeysAreReadOutOfRealGitConfig(t *testing.T) {
+// Against real git, since the setting rests on how git stores it: the last
+// component of the key comes back lower-cased whatever case it was written in,
+// and so does a value written with a capital.
+func TestTheStageModeIsReadOutOfRealGitConfig(t *testing.T) {
 	repo := gittest.New(t)
-	repo.Git("config", "peel.stageHunk", "S")
+	repo.Git("config", "peel.stageMode", "Hunk")
 
 	a, err := app.Open(context.Background(), repo.Dir)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
-	keys, err := a.Keys(context.Background(), nil)
+	mode, err := a.StageMode(context.Background())
 	if err != nil {
-		t.Fatalf("Keys: %v", err)
+		t.Fatalf("StageMode: %v", err)
 	}
-	if want := (app.Keys{StageFile: "s", StageHunk: "S"}); keys != want {
-		t.Errorf("Keys = %+v, want %+v", keys, want)
+	if want := app.StageModeHunk; mode != want {
+		t.Errorf("StageMode = %q, want %q", mode, want)
 	}
 }
 
+// openFixture is an App whose git config the test writes, and whose opener is
+// recorded rather than run.
 func openFixture(t *testing.T, config map[string]string) (*app.App, *exec.FakeRunner) {
 	t.Helper()
 	repo := gittest.New(t)

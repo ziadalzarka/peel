@@ -30,8 +30,9 @@ and needs nothing else running.
 peel does not stage from the command line, on purpose. `peel hunks add`,
 `stage`, `unstage` and `rm` all refuse and point here.
 
-Staging is the user's decision, made in the TUI against code they just read: one
-hunk with `s`, the whole file with `S`, and never anything smaller than a hunk.
+Staging is the user's decision, made in the TUI against code they just read: the
+whole file with `s`, one hunk with `s` after `S` switches it, and never anything
+smaller than a hunk.
 If you need to stage something, use `git add` — say so first, and only when the
 user asked for it.
 

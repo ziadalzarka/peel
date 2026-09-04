@@ -10,7 +10,7 @@ import (
 	"github.com/ziadalzarka/peel/internal/gittest"
 )
 
-// twoHunkFile is one file changed in two places — the file the hunk key exists
+// twoHunkFile is one file changed in two places — the file the hunk mode exists
 // for, where one change is finished and the other is still being thought about.
 const twoHunkFile = `diff --git a/list.txt b/list.txt
 index 1111111..2222222 100644
@@ -30,6 +30,42 @@ index 1111111..2222222 100644
 +TEN
  eleven
 `
+
+// threeHunkFile is one file changed in three places, so a press can take a hunk
+// and still leave more than one behind — which two hunks cannot, since staging
+// one of two is staging the file.
+const threeHunkFile = twoHunkFile + `@@ -20,3 +20,3 @@
+ twenty
+-twentyone
++TWENTYONE
+ twentytwo
+`
+
+// twoHunkFiles is two files changed in more than one place each, for the presses
+// that finish with one file and carry on into the next.
+const twoHunkFiles = threeHunkFile + `diff --git a/notes.md b/notes.md
+index 3333333..4444444 100644
+--- a/notes.md
++++ b/notes.md
+@@ -1,4 +1,4 @@
+ alpha
+-beta
++BETA
+ gamma
+ delta
+@@ -10,3 +10,3 @@
+ kappa
+-lambda
++LAMBDA
+ mu
+`
+
+// hunkModel is a model in the mode these tests are about: `s` on the hunk, which
+// is where `S` puts a review that opened on the file.
+func hunkModel(t *testing.T, backend *fakeBackend, opts ...Option) *Model {
+	t.Helper()
+	return newModel(t, backend, append(opts, WithStageMode(app.StageModeHunk))...)
+}
 
 // atHunk puts the cursor on the header of the nth hunk on screen, which is where
 // a reviewer deciding about a hunk has just read down to.
@@ -61,7 +97,7 @@ func TestStagingAHunkWritesThatHunkAloneToTheIndex(t *testing.T) {
 	repo.Commit("base")
 	repo.Write("list.txt", after)
 
-	m := realModel(t, repo)
+	m := realModel(t, repo, WithStageMode(app.StageModeHunk))
 	atHunk(t, m, 1)
 	press(t, m, "s")
 
@@ -95,7 +131,7 @@ func TestStagingAHunkWritesThatHunkAloneToTheIndex(t *testing.T) {
 // question for git.
 func TestAStagedHunkIsOffTheScreenBeforeGitIsAsked(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoHunkFile))
-	m := newModel(t, backend)
+	m := hunkModel(t, backend)
 
 	atHunk(t, m, 0)
 	staged := m.doc.Hunks[0].ID
@@ -118,11 +154,11 @@ func TestAStagedHunkIsOffTheScreenBeforeGitIsAsked(t *testing.T) {
 }
 
 // The hunk it was on has gone into the index, so the cursor carries on to the
-// next one still out of it — the rule the file key follows between files, inside
+// next one still out of it — the rule the file mode follows between files, inside
 // one.
 func TestTheCursorCarriesOnToTheNextHunkOutOfTheIndex(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoHunkFile))
-	m := newModel(t, backend)
+	m := hunkModel(t, backend)
 
 	atHunk(t, m, 0)
 	next := m.doc.Hunks[1].ID
@@ -138,10 +174,10 @@ func TestTheCursorCarriesOnToTheNextHunkOutOfTheIndex(t *testing.T) {
 }
 
 // The keypress names the hunk the cursor is in and nothing else: the file it
-// belongs to is the other key.
+// belongs to is the other mode.
 func TestStagingAHunkAsksGitForThatHunkOnly(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoHunkFile))
-	m := newModel(t, backend)
+	m := hunkModel(t, backend)
 
 	atHunk(t, m, 1)
 	want := m.doc.Hunks[1].ID
@@ -162,7 +198,7 @@ func TestStagingAHunkAsksGitForThatHunkOnly(t *testing.T) {
 // usually on the line the decision was made about, not on the header.
 func TestStagingAHunkFromOneOfItsLines(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoHunkFile))
-	m := newModel(t, backend)
+	m := hunkModel(t, backend)
 
 	m.moveTo(lineRowOf(t, m, 1, 0))
 	want := m.doc.Hunks[1].ID
@@ -173,24 +209,29 @@ func TestStagingAHunkFromOneOfItsLines(t *testing.T) {
 	}
 }
 
-// A file with one hunk left is finished by staging it, so the press ends it the
-// way the file key does — folded away, and the cursor on the next file with work
+// A file whose work is one hunk is the same decision at either size, so it goes
+// in as the file: `git add` rather than a patch, which is what a deletion, a mode
+// change and a file with no newline at its end all need. The press ends the way
+// the file mode ends — folded away, and the cursor on the next file with work
 // still out of the index.
-func TestStagingTheLastHunkFinishesTheFile(t *testing.T) {
+func TestAFileWhoseWorkIsOneHunkGoesInAsTheFile(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	staged := parseFiles(t, twoFileDiff)
 	staged[0].Staged, staged[0].Unstaged = staged[0].Unstaged, nil
 	backend.nextSession = sessionOf(staged)
-	m := newModel(t, backend)
+	m := hunkModel(t, backend)
 
 	atHunk(t, m, 0)
 	press(t, m, "s")
 
-	if len(backend.stagedHunks) != 1 {
-		t.Fatalf("StageHunk calls = %v, want the one hunk", backend.stagedHunks)
+	if len(backend.stagedHunks) != 0 {
+		t.Fatalf("a patch was applied for a file's only hunk: %v", backend.stagedHunks)
+	}
+	if got := backend.stagedFiles; len(got) != 1 || got[0] != "alpha.go" {
+		t.Fatalf("StageFile calls = %v, want the whole file", got)
 	}
 	if !m.doc.Files[0].Collapsed {
-		t.Error("the file its last hunk finished did not fold away")
+		t.Error("the file its only hunk finished did not fold away")
 	}
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
 		t.Errorf("the cursor is on %q, want it moved on to beta.txt", got)
@@ -198,10 +239,10 @@ func TestStagingTheLastHunkFinishesTheFile(t *testing.T) {
 }
 
 // Two presses that fast are one decision about the whole file, and they leave
-// the same index the file key would.
-func TestPressingTheHunkKeyTwiceStagesTheFile(t *testing.T) {
-	backend := newFakeBackend(newSession(t, twoHunkFile))
-	m := newModel(t, backend)
+// the same index the file mode would.
+func TestPressingTheKeyTwiceStagesTheFile(t *testing.T) {
+	backend := newFakeBackend(newSession(t, threeHunkFile))
+	m := hunkModel(t, backend)
 	frozen(m)
 
 	atHunk(t, m, 0)
@@ -221,8 +262,8 @@ func TestPressingTheHunkKeyTwiceStagesTheFile(t *testing.T) {
 // Far enough apart and it is two decisions about two hunks — a pass down a file
 // reading each one is not a double press, however fast the reviewer is.
 func TestTwoPressesApartStageTwoHunks(t *testing.T) {
-	backend := newFakeBackend(newSession(t, twoHunkFile))
-	m := newModel(t, backend)
+	backend := newFakeBackend(newSession(t, threeHunkFile))
+	m := hunkModel(t, backend)
 	at := frozen(m)
 
 	atHunk(t, m, 0)
@@ -242,12 +283,14 @@ func TestTwoPressesApartStageTwoHunks(t *testing.T) {
 // fast can land in a file nobody has read yet — which is a first decision about
 // that file, not a second about the last one.
 func TestADoublePressDoesNotCarryIntoTheNextFile(t *testing.T) {
-	backend := newFakeBackend(newSession(t, twoFileDiff))
-	m := newModel(t, backend)
+	backend := newFakeBackend(newSession(t, twoHunkFiles))
+	m := hunkModel(t, backend)
 	frozen(m)
 
 	atHunk(t, m, 0)
-	press(t, m, "s", "s")
+	press(t, m, "s")
+	atHunk(t, m, 3)
+	press(t, m, "s")
 
 	if len(backend.stagedFiles) != 0 {
 		t.Fatalf("StageFile calls = %v, want the press in the next file to take its hunk", backend.stagedFiles)
@@ -257,37 +300,59 @@ func TestADoublePressDoesNotCarryIntoTheNextFile(t *testing.T) {
 	}
 }
 
-// Which key stages which is the reviewer's, for the pass that reads whole files
-// rather than hunk by hunk.
-func TestTheStageKeysCanBeSwapped(t *testing.T) {
+// A review opens on the file — the size a diff is dealt with in more often than
+// not — and `S` moves `s` onto the hunk for the file that wants it.
+func TestSwitchingTheModePutsTheHunkUnderTheSameKey(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoHunkFile))
-	m := newModel(t, backend, WithKeys(app.Keys{StageFile: "s", StageHunk: "S"}))
+	m := newModel(t, backend)
 
 	atHunk(t, m, 1)
 	want := m.doc.Hunks[1].ID
-	press(t, m, "S")
-	if got := backend.stagedHunks; len(got) != 1 || got[0] != want {
-		t.Fatalf("S staged %v, want the hunk %v", got, want)
-	}
+	press(t, m, "S", "s")
 
-	press(t, m, "s")
-	if got := backend.stagedFiles; len(got) != 1 || got[0] != "list.txt" {
-		t.Fatalf("s staged %v, want the file", got)
+	if got := backend.stagedHunks; len(got) != 1 || got[0] != want {
+		t.Fatalf("StageHunk calls = %v, want the hunk %v", got, want)
+	}
+	if len(backend.stagedFiles) != 0 {
+		t.Errorf("the file went in too: %v", backend.stagedFiles)
 	}
 }
 
-// The keys the footer and the help screen name are the keys that are bound, or
-// they are a list of things that do not happen.
-func TestTheSwappedKeysAreWhatTheScreenSays(t *testing.T) {
+// It is a switch, not a way in: the mode it left is one press back.
+func TestSwitchingTwiceIsBackWhereItStarted(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoHunkFile))
-	m := newModel(t, backend, WithKeys(app.Keys{StageFile: "s", StageHunk: "S"}))
+	m := newModel(t, backend)
 
-	if got := m.hints(); !strings.Contains(got, "s stage file") || !strings.Contains(got, "S stage hunk") {
-		t.Errorf("footer = %q, want it to name the keys as they are set", got)
+	atHunk(t, m, 1)
+	press(t, m, "S", "S", "s")
+
+	if got := backend.stagedFiles; len(got) != 1 || got[0] != "list.txt" {
+		t.Fatalf("StageFile calls = %v, want the whole file", got)
+	}
+	if len(backend.stagedHunks) != 0 {
+		t.Errorf("a hunk went in on its own: %v", backend.stagedHunks)
+	}
+}
+
+// A mode nobody can see is a mode that stages the wrong thing, so the switch says
+// what it did and the footer and the help screen name what `s` takes now.
+func TestTheModeIsWhatTheScreenSays(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoHunkFile))
+	m := newModel(t, backend)
+
+	if got := m.hints(); !strings.Contains(got, "s stage file") || !strings.Contains(got, "S stage by hunk") {
+		t.Errorf("footer = %q, want it to name the mode the review opened in", got)
+	}
+	press(t, m, "S")
+	if !strings.Contains(m.status, "hunk") {
+		t.Errorf("status = %q, want the switch to say what s takes now", m.status)
+	}
+	if got := m.hints(); !strings.Contains(got, "s stage hunk") || !strings.Contains(got, "S stage by file") {
+		t.Errorf("footer = %q, want it to name the mode it was switched to", got)
 	}
 	help := strings.Join(m.helpLines(), "\n")
-	if !strings.Contains(help, "S ") || !strings.Contains(help, "stage the hunk the cursor is in") {
-		t.Errorf("help screen does not name the keys as they are set:\n%s", help)
+	if !strings.Contains(help, "stage the hunk the cursor is in") {
+		t.Errorf("help screen does not name what s takes in this mode:\n%s", help)
 	}
 }
 
@@ -297,7 +362,7 @@ func TestAHunkAlreadyInTheIndexIsLeftAlone(t *testing.T) {
 	entries := parseFiles(t, twoHunkFile)
 	entries[0].Staged, entries[0].Unstaged = entries[0].Unstaged, nil
 	backend := newFakeBackend(sessionOf(entries))
-	m := newModel(t, backend)
+	m := hunkModel(t, backend)
 
 	atHunk(t, m, 0)
 	press(t, m, "s")
@@ -313,9 +378,9 @@ func TestAHunkAlreadyInTheIndexIsLeftAlone(t *testing.T) {
 // The cursor arrives on a file's header by itself, so the key works from there:
 // it takes the change at the top of what the file has left, which is the one
 // being read.
-func TestTheHunkKeyOnAFileHeaderTakesTheFirstHunkLeft(t *testing.T) {
+func TestTheHunkModeOnAFileHeaderTakesTheFirstHunkLeft(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoHunkFile))
-	m := newModel(t, backend)
+	m := hunkModel(t, backend)
 
 	want := m.doc.Hunks[0].ID
 	press(t, m, "s")
@@ -330,10 +395,10 @@ func TestTheHunkKeyOnAFileHeaderTakesTheFirstHunkLeft(t *testing.T) {
 
 // A walkthrough's heading names a group of files rather than any one change, so
 // there is nothing under it to stage.
-func TestTheHunkKeyOnAWalkthroughHeadingStagesNothing(t *testing.T) {
+func TestTheHunkModeOnAWalkthroughHeadingStagesNothing(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	backend.walkBody = groupedWalkthrough
-	m := newModel(t, backend)
+	m := hunkModel(t, backend)
 
 	press(t, m, "w")
 	m.moveTo(m.doc.Steps[0].Row)
@@ -347,22 +412,23 @@ func TestTheHunkKeyOnAWalkthroughHeadingStagesNothing(t *testing.T) {
 	}
 }
 
-// An untracked file has nothing in the index for a patch to apply against, and
-// the message says which key does work — whichever key that is here.
-func TestAnUntrackedFileIsStagedWholeOrNotAtAll(t *testing.T) {
+// An untracked file has nothing in the index for a patch to apply against, and it
+// is all one addition anyway, so the press takes the file — without the reviewer
+// having to know which of those two things is the reason.
+func TestAnUntrackedFileGoesInWhole(t *testing.T) {
 	entries := parseFiles(t, twoHunkFile)
 	entries[0].Untracked = true
 	backend := newFakeBackend(sessionOf(entries))
-	m := newModel(t, backend, WithKeys(app.Keys{StageFile: "ctrl+s", StageHunk: "s"}))
+	m := hunkModel(t, backend)
 
 	atHunk(t, m, 0)
 	press(t, m, "s")
 
 	if len(backend.stagedHunks) != 0 {
-		t.Fatalf("a hunk of an untracked file was staged: %v", backend.stagedHunks)
+		t.Fatalf("a patch was applied to an untracked file: %v", backend.stagedHunks)
 	}
-	if !strings.Contains(m.status, "untracked") || !strings.Contains(m.status, "ctrl+s") {
-		t.Errorf("status = %q, want it to name the key that does put it in", m.status)
+	if got := backend.stagedFiles; len(got) != 1 || got[0] != "list.txt" {
+		t.Fatalf("StageFile calls = %v, want the whole file", got)
 	}
 }
 
@@ -371,7 +437,7 @@ func TestAnUntrackedFileIsStagedWholeOrNotAtAll(t *testing.T) {
 func TestAHunkOfAReadOnlySessionIsRefused(t *testing.T) {
 	session := readOnlySession(t, twoHunkFile)
 	backend := newFakeBackend(session)
-	m := newModel(t, backend)
+	m := hunkModel(t, backend)
 
 	atHunk(t, m, 0)
 	press(t, m, "s")

@@ -46,7 +46,7 @@ func TestStagingIsOnScreenBeforeGitIsAsked(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	m := newModel(t, backend)
 
-	m.Update(keyMsg("S"))
+	m.Update(keyMsg("s"))
 
 	if len(backend.stagedFiles) != 0 || backend.reloads != 0 {
 		t.Fatalf("git was asked on the keypress: staged %v, reloads %d", backend.stagedFiles, backend.reloads)
@@ -75,7 +75,7 @@ func TestAFailedWriteTakesTheChangeBackOff(t *testing.T) {
 	m := newModel(t, backend)
 	before, top := m.cursor, m.top
 
-	press(t, m, "S")
+	press(t, m, "s")
 
 	if got := m.doc.Files[0].Entry.State(); got != git.StateUnstaged {
 		t.Errorf("alpha.go reads as %v after a failed stage, want it unstaged again", got)
@@ -100,8 +100,8 @@ func TestABurstOfChangesReadsBackOnce(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	m := newModel(t, backend)
 
-	_, first := m.Update(keyMsg("S"))
-	_, second := m.Update(keyMsg("S"))
+	_, first := m.Update(keyMsg("s"))
+	_, second := m.Update(keyMsg("s"))
 
 	if msg := first(); msg != nil {
 		t.Errorf("the first of two writes came back with a %T, want it to leave the reading to the last", msg)
@@ -126,7 +126,7 @@ func TestAReadBackFromBeforeTheLastChangeIsDropped(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	m := newModel(t, backend)
 
-	m.Update(keyMsg("S"))
+	m.Update(keyMsg("s"))
 	stale := newSession(t, twoFileDiff)
 	m.Update(loadedMsg{session: stale, reconcile: true})
 
@@ -141,8 +141,8 @@ func TestAReadBackFromBeforeTheLastChangeIsDropped(t *testing.T) {
 func TestWritesReachGitInTheOrderTheyWerePressed(t *testing.T) {
 	held, m := heldModel(t, threeFileDiff)
 
-	_, first := m.Update(keyMsg("S"))
-	_, second := m.Update(keyMsg("S"))
+	_, first := m.Update(keyMsg("s"))
+	_, second := m.Update(keyMsg("s"))
 
 	done := make(chan tea.Msg, 2)
 	go func() { done <- first() }()
@@ -171,7 +171,7 @@ func TestQuitWaitsForTheWriteItPromised(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	m := newModel(t, backend)
 
-	_, stage := m.Update(keyMsg("S"))
+	_, stage := m.Update(keyMsg("s"))
 	_, leave := m.Update(keyMsg("q"))
 
 	left := make(chan tea.Msg, 1)
@@ -208,7 +208,7 @@ func TestRapidStagesAllReachTheIndex(t *testing.T) {
 	m := realModel(t, repo)
 	var cmds []tea.Cmd
 	for range paths {
-		_, cmd := m.Update(keyMsg("S"))
+		_, cmd := m.Update(keyMsg("s"))
 		cmds = append(cmds, cmd)
 	}
 
@@ -282,7 +282,7 @@ func TestAReadBackLeavesTheCommentEditorAlone(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	m := newModel(t, backend)
 
-	_, stage := m.Update(keyMsg("S"))
+	_, stage := m.Update(keyMsg("s"))
 	press(t, m, "c")
 	typeText(t, m, "still typing")
 

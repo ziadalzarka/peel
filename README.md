@@ -15,10 +15,10 @@ The file tree on the left is the review queue and a `✓` marks a staged file �
 a whole directory once every file in it is staged. The footer is the whole
 keymap.
 
-- **Staging is the review.** `s` stages the hunk you just read and moves to the
-  next one, so a pass is `s` after `s`. `S` — or `s` twice — takes the whole file
-  and moves on to the next one with work still out of the index. Which key does
-  which is a setting, for the pass that reads whole files.
+- **Staging is the review.** `s` stages the file you just read and moves to the
+  next one with work still out of the index, so a pass is `s` after `s`. `S`
+  switches `s` to the hunk, for the file that holds a change you are finished
+  with and one you are not — and `s` twice over there takes the whole file.
 - **Comment where the code is.** `c` anywhere — changed line or not — opens the
   editor inline, in the diff, at the spot the note will sit.
 - **Notes keep up with the code.** Each note freezes the file it was written
@@ -124,9 +124,10 @@ repository changes.
 | `b` | hide or show the file tree, giving the diff the whole width |
 | `space` | fold away the file, the half already staged, or a walkthrough note — or open it again |
 | `space` on a `▴`/`▾` row | read in twenty more lines of the code the diff left out |
-| `s` | stage the hunk the cursor is in, moving to the next one still out of the index |
-| `s` `s` | the same key twice: stage the whole file |
-| `S` | stage the file the cursor is in, folding it away and moving to the next |
+| `s` | stage the file the cursor is in, folding it away and moving to the next |
+| `S` | switch `s` between the whole file and the hunk the cursor is in |
+| `s` (by hunk) | stage that hunk, moving to the next one still out of the index |
+| `s` `s` (by hunk) | the same key twice: stage the whole file |
 | `u` | unstage that file, opening it again |
 | `a` / `U` | stage everything / unstage everything |
 | `o` | open the file the cursor is in, outside peel — in the editor you configure |
@@ -146,9 +147,9 @@ repository changes.
 
 There is one cursor and it rests anywhere — file headers, hunk headers, comments,
 and every line of a diff body, changed or not. Nothing to enter first: `s`
-anywhere inside a hunk stages that hunk, `S` anywhere inside a file stages the
-whole file, `c` anywhere leaves a note there, including on the untouched code a
-change breaks. The two staging keys can be swapped — see below.
+anywhere inside a file stages the whole file, `s` after `S` stages the one hunk
+the cursor is in, `c` anywhere leaves a note there, including on the untouched
+code a change breaks. Which size `s` takes is a mode — see below.
 
 ### Reading past the hunk
 
@@ -247,47 +248,49 @@ two-finger swipe, or shift and the wheel — slides the code, in terminals that
 report one: Ghostty, kitty, iTerm2, WezTerm and Alacritty all do. Where yours
 does not, `h` and `l` do the same thing.
 
-### Staging a hunk, and staging a file
+### Staging a file, and staging a hunk
 
-A hunk is the size a diff is read in, so that is the size `s` stages: the one
-hunk the cursor is in, leaving the rest of the file out of the index, for the file
-that holds a change you are finished with and one you are not. `S` stages the
-whole file — `git add`, one path at a time — and so does `s` pressed twice, which
-is the same decision without reaching for shift. Anything finer than a hunk is
-what `git add -p` is for.
+`s` stages the file the cursor is in — `git add`, one path at a time — from
+anywhere inside it, and the file folds away and the next one with work still out
+of the index opens. That is the size a diff is dealt with in more often than not,
+so it is the size a review opens on.
 
-The cursor lands on a file's header when the file above it is finished, and `s`
-works from there too: it takes the change at the top of what the file has left,
-which is the one being read. Inside a hunk it takes that hunk. So a pass down a
-diff is `s` after `s` whether the changes are one to a file or six.
+`S` moves `s` onto the hunk: the one hunk the cursor is in, leaving the rest of
+the file out of the index, for the file that holds a change you are finished with
+and one you are not. `S` again puts it back. It is a mode rather than a second key
+because the size is which pass you are on rather than a decision to make about
+each file — and the footer and the help screen always name what `s` takes now, so
+the mode is never something to remember. Anything finer than a hunk is what
+`git add -p` is for.
+
+The cursor lands on a file's header when the file above it is finished, and the
+hunk mode works from there too: it takes the change at the top of what the file
+has left, which is the one being read. Inside a hunk it takes that hunk. So a pass
+down a diff is `s` after `s` whether it is going file by file or hunk by hunk.
+Pressing `s` twice, fast and in the same file, takes the whole file without
+leaving the mode — the window is a third of a second, which no reading of a hunk
+fits inside.
 
 A hunk goes into the index as a patch, which is the one patch peel generates. It
 is built from the diff whose old side is the index already, with the hunk's own
 line numbers worked out again rather than trusted — a header numbers its new side
 as though the hunks above it had landed, and staging one hunk lands none of them.
-An untracked file is refused instead: `git apply --cached` cannot write a path the
-index has never heard of, so `S` puts that one in whole. What is staged folds into
-the file's index half, which opens folded, so what stays on screen is what is
-still out of the index — and the file's last hunk folds the whole file away and
-moves on, exactly as `S` does, because that is what it means.
+A file whose work is one hunk is staged as the file instead, since that is what
+staging its only hunk comes to, and `git add` is what a deletion, a mode change,
+an untracked path and a file with no newline at its end all need. What is staged
+folds into the file's index half, which opens folded, so what stays on screen is
+what is still out of the index.
 
-Which key does which is yours to set, since a pass that reads hunk by hunk and one
-that reads whole files do not want the same key under the same finger:
+A review that is always one of the two says so once:
 
 ```sh
-git config --global peel.stageFile s    # the file on s, the hunk on S
-git config --global peel.stageHunk S    # the same swap, said the other way
-git config --global peel.stageHunk H    # or put either one anywhere else
+git config --global peel.stageMode hunk   # open with s on the hunk
+git config --global peel.stageMode file   # the default: s on the whole file
 ```
 
-Naming one of them the key the other has swaps the pair: there are two keys and
-two things to stage, so there is no other reading of it. Writing both to the same
-key is refused, and so is a key the review already binds — a stage key that
-quietly took `c` would stage where a note was meant. The defaults stand where a
-setting will not read, and the footer says which one it was. Both are read when
-the review opens, like `peel.afterStage` below, and the help screen names the keys
-you actually have. The double press follows the hunk key wherever it goes, since
-what it means is "that again, all of it".
+`S` still switches it from there — the setting is where a review starts, not
+where it has to stay. A value peel cannot read keeps the default and the footer
+says so, and it is read when the review opens, like `peel.afterStage` below.
 
 A file staged in part — by `s`, by `git add -p`, or by an edit made after staging
 it — is in both of git's diffs at once, and peel draws it as both: two halves under their own

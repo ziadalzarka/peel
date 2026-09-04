@@ -529,13 +529,13 @@ func TestFileJumpsOpenTheWindowOnTheFile(t *testing.T) {
 	}
 }
 
-// The file key acts on the whole file from anywhere in it, so it stages from a
-// hunk header too — the hunk key is the one that stops at the hunk.
+// The file mode acts on the whole file from anywhere in it, so it stages from a
+// hunk header too — `S` is what puts the press on the hunk instead.
 func TestStageOnAHunkStagesItsFileAndReloads(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	m := newModel(t, backend)
 
-	press(t, m, "j", "S")
+	press(t, m, "j", "s")
 
 	if got := backend.stagedFiles; len(got) != 1 || got[0] != "alpha.go" {
 		t.Fatalf("StageFile calls = %v, want [alpha.go]", got)
@@ -552,7 +552,7 @@ func TestStageOnAFileHeaderStagesTheWholeFile(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	m := newModel(t, backend)
 
-	press(t, m, "S")
+	press(t, m, "s")
 
 	if got := backend.stagedFiles; len(got) != 1 || got[0] != "alpha.go" {
 		t.Fatalf("StageFile calls = %v, want [alpha.go]", got)
@@ -563,10 +563,10 @@ func TestStageOnADiffLineStagesTheWholeFile(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	m := newModel(t, backend)
 
-	// A context line: the file key acts on the file from anywhere inside it, so
+	// A context line: the file mode acts on the file from anywhere inside it, so
 	// even an unchanged row stages the whole of it.
 	m.moveTo(lineRowOf(t, m, 0, 0))
-	press(t, m, "S")
+	press(t, m, "s")
 
 	if got := backend.stagedFiles; len(got) != 1 || got[0] != "alpha.go" {
 		t.Fatalf("StageFile calls = %v, want [alpha.go]", got)
@@ -582,7 +582,7 @@ func TestStagingAFileFoldsItAndSpaceOpensItAgain(t *testing.T) {
 	backend.nextSession = sessionOf(staged)
 	m := newModel(t, backend)
 
-	press(t, m, "S")
+	press(t, m, "s")
 
 	if !m.doc.Files[0].Collapsed {
 		t.Fatal("the staged file did not fold away")
@@ -603,7 +603,7 @@ func TestStageAnAlreadyStagedFileDoesNothing(t *testing.T) {
 	backend := newFakeBackend(sessionOf(entries[:1]))
 	m := newModel(t, backend)
 
-	press(t, m, "j", "S")
+	press(t, m, "j", "s")
 
 	if len(backend.stagedFiles) != 0 {
 		t.Fatalf("staging an already-staged file called the backend: %v", backend.stagedFiles)
@@ -683,7 +683,7 @@ func TestBackendFailureIsShownAndNothingIsReloaded(t *testing.T) {
 	backend.opErr = errors.New("patch does not apply")
 	m := newModel(t, backend)
 
-	press(t, m, "j", "S")
+	press(t, m, "j", "s")
 
 	if m.err == nil || !strings.Contains(m.err.Error(), "patch does not apply") {
 		t.Fatalf("err = %v, want the backend's failure", m.err)
@@ -719,7 +719,7 @@ func TestStagingAdvancesToTheNextFile(t *testing.T) {
 	backend.nextSession = sessionOf(staged)
 
 	m := newModel(t, backend)
-	press(t, m, "j", "S")
+	press(t, m, "j", "s")
 
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
 		t.Fatalf("cursor is on %q, want the next file to review, beta.txt", got)
@@ -740,7 +740,7 @@ func TestStagingLeavesTheWindowOnANextFileAlreadyOnScreen(t *testing.T) {
 	backend.nextSession = staged
 
 	m := newModel(t, backend, WithSize(100, 12))
-	press(t, m, "S")
+	press(t, m, "s")
 
 	want := m.doc.RowOfFile(1)
 	if m.cursor != want {
@@ -801,7 +801,7 @@ func TestStagingPassesOverAFileAlreadyInTheIndex(t *testing.T) {
 	backend.nextSession = sessionOf(staged)
 
 	m := newModel(t, backend)
-	press(t, m, "S")
+	press(t, m, "s")
 
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "gamma.md" {
 		t.Errorf("cursor is on %q, want gamma.md — beta.txt is in the index already", got)
@@ -820,7 +820,7 @@ func TestStagingStopsOnAFoldedFileWithWorkLeftInIt(t *testing.T) {
 	backend.nextSession = sessionOf(staged)
 
 	m := newModel(t, backend)
-	press(t, m, "S")
+	press(t, m, "s")
 
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
 		t.Errorf("cursor is on %q, want beta.txt — it is folded away, but nothing of it is staged", got)
@@ -841,7 +841,7 @@ func TestStagingStaysPutWhenEverythingBelowIsDone(t *testing.T) {
 	backend.nextSession = sessionOf(staged)
 
 	m := newModel(t, backend)
-	press(t, m, "alt+down", "S")
+	press(t, m, "alt+down", "s")
 
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
 		t.Errorf("cursor is on %q, want it to stay on beta.txt — gamma.md is staged and alpha.go is behind the cursor", got)
@@ -858,7 +858,7 @@ func TestStagingTheLastFileStaysOnIt(t *testing.T) {
 	backend.nextSession = sessionOf(staged)
 
 	m := newModel(t, backend)
-	press(t, m, "alt+down", "S")
+	press(t, m, "alt+down", "s")
 
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
 		t.Errorf("cursor is on %q, want it to stay on beta.txt", got)
@@ -1014,7 +1014,7 @@ func TestStagingSavesTheFoldItMakes(t *testing.T) {
 	backend.nextSession = sessionOf(staged)
 	m := newModel(t, backend)
 
-	press(t, m, "S")
+	press(t, m, "s")
 
 	if got := backend.folded; len(got) != 1 || got[0] != "alpha.go" {
 		t.Errorf("saved folds %v, want alpha.go", got)
@@ -1091,7 +1091,7 @@ func TestAfterStageNextOpenMovesByTheFold(t *testing.T) {
 	backend.nextSession = sessionOf(staged)
 
 	m := newModel(t, backend, WithMoves(app.Moves{AfterStage: app.MoveOpen}))
-	press(t, m, "S")
+	press(t, m, "s")
 
 	if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "beta.txt" {
 		t.Errorf("cursor is on %q, want beta.txt — under next-open a staged file left open is a stop", got)
@@ -1107,7 +1107,7 @@ func TestAfterStageStayLeavesTheCursorOnTheFileStaged(t *testing.T) {
 	backend.nextSession = sessionOf(staged)
 
 	m := newModel(t, backend, WithMoves(app.Moves{AfterStage: app.MoveStay}))
-	press(t, m, "S")
+	press(t, m, "s")
 
 	if !m.doc.Files[0].Collapsed {
 		t.Fatal("s did not fold alpha.go away")
@@ -2407,7 +2407,7 @@ func TestAWalkthroughNoteIsNotStageable(t *testing.T) {
 
 	press(t, m, "w")
 	m.moveTo(m.doc.Steps[0].Row)
-	press(t, m, "S")
+	press(t, m, "s")
 
 	if len(backend.stagedFiles) != 0 {
 		t.Errorf("s on a walkthrough note staged %v", backend.stagedFiles)
@@ -2635,7 +2635,7 @@ func TestAFileChangedAfterStagingOpensAgain(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	m := newModel(t, backend)
 
-	press(t, m, "S")
+	press(t, m, "s")
 	if !m.doc.Files[0].Collapsed {
 		t.Fatal("staging alpha.go did not fold it away")
 	}
@@ -2693,7 +2693,7 @@ func TestStagingTheRestOfAFileDropsItsSideHeadings(t *testing.T) {
 	whole.Staged, whole.Unstaged = whole.Unstaged, nil
 	backend.nextSession = sessionOf([]git.FileEntry{whole})
 
-	press(t, m, "S")
+	press(t, m, "s")
 	press(t, m, "space")
 
 	if m.doc.Files[0].Collapsed {
@@ -2765,7 +2765,7 @@ func TestSOnAFileThatLeftTheDiffStagesNothing(t *testing.T) {
 	m := newModel(t, backend)
 	m.moveTo(m.doc.RowOfFile(m.fileIndex("reverted.go")))
 
-	press(t, m, "S")
+	press(t, m, "s")
 
 	if len(backend.stagedFiles) != 0 {
 		t.Errorf("staged %v, want git left alone", backend.stagedFiles)

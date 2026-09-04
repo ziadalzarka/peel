@@ -266,7 +266,7 @@ func TestStageHunkAloneUsesItsOwnOffsets(t *testing.T) {
 }
 
 // The file's last hunk leaves nothing out of the index, so the file reads as
-// staged — the same place the file key would have left it.
+// staged — the same place staging the file would have left it.
 func TestStagingEveryHunkLeavesTheFileStaged(t *testing.T) {
 	h := newHarness(t)
 	h.fixture.Write("f.txt", numbered(30))

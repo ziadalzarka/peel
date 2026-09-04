@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/ziadalzarka/peel/internal/app"
 )
 
 const (
@@ -151,8 +152,12 @@ func (m *Model) hints() string {
 	case modeReviewEvent:
 		return "a approve · r request changes · c comment · esc cancel"
 	default:
+		stage := "s stage file · S stage by hunk"
+		if m.stageMode == app.StageModeHunk {
+			stage = "s stage hunk · S stage by file"
+		}
 		hints := `j/k hunk · ↓/↑ line · [/] ten lines · opt+↓/↑ file · cmd+p go to file · shift+↓/↑ mark · ` +
-			m.keys.StageHunk + ` stage hunk · ` + m.keys.StageFile + ` stage file · u unstage · space fold · c comment · b files · \ layout · w walkthrough`
+			stage + ` · u unstage · space fold · c comment · b files · \ layout · w walkthrough`
 		// The key that posts is only worth a place in the footer where there is
 		// something to post to.
 		if m.session != nil && m.session.PR != nil {
@@ -304,10 +309,14 @@ type binding struct{ keys, action string }
 // helpBindings is the single source of truth for the help screen. The footer
 // hints are deliberately shorter; this is the full list.
 //
-// The two staging rows are the reviewer's own keys rather than peel's, since
-// they are the two that can be moved — a help screen naming a key that stages
-// nothing here would be worse than no help at all.
+// What `s` does is the mode the review is in rather than one fixed line, since
+// a help screen naming the size the reviewer is not staging in would be worse
+// than no help at all.
 func (m *Model) helpBindings() []binding {
+	stage := binding{"s", "stage the file the cursor is in — it folds away and the next one opens"}
+	if m.stageMode == app.StageModeHunk {
+		stage = binding{"s", "stage the hunk the cursor is in — twice over takes the whole file"}
+	}
 	return []binding{
 		{"j / k", "next / previous hunk, file or comment"},
 		{"↓ / ↑", "move the cursor one line (the wheel scrolls the diff)"},
@@ -321,8 +330,8 @@ func (m *Model) helpBindings() []binding {
 		{"g / G", "first / last row — cmd+↑ / cmd+↓ too, where the terminal sends them"},
 		{"ctrl+d / ctrl+u", "half a page down / up"},
 		{"space", "fold a file, a staged half or a note away — or, on a ▴/▾ row, read in more code"},
-		{m.keys.StageHunk, "stage the hunk the cursor is in — twice over takes the whole file"},
-		{m.keys.StageFile, "stage the file the cursor is in — it folds away and the next one opens"},
+		stage,
+		{"S", "switch what s stages: the whole file, or the hunk the cursor is in"},
 		{"u", "unstage that file, opening it again"},
 		{"a / U", "stage everything / unstage everything"},
 		{"o", "open the file the cursor is in, outside peel"},

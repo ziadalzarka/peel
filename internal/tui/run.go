@@ -26,14 +26,14 @@ func Run(ctx context.Context, a *app.App, s *app.Session, opts ...Option) error 
 	// rather than on every `s`: the keys it governs draw before they ask git
 	// anything, and a config read on the keypress would be the one thing they
 	// waited for. A setting that will not parse is not worth refusing the review
-	// over — the defaults stand and the footer says which key was not read.
+	// over — the defaults stand and the footer says which setting was not read.
 	moves, moveErr := a.Moves(ctx)
-	// Which key stages a file and which stages a hunk is read here for the same
-	// reason, and against the keys the review binds itself, so a setting can only
-	// move the two keys that are the reviewer's to move.
-	keys, keyErr := a.Keys(ctx, fixedKeys)
-	model := New(ctx, backend, s, comments, append(opts, WithMoves(moves), WithKeys(keys))...)
-	if err := settingsErr(moveErr, keyErr); err != nil {
+	// What `s` stages when the review opens is read here for the same reason. `S`
+	// switches it after that, so this is where the pass starts rather than where
+	// it has to stay.
+	mode, modeErr := a.StageMode(ctx)
+	model := New(ctx, backend, s, comments, append(opts, WithMoves(moves), WithStageMode(mode))...)
+	if err := settingsErr(moveErr, modeErr); err != nil {
 		model.err = err
 	}
 	// Mouse reporting is on so the wheel arrives as a wheel event. Without it

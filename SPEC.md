@@ -105,7 +105,7 @@ it doesn't get relitigated.
 | **Folds persist** | JSON at `.git/peel/folds.json`, per target | A pass through a large diff rarely finishes in one sitting, and reopening to a diff that has forgotten every file already read starts the pass again. Folds of files no longer in the diff are dropped, so the next change to a file is not hidden by a fold left from the last one |
 | **Changes are drawn before they are written** | optimistic, with rollback: the screen moves on the keypress, git is asked behind it | Added 2026-07-30. A stage is `git add` plus a full re-read — 50ms in a small repository, several hundred in a large one — and the answer is never in doubt, only slow. Waiting for it before redrawing makes a decision that has already been made look like peel thinking about it, and staging is a key pressed file after file. The guess is arithmetic on the two diffs — sides swapped for a whole file, one hunk moved across and everything it renumbers renumbered for a hunk — and never a patch: the re-read behind it stays authoritative, and a write that fails restores the screen it was drawn over. Two rules keep the guess from being seen: writes are queued, so peel's own git calls cannot race for the index lock, and a read-back landing while another write is out is dropped rather than undrawing it. `q` waits for the writes it has already reported |
 | **The files behind the diff are re-read only where they moved** | a copy is named by the path and the diff standing between HEAD and it; a read-back hands back every copy it already holds under that name, reads the rest several at a time, and leaves the screen alone when it turned nothing up | Added 2026-08-27. Every change used to drop the copies and read them all again — a file read per side, a `git cat-file` per part-staged one, one after another — so staging one file among three hundred cost a pass over the whole repository, and every row offering to read more code, on every file, went off the screen and came back a third of a second later on each `s`. What a copy holds is decided by HEAD and the diff on top of it, so two reads with the same name are the same bytes and the second one is not made; it is what peel already assumes when it drops a reload whose fingerprint has not moved. A file staged whole keeps the copy read off the disk for it, since `git add` puts exactly the disk's content into the index. The copies are left up while the read goes out rather than taken down first, so the file that moved is the only one that can be a moment behind, and it is the file that has just been dealt with |
-| **Which key stages what is a setting** | `peel.stageFile` and `peel.stageHunk`, each naming a key rather than a behaviour; `s` on the hunk and `S` on the file with neither written, and the hunk key twice over for the file | Added 2026-09-04, with hunk staging. Which of the two deserves the unshifted key is not a fact about peel, it is which pass the reviewer is on: a review that goes hunk by hunk wants `s` on the hunk, and one that reads whole files and stages them wants it on the file, and both are peel being used properly. Nothing else in the keymap is a setting — the rest is the same review everywhere, and a keymap that is all preference is a keymap nobody can be told about. Setting one of the two to the key the other has swaps the pair, because there are two keys and two things to stage and there is no other reading of it; writing both to one key is refused, since it says what the other key does nowhere at all. A key the review already binds is refused too: a stage key that quietly took `c` would stage where a note was meant, which is the one mistake in a keymap worth costing a setting over. Read at startup with the moves, and the footer and help screen name the keys the reviewer actually has. The hunk key pressed twice inside 300ms, in the same file, means the file: it reaches what shift reaches without leaving the key the pass is already on, and the window is short enough that reading a hunk between presses can never be one — nobody reads a hunk in a third of a second |
+| **What `s` stages is a mode, not a second key** | `s` takes the whole file, `S` switches it to the hunk and back, and `peel.stageMode` is which one a review opens in; the file with nothing written | Added 2026-09-04, with hunk staging, as two settings naming a key each; replaced the same day by one key and a mode. Which size to stage in is not a fact about peel, it is which pass the reviewer is on — a review that reads whole files stages whole files, one that goes hunk by hunk goes hunk by hunk — and it is one decision about the pass rather than a decision at every file, which is what makes it a mode. Two keys said the same thing worse: the unshifted one had to be argued over, the other sat under a finger that never wanted it, and a reviewer who wanted them the other way round had to find a setting to say so. One key and a switch gives both passes the same key and costs one press to change your mind about a file. Nothing else in the keymap is a setting — the rest is the same review everywhere — and the footer and the help screen name what `s` takes now, since a mode nobody can see is a mode that stages the wrong thing. `s` twice inside 300ms, in the same file, still means the file: it is the whole file without leaving the mode the pass is in, and the window is short enough that reading a hunk between presses can never be one — nobody reads a hunk in a third of a second. A file whose work is one hunk is staged as the file, since that is what staging its only hunk comes to, and `git add` is what a deletion, a mode change, an untracked path and a missing trailing newline all need |
 | **What `o` opens a file with** | git config: `peel.open` for everything, `peel.open.<extension>` to override it for one kind of file, the desktop opener when neither is set | Added 2026-07-31. The desktop opener is the right default and the wrong answer for source: a repository is mostly code, which belongs in the editor, and mostly-not-code — a screenshot, a PDF, a `.md` worth reading rendered — which belongs to whatever the desktop already sends it to. One command for the whole tree cannot be both, so the setting is per extension with a fallback under it. It lives in git config rather than a config file of peel's own because peel has no config file and does not want one: git config is already per-user with a per-repository override, already in the reviewer's dotfiles, and already something peel shells out to. Read on each `o` rather than at startup, so changing it lands in the session already open. Split on spaces, not run through a shell — `open -a Marked` works, `cmd && other` does not, and nothing in a config value reaches a shell |
 | **Agent → index** | **Read-only. No flag, no escape hatch** | Claude Code can already run `git add` directly, so `peel hunks add` adds no capability — only a way for things to enter the index unreviewed |
 | **Comment store** | JSON at `.git/peel/comments.json` for the working tree | Per-repo, survives restarts, invisible to `git status`, readable with no daemon running |
@@ -224,7 +224,7 @@ smallest patch there is:
 | **The new side's start is recomputed** | A header numbers the new side as though the hunks above it had landed, and staging one hunk lands none of them |
 | **Declared counts are checked against the body** | A hunk that disagrees with itself is refused before it reaches git, rather than applied as however many lines git counts |
 | **`\ No newline at end of file` goes through verbatim** | Otherwise the index gets a newline nobody typed |
-| **Untracked files are refused** | `git apply --cached` cannot write a path the index has never heard of, and the `git add -N` that would let it is a change to the index the keypress did not ask for. The file key puts it in whole |
+| **Untracked files are refused** | `git apply --cached` cannot write a path the index has never heard of, and the `git add -N` that would let it is a change to the index the keypress did not ask for. The UI never sends one: an untracked file is all one addition, so `s` stages it as the file |
 | **`--unidiff-zero` is not passed** | It turns off git's overlap checks, and is only needed for zero-context patches, which `--unified=3` rules out |
 
 The hunk is named by ID and looked up again, inside the stager, against a diff
@@ -394,8 +394,8 @@ Vim-ish, close enough to `hunk` and `lazygit` to not need learning.
 
 There is one cursor and it rests anywhere: file headers, hunk headers, comments
 and every line of a diff body, changed or not. There is no mode to enter first —
-`s` from anywhere inside a hunk stages that hunk, `S` from anywhere inside a file
-stages that file, and `c` anywhere means a note there, including on the untouched
+`s` from anywhere inside a file stages that file — or, after `S`, the one hunk the
+cursor is in — and `c` anywhere means a note there, including on the untouched
 code a change breaks. Only the blank between
 files and the continuation lines of a multi-line comment are skipped.
 
@@ -494,9 +494,10 @@ that report one; `h`/`l` are the path that always works.
 | `g` / `G` | first / last row |
 | `ctrl+d` / `ctrl+u` | half a page down / up |
 | `space` | fold the file away and move on to the next, or expand it again — on a `▴`/`▾` row, read in twenty more lines of the code the diff left out |
-| `s` | stage the hunk the cursor is in, moving to the next one still out of the index |
-| `s` `s` | the hunk key twice over: stage the whole file |
-| `S` | stage the file the cursor is in, folding it away and moving to the next |
+| `s` | stage the file the cursor is in, folding it away and moving to the next |
+| `S` | switch what `s` stages: the whole file, or the hunk the cursor is in |
+| `s` by hunk | stage that hunk, moving to the next one still out of the index |
+| `s` `s` by hunk | the same key twice over: stage the whole file |
 | `u` | unstage that file, opening it again |
 | `a` / `U` | stage everything, folding it all away / unstage everything, opening it all |
 | `o` | open the file the cursor is in, outside peel — with `peel.open.<extension>`, `peel.open`, or the desktop opener |
@@ -529,7 +530,7 @@ land on the note that introduces the next file rather than skipping past it,
 in git's order. Staging keeps the notes; when the code itself moves on under them
 the header says `stale` and `W` writes new ones.
 
-Staging folds and moves on. `S` stages the file the cursor is in, collapses it and
+Staging folds and moves on. `s` stages the file the cursor is in, collapses it and
 puts the cursor on the next file with work still out of the index — so what is
 left to stage is what is left to review, the diff shrinks as the pass goes on, and
 one key both ends a file and starts the next. The window follows only when it has
@@ -550,35 +551,38 @@ that way on purpose. The fold is display only:
 index. A stage that fails leaves the file open and the cursor on it, because it
 still has to be dealt with.
 
-`s` is the same decision at the size the diff is read in, and it ends in the same
-place by a different route: what it stages moves into the file's index half, which
-opens folded, so the press leaves exactly the work still out of the index on
-screen, and the cursor carries on to the next hunk still out of it — the rule `S`
-follows between files, inside one. A file's last unstaged hunk folds the file away
-and moves on exactly as `S` does: there is nothing left in it to review, so there
-is nothing to leave open. From a file's header — where finishing the file above
-leaves the cursor — it takes the change at the top of what that file has left,
-since a key that only worked from inside a hunk would stop the pass at every file
-one press short of the change it was about to make. It is refused where a patch
-cannot be applied rather than half-applied: an untracked file has nothing in the
-index to apply against, a binary file has no hunks at all, and a hunk that has
-moved since the screen was drawn is named by an ID that no longer resolves.
+`S` moves `s` onto the hunk, which is the same decision at the size the diff is
+read in, and it ends in the same place by a different route: what it stages moves
+into the file's index half, which opens folded, so the press leaves exactly the
+work still out of the index on screen, and the cursor carries on to the next hunk
+still out of it — the rule the file follows between files, inside one. From a
+file's header — where finishing the file above leaves the cursor — it takes the
+change at the top of what that file has left, since a key that only worked from
+inside a hunk would stop the pass at every file one press short of the change it
+was about to make. A file whose work is one hunk is staged as the file instead:
+that is what staging its only hunk comes to, and it puts an untracked path, a
+deletion, a mode change and a missing trailing newline through `git add`, which is
+what all of them need. What is left for the patch is refused where it cannot be
+applied rather than half-applied: a binary file has no hunks at all, and a hunk
+that has moved since the screen was drawn is named by an ID that no longer
+resolves.
 
 Two presses of it inside 300ms, in the same file, mean the file. It is the same
-index `S` leaves, reached without the shift, and the window is short because a
-pass that reads each hunk before deciding about it never presses twice that fast
-— nobody reads a hunk in a third of a second. The file has to be the same one:
-the cursor moves on by itself once a file is finished, and a press that lands in
-the next file is a first decision about a file nobody has read.
+index the file mode leaves, without the pass having to leave the mode it is in,
+and the window is short because a pass that reads each hunk before deciding about
+it never presses twice that fast — nobody reads a hunk in a third of a second. The
+file has to be the same one: the cursor moves on by itself once a file is
+finished, and a press that lands in the next file is a first decision about a file
+nobody has read.
 
-Which key stages which is `peel.stageFile` and `peel.stageHunk`, each naming a key
-rather than a behaviour, because which of them deserves the unshifted key is which
-pass the reviewer is on rather than a fact about peel. Naming one of them the key
-the other has swaps the pair; both on one key is refused, and so is a key the
-review already binds, since a stage key that took `c` would stage where a note was
-meant. Nothing else in the keymap is a setting: the rest is the same review
-everywhere, and the footer and the help screen name the keys the reviewer actually
-has rather than the ones peel ships with.
+Which size `s` takes is a mode rather than a key each, because it is which pass
+the reviewer is on rather than a fact about peel, and it is one decision about the
+pass rather than one at every file. `S` switches it either way, `peel.stageMode` is
+which one a review opens in — `file` or `hunk` — and the switch is a press rather
+than a setting to have got right beforehand. Nothing else in the keymap is a
+setting: the rest is the same review everywhere, and the footer and the help
+screen name what `s` takes now rather than a fixed line about a mode the reviewer
+may have left.
 
 Where the cursor lands after either key is `peel.afterStage` and `peel.afterFold`,
 one git config setting each: `next-unstaged` is the rule above and the default,

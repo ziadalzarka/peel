@@ -141,12 +141,13 @@ type Model struct {
 	// setting for `s` and one for `space`. It is read from git config at
 	// startup, since the keys it governs draw before they ask git anything.
 	moves app.Moves
-	// keys is which key stages a whole file and which stages one hunk. They are
-	// the only two keys a reviewer can move, and they are read from git config
-	// at startup with the moves, for the same reason.
-	keys app.Keys
+	// stageMode is what `s` takes: the whole file the cursor is in, or the one
+	// hunk it is in. It opens on `peel.stageMode`, read from git config at
+	// startup with the moves for the same reason, and `S` switches it, since
+	// which size a file wants is not always the size the pass started in.
+	stageMode app.StageMode
 	// staged is the last hunk staged and when, which is what a second press of
-	// the hunk key is read against.
+	// `s` is read against.
 	staged lastStage
 	// now is the clock the double press is measured on, so a test can press a key
 	// twice without the two presses being a microsecond apart.
@@ -190,8 +191,8 @@ type lastStage struct {
 	at   time.Time
 }
 
-// doubleWindow is how close two presses of the hunk key have to be to mean the
-// whole file.
+// doubleWindow is how close two presses of `s` have to be, staging by hunk, to
+// mean the whole file.
 //
 // Short enough that a pass down a file, reading each hunk before deciding about
 // it, never trips it — nobody reads a hunk in a third of a second — and long
@@ -210,7 +211,7 @@ type options struct {
 	pollEvery time.Duration
 	provider  string
 	moves     app.Moves
-	keys      app.Keys
+	stageMode app.StageMode
 }
 
 // Option customises a Model.
@@ -246,9 +247,9 @@ func WithPollInterval(d time.Duration) Option {
 // one has been folded away.
 func WithMoves(m app.Moves) Option { return func(o *options) { o.moves = m } }
 
-// WithKeys sets which key stages the file the cursor is in and which stages the
-// hunk it is in.
-func WithKeys(k app.Keys) Option { return func(o *options) { o.keys = k } }
+// WithStageMode sets what `s` takes when the review opens: the whole file the
+// cursor is in, or the one hunk it is in.
+func WithStageMode(m app.StageMode) Option { return func(o *options) { o.stageMode = m } }
 
 // New builds the review UI for a session and the comments already on it.
 func New(ctx context.Context, backend Backend, session *app.Session, comments []store.Comment, opts ...Option) *Model {
@@ -272,7 +273,7 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 		input:       newInput(cfg.theme),
 		walkFolded:  map[int]bool{},
 		moves:       cfg.moves.OrDefault(),
-		keys:        cfg.keys.OrDefault(),
+		stageMode:   cfg.stageMode.OrDefault(),
 		now:         time.Now,
 		follow:      cfg.follow,
 		pollEvery:   cfg.pollEvery,
@@ -619,24 +620,6 @@ func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
 // keep the row it lands on in sight of the one it left.
 const leapLines = 10
 
-// fixedKeys are the keys browseKey binds itself — everything but the two a
-// reviewer can move.
-//
-// They are listed so a stage key set to one of them can be refused rather than
-// quietly taking it over: a key that stages where the reviewer expected a note
-// is worse than a setting that does not take. The switch below is the other half
-// of this list, and a key added there belongs here too.
-var fixedKeys = []string{
-	"q", "ctrl+c", "?",
-	"j", "k", "down", "up", "]", "[", "g", "home", "G", "end",
-	"ctrl+d", "pgdown", "ctrl+u", "pgup",
-	"shift+down", "shift+up", "alt+down", "alt+up", "}", "{",
-	"h", "left", "l", "right", "0", "$", "b", " ",
-	"u", "a", "U", "o",
-	"c", "e", "x", "D", "C", "A", "X", "P",
-	`\`, "w", "W", "r", "f",
-}
-
 func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 	m.status, m.err = "", nil
 
@@ -645,16 +628,6 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 	// or writing the note it was marked for lets it go.
 	if !keepsSelection(key) {
 		m.sel = nil
-	}
-
-	// The two staging keys are read from git config, so they are matched before
-	// the fixed keymap rather than inside it. fixedKeys below is what keeps a
-	// setting from taking one of that keymap's own keys.
-	switch key {
-	case m.keys.StageFile:
-		return m.stageAt()
-	case m.keys.StageHunk:
-		return m.stageHunkAt()
 	}
 
 	switch key {
@@ -706,6 +679,10 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 		m.moveTo(m.doc.Nearest(m.cursor - m.bodyHeight()/2))
 	case " ":
 		m.toggleCollapse()
+	case "s":
+		return m.stage()
+	case "S":
+		m.switchStageMode()
 	case "u":
 		return m.unstageAt()
 	case "o":
@@ -1093,6 +1070,39 @@ func (m *Model) quit() tea.Cmd {
 	}
 }
 
+// stage is `s`: it stages what the mode says, and the mode is the reviewer's.
+//
+// One key rather than two because it is one decision at whichever size the pass
+// is being read in, and the size is the reviewer's to say — a review that reads
+// whole files never wants the hunk under that finger, and a review that goes
+// hunk by hunk never wants the file.
+func (m *Model) stage() tea.Cmd {
+	if m.stageMode == app.StageModeHunk {
+		return m.stageHunkAt()
+	}
+	return m.stageAt()
+}
+
+// switchStageMode is `S`: it moves `s` between the file and the hunk.
+//
+// A pass is mostly one size, but not entirely: a diff read file by file still
+// holds the file with one change finished and one not, and a diff read hunk by
+// hunk still holds the file that is all one change. So the size is a switch on
+// the keyboard rather than a setting to have got right beforehand, and what it
+// switched to is said on the status line, since a mode nobody can see is a mode
+// that stages the wrong thing.
+func (m *Model) switchStageMode() {
+	m.stageMode = m.stageMode.Other()
+	// A press either side of a switch is two decisions about two things, so the
+	// double press does not carry across it.
+	m.staged = lastStage{}
+	if m.stageMode == app.StageModeHunk {
+		m.status = "s stages the hunk the cursor is in — twice over takes the whole file"
+		return
+	}
+	m.status = "s stages the whole file the cursor is in"
+}
+
 // stageAt stages the file the cursor is in.
 //
 // It acts on the whole file from anywhere inside it, so a hunk header or a diff
@@ -1135,12 +1145,12 @@ func (m *Model) stageAt() tea.Cmd {
 // stageHunkAt stages the one hunk the cursor is in and leaves the rest of the
 // file out of the index.
 //
-// It is the same decision as the file key at the size a diff is read in: a file
+// It is the same decision as the file mode at the size a diff is read in: a file
 // often holds one change that is finished and one that is not, and the only
 // other way to say so is to leave the whole file open and read it again later.
 // What is staged moves into the file's index half, which opens folded, so the
 // press leaves exactly the work still out of the index on screen, and the cursor
-// carries on to the next hunk still out of it — the rule the file key follows
+// carries on to the next hunk still out of it — the rule the file mode follows
 // between files, inside one.
 //
 // Like every other change it is drawn on the keypress. What moving a hunk does to
@@ -1152,7 +1162,13 @@ func (m *Model) stageAt() tea.Cmd {
 //
 // Pressing the key twice, close together and in the same file, means the file:
 // two decisions about hunks that fast are one decision about all of them, and it
-// puts the whole file in without reaching for the other key.
+// takes the whole file without leaving the mode the pass is in.
+//
+// A file whose work is one hunk is staged as the file, since that is what
+// staging its only hunk comes to. It goes in through `git add` rather than
+// through a patch, which is what a deletion, a mode change, an untracked path
+// and a file with no newline at its end all need, and none of which the reviewer
+// pressing `s` was making a claim about.
 func (m *Model) stageHunkAt() tea.Cmd {
 	file, ok := m.doc.FileTargetAt(m.cursor)
 	if !ok {
@@ -1168,14 +1184,13 @@ func (m *Model) stageHunkAt() tea.Cmd {
 		m.status = path + " has no changes to stage — its notes outlived them"
 		return nil
 	}
-	if file.Entry.Untracked {
-		m.status = path + " is untracked — " + m.keys.StageFile + " puts it in whole"
-		return nil
-	}
 	if m.doubledOn(path) {
 		// One double press is one decision. What follows it is a press of its own,
 		// measured from nothing.
 		m.staged = lastStage{}
+		return m.stageAt()
+	}
+	if file.Entry.Untracked || onlyHunkInTheFile(file.Entry) {
 		return m.stageAt()
 	}
 	if !m.canStage() {
@@ -1189,25 +1204,27 @@ func (m *Model) stageHunkAt() tea.Cmd {
 
 	m.staged = lastStage{path: path, at: m.now()}
 	return m.apply(func() {
-		session, entry, ok := restagedHunk(m.session, id)
-		if !ok {
-			m.status = "staged one hunk of " + path
-			return
-		}
-		m.session = session
-		if entry.Unstaged == nil {
-			// Nothing of the file is left out of the index, so the press has
-			// finished it — which is what the file key does, and it ends the same
-			// way.
-			m.status = "staged " + path
-			m.foldStaged(path)
-			return
+		// There is always work left over: a file whose work was one hunk went in
+		// as the file above, so what is being patched here had at least two.
+		session, _, ok := restagedHunk(m.session, id)
+		if ok {
+			m.session = session
+			m.carryOnInside(path)
 		}
 		m.status = "staged one hunk of " + path
-		m.carryOnInside(path)
 	}, func(ctx context.Context) error {
 		return m.backend.StageHunk(ctx, id)
 	})
+}
+
+// onlyHunkInTheFile reports that what the file has out of the index is a single
+// hunk, so the two modes would leave the same index.
+//
+// An untracked file is the same case read another way — it is all one addition,
+// and the index has never heard of the path, so `git apply --cached` has nothing
+// to apply against.
+func onlyHunkInTheFile(e git.FileEntry) bool {
+	return e.Unstaged != nil && len(e.Unstaged.Hunks) == 1
 }
 
 // hunkToStage is the hunk the key acts on: the one the cursor is in, or the
@@ -1229,15 +1246,15 @@ func (m *Model) hunkToStage(file FileRef) (git.HunkID, bool) {
 	return work.ID(work.Hunks[0]), true
 }
 
-// doubledOn reports that this press of the hunk key follows one close enough
-// behind it, in the same file, to be a decision about the file rather than a
-// second one about a hunk.
+// doubledOn reports that this press of `s` follows one close enough behind it, in
+// the same file, to be a decision about the file rather than a second one about a
+// hunk.
 //
 // The file is what it takes, not the file plus a guess about which hunks: `s`
-// then `s` leaves the same index as `S` alone, and one of them is the key already
-// under the finger. It is the same file or nothing — the cursor moves on by
-// itself once a file is finished, and a press that lands in the next file is a
-// new decision about a file nobody has read yet.
+// then `s` leaves the same index as `s` in the other mode, without the pass
+// having to leave the mode it is in. It is the same file or nothing — the cursor
+// moves on by itself once a file is finished, and a press that lands in the next
+// file is a new decision about a file nobody has read yet.
 func (m *Model) doubledOn(path string) bool {
 	return m.staged.path == path && m.now().Sub(m.staged.at) < doubleWindow
 }

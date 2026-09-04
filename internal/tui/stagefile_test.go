@@ -12,7 +12,7 @@ import (
 
 // realModel drives the UI against an actual repository, so `s` is checked
 // against what lands in the index rather than against a recorded call.
-func realModel(t *testing.T, repo *gittest.Repo) *Model {
+func realModel(t *testing.T, repo *gittest.Repo, opts ...Option) *Model {
 	t.Helper()
 	ctx := context.Background()
 
@@ -33,8 +33,8 @@ func realModel(t *testing.T, repo *gittest.Repo) *Model {
 	if err != nil {
 		t.Fatalf("Comments: %v", err)
 	}
-	return New(ctx, backend, session, comments,
-		WithTheme(Theme{}), WithoutSyntax(), WithSize(100, 30))
+	all := append([]Option{WithTheme(Theme{}), WithoutSyntax(), WithSize(100, 30)}, opts...)
+	return New(ctx, backend, session, comments, all...)
 }
 
 func TestStageWritesTheWholeFileToTheIndex(t *testing.T) {
@@ -44,7 +44,7 @@ func TestStageWritesTheWholeFileToTheIndex(t *testing.T) {
 	repo.Write("list.txt", "ONE\ntwo\nTHREE\n")
 
 	m := realModel(t, repo)
-	press(t, m, "S")
+	press(t, m, "s")
 
 	if got, want := repo.StagedRaw("list.txt"), "ONE\ntwo\nTHREE\n"; got != want {
 		t.Errorf("index contents = %q, want the whole file at %q", got, want)
@@ -67,7 +67,7 @@ func TestStageFromInsideTheDiffStagesTheFile(t *testing.T) {
 
 	m := realModel(t, repo)
 	m.moveTo(lineRowOf(t, m, 0, 1))
-	press(t, m, "S")
+	press(t, m, "s")
 
 	if got, want := repo.StagedRaw("list.txt"), "one\ntwo\nTHREE\n"; got != want {
 		t.Errorf("index contents = %q, want %q", got, want)
@@ -97,17 +97,17 @@ func TestStagingWalksTheQueueOneFileAtATime(t *testing.T) {
 		t.Fatalf("the pass starts on %q, want a-first.txt", got)
 	}
 
-	press(t, m, "S")
+	press(t, m, "s")
 	if got := m.currentPath(); got != "c-third.txt" {
 		t.Fatalf("after staging a-first.txt the cursor is on %q, want c-third.txt — b-second.txt is in the index already", got)
 	}
 
-	press(t, m, "S")
+	press(t, m, "s")
 	if got := m.currentPath(); got != "d-fourth.txt" {
 		t.Fatalf("after staging c-third.txt the cursor is on %q, want d-fourth.txt", got)
 	}
 
-	press(t, m, "S")
+	press(t, m, "s")
 	if got := m.currentPath(); got != "d-fourth.txt" {
 		t.Errorf("staging the last file moved the cursor to %q, want it left on d-fourth.txt", got)
 	}
@@ -128,7 +128,7 @@ func TestUnstageReturnsTheIndexToHeadAndOpensTheFile(t *testing.T) {
 	repo.Write("list.txt", "one\ntwo\nTHREE\n")
 
 	m := realModel(t, repo)
-	press(t, m, "S")
+	press(t, m, "s")
 	if !m.doc.Files[0].Collapsed {
 		t.Fatal("staging did not fold the file")
 	}
