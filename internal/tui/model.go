@@ -74,8 +74,9 @@ type Model struct {
 	cursor int
 	// sel is the run of lines marked with shift and an arrow to write one note
 	// about, and nil when nothing is marked.
-	sel *selection
-	top int
+	sel  *selection
+	drag *drag
+	top  int
 	// fileRows is the side pane's tree: the changed files under the directories
 	// they live in, one row each. It is rebuilt with the document, since it is
 	// the same files laid out a second way.
@@ -95,6 +96,7 @@ type Model struct {
 
 	width  int
 	height int
+	screen []string
 
 	theme    Theme
 	renderer *Renderer
@@ -562,12 +564,18 @@ const wheelColumns = 4
 
 // mouse routes a wheel notch to whatever it should move.
 func (m *Model) mouse(msg tea.MouseMsg) tea.Cmd {
+	// Reaching for the mouse is doing something else, the way any other key is:
+	// a wheel notch drags the cursor off the run it was marking.
+	if m.mode == modeBrowse {
+		m.sel = nil
+	}
+	if cmd, swept := m.dragMouse(msg); swept {
+		return cmd
+	}
+	m.drag = nil
 	if m.mode != modeBrowse {
 		return nil
 	}
-	// Reaching for the mouse is doing something else, the way any other key is:
-	// a wheel notch drags the cursor off the run it was marking.
-	m.sel = nil
 
 	switch msg.Button {
 	case tea.MouseButtonWheelDown:
@@ -597,6 +605,7 @@ func (m *Model) wheel(msg tea.MouseMsg, delta int) {
 
 // key routes a press to whichever screen has the keyboard.
 func (m *Model) key(msg tea.KeyMsg) tea.Cmd {
+	m.drag = nil
 	switch m.mode {
 	case modeHelp:
 		return m.helpKey(msg)
@@ -2783,6 +2792,7 @@ func (m *Model) clampTop() {
 func (m *Model) resize(width, height int) {
 	m.width = max(width, 20)
 	m.height = max(height, 8)
+	m.drag = nil
 	m.renderer.SetWidth(m.diffWidth())
 	if m.mode == modeComment {
 		m.input.SetWidth(m.draftWidth())

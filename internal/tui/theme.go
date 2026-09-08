@@ -18,6 +18,7 @@ type Theme struct {
 	Resolved    lipgloss.Style
 	Author      lipgloss.Style
 	Cursor      lipgloss.Style
+	Selected    lipgloss.Style
 	Header      lipgloss.Style
 	Footer      lipgloss.Style
 	Key         lipgloss.Style
@@ -60,6 +61,7 @@ func DefaultTheme() Theme {
 		Resolved:    lipgloss.NewStyle().Foreground(faint).Strikethrough(true),
 		Author:      lipgloss.NewStyle().Foreground(grey),
 		Cursor:      lipgloss.NewStyle().Foreground(blue).Bold(true),
+		Selected:    lipgloss.NewStyle().Reverse(true),
 		Header:      lipgloss.NewStyle().Foreground(text).Bold(true),
 		Footer:      lipgloss.NewStyle().Foreground(grey),
 		Key:         lipgloss.NewStyle().Foreground(blue),

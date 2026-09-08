@@ -46,7 +46,8 @@ func (m *Model) View() string {
 
 // frame stacks the header, a body of exactly bodyHeight lines, and the footer.
 func (m *Model) frame(body string) string {
-	return m.headerView() + "\n" + body + "\n" + m.footerView()
+	m.screen = strings.Split(m.headerView()+"\n"+body+"\n"+m.footerView(), "\n")
+	return strings.Join(m.paintDrag(m.screen), "\n")
 }
 
 func (m *Model) bodyHeight() int {
@@ -341,6 +342,7 @@ func (m *Model) helpBindings() []binding {
 		{"e", "edit a comment of your own, where it stands"},
 		{"x / D", "resolve or reopen / delete the comment at the cursor"},
 		{"C", "copy your own comments as text, to paste into an agent"},
+		{"drag", "sweep the mouse over the screen to select text — letting go copies it"},
 		{"A", "hide or show the comments an agent left, leaving your own"},
 		{"X", "delete every agent comment — it asks first"},
 		{"P", "post the review to the pull request: a summary, then approve / request changes / comment"},
