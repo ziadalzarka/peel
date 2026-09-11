@@ -208,3 +208,53 @@ func TestInitStartsTheTimerOnlyWhenFollowing(t *testing.T) {
 		t.Errorf("without follow Init produced %T, want the file read alone", cmd())
 	}
 }
+
+// A follow check reads the repository on its own goroutine, so a key pressed
+// while it is reading leaves it holding a diff from before that press. Applying
+// it afterwards reopens the file `s` has just folded away, which is the one
+// thing a background check must never do.
+func TestAStalePollDoesNotReopenAFileStagedWhileItWasReading(t *testing.T) {
+	_, m := followModel(t)
+
+	// The read lands before the press, the way it does when the poll goroutine
+	// is already in git when `s` is hit.
+	stale := m.pollCmd()()
+	if stale == nil {
+		t.Fatal("the poll produced no message")
+	}
+
+	press(t, m, "s")
+	if !m.doc.Files[0].Collapsed {
+		t.Fatal("`s` did not fold the file it staged")
+	}
+
+	m.Update(stale)
+
+	if !m.doc.Files[0].Collapsed {
+		t.Errorf("a follow check from before the press reopened the staged file: %q", m.status)
+	}
+	if m.doc.Files[0].Entry.Unstaged != nil {
+		t.Error("a follow check from before the press put the change back in the working tree")
+	}
+}
+
+// The guard on a stale check is not a latch: once the press has been read back,
+// the next check is about a repository nothing is mid-write on, and follow mode
+// goes on noticing what changes under the review.
+func TestFollowKeepsWatchingAfterAStage(t *testing.T) {
+	repo, m := followModel(t)
+	press(t, m, "s")
+
+	repo.Write("added.txt", "hello\n")
+	poll(t, m)
+
+	if len(m.doc.Files) != 2 {
+		t.Fatalf("files = %d, want the staged one and the new one", len(m.doc.Files))
+	}
+	if got := body(m); !strings.Contains(got, "added.txt") {
+		t.Errorf("follow stopped noticing new files after a stage:\n%s", got)
+	}
+	if !m.doc.Files[fileIndexOf(t, m, "main.go")].Collapsed {
+		t.Error("a later follow check reopened the staged file")
+	}
+}

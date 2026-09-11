@@ -172,6 +172,11 @@ type Model struct {
 	// yet. The goroutines doing the writing count themselves out of it, so it is
 	// atomic; what it is for is in optimistic.go.
 	writes atomic.Int32
+	// drawn counts every change ever drawn ahead of its write, and only ever goes
+	// up. It dates a background read against the presses around it: a read that
+	// started at one count and comes back at a higher one read the repository
+	// before a change the reviewer can already see.
+	drawn atomic.Int32
 	// writing gates the next write on the one before it, keeping peel's git
 	// calls in the order the keys were pressed.
 	writing chan struct{}
@@ -2186,6 +2191,9 @@ func (m *Model) tickCmd() tea.Cmd {
 // follow check that finds nothing should be invisible.
 func (m *Model) pollCmd() tea.Cmd {
 	backend, ctx := m.backend, m.ctx
+	// Taken here, on the UI goroutine, before the read goes out: what the poll
+	// comes back holding is only as new as the repository was when it started.
+	drawn := m.drawn.Load()
 	return func() tea.Msg {
 		msg := load(ctx, backend, "")
 		loaded, ok := msg.(loadedMsg)
@@ -2194,7 +2202,7 @@ func (m *Model) pollCmd() tea.Cmd {
 			// and there is no point interrupting a review over it.
 			return nil
 		}
-		loaded.poll = true
+		loaded.poll, loaded.drawn = true, drawn
 		return loaded
 	}
 }
@@ -2218,6 +2226,9 @@ type loadedMsg struct {
 	note     string
 	// poll marks a load nobody asked for, which may be dropped.
 	poll bool
+	// drawn is the count of changes drawn when a poll's read went out, so a read
+	// overtaken by a keypress can be told apart from one nothing happened during.
+	drawn int32
 	// reconcile marks the read-back behind a change already on screen. It
 	// confirms what the reviewer is looking at rather than telling them
 	// something, so it moves nothing and says nothing.
@@ -2387,6 +2398,15 @@ func (m *Model) acceptPoll(msg loadedMsg) bool {
 	// A change of the reviewer's own is on screen and still being written: this
 	// poll may have read git before it landed, and would undraw it.
 	if m.writes.Load() > 0 {
+		return false
+	}
+	// The same case a moment later. A press during the read leaves the poll
+	// holding the repository as it was before it — the file `s` has just folded
+	// away still out of the index — and its write has since been read back, so
+	// the count outstanding no longer says so. Whatever this poll would have
+	// found, the read-back behind that press has already brought, and the next
+	// tick brings anything it did not.
+	if msg.drawn != m.drawn.Load() {
 		return false
 	}
 	return fingerprintOf(msg.session) != m.fingerprint

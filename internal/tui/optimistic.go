@@ -16,7 +16,9 @@ package tui
 //     the keys were pressed and never race each other for the index lock.
 //   - A reload that lands while another write is still out is dropped: it read
 //     git before that write, so applying it would undraw a change the reviewer
-//     can already see. The last write of a burst is the one that reconciles.
+//     can already see. The last write of a burst is the one that reconciles. A
+//     follow check is dropped on the wider rule that it started before a change
+//     was pressed at all, since it can outlive the write that overtook it.
 
 import (
 	"context"
@@ -39,6 +41,9 @@ func (m *Model) apply(show func(), op func(context.Context) error) tea.Cmd {
 	show()
 
 	m.writes.Add(1)
+	// Every read already out was asked for before this change existed, and says
+	// so by coming back with the older count.
+	m.drawn.Add(1)
 	wait, done := m.enqueue()
 	writes, backend, ctx := &m.writes, m.backend, m.ctx
 	return func() tea.Msg {
