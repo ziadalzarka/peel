@@ -208,7 +208,8 @@ type buildConfig struct {
 	// expand is the unchanged code read in around the hunks, and the files it
 	// comes out of. Its zero value offers nothing, which is what leaves a diff
 	// peel has no copy of the files for exactly as git printed it.
-	expand Expansion
+	expand       Expansion
+	commentFolds map[string]bool
 }
 
 // BuildOption customises how a document is laid out.
@@ -234,6 +235,10 @@ func WithPaneWidth(w int) BuildOption {
 // hunks, and marks where there is more of it still hidden.
 func WithExpansion(x Expansion) BuildOption {
 	return func(c *buildConfig) { c.expand = x }
+}
+
+func WithCommentFolds(folds map[string]bool) BuildOption {
+	return func(c *buildConfig) { c.commentFolds = folds }
 }
 
 // Document is a session flattened into navigable rows.
@@ -272,7 +277,15 @@ type Document struct {
 	pane int
 	// expand is the code read in around the hunks, kept so the layout can be
 	// worked out one side at a time.
-	expand Expansion
+	expand       Expansion
+	commentFolds map[string]bool
+}
+
+func (d Document) CommentFolded(c store.Comment) bool {
+	if folded, ok := d.commentFolds[c.ID]; ok {
+		return folded
+	}
+	return c.Resolved
 }
 
 // Build flattens a session into rows. collapsed hides a file's body by path.
@@ -282,7 +295,7 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 		opt(&cfg)
 	}
 	doc := Document{Comments: comments, Layout: layout, Draft: cfg.draft, DraftRow: -1,
-		pane: cfg.pane, expand: cfg.expand}
+		pane: cfg.pane, expand: cfg.expand, commentFolds: cfg.commentFolds}
 	if s == nil {
 		return doc
 	}
@@ -517,7 +530,11 @@ func (d *Document) addComments(file, hunk int, ids []int) {
 			Side:    -1,
 			Head:    true,
 		}
-		for _, text := range d.wrapComment(d.Comments[ci], hunk >= 0) {
+		rows := d.wrapComment(d.Comments[ci], hunk >= 0)
+		if d.CommentFolded(d.Comments[ci]) && len(rows) > 1 {
+			rows = []string{rows[0] + " …"}
+		}
+		for _, text := range rows {
 			row.Text = text
 			d.add(row)
 			row.Head = false

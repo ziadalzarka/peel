@@ -131,7 +131,8 @@ type Model struct {
 	// puts the files back in git's order with no commentary between them.
 	walkOn bool
 	// walkFolded hides a step's explanation, by step index.
-	walkFolded map[int]bool
+	walkFolded   map[int]bool
+	commentFolds map[string]bool
 	// walkCode identifies the code the narrative was written about: git diff
 	// HEAD, which reads the same whether a change is staged or not, so staging a
 	// hunk does not date the narrative.
@@ -270,25 +271,26 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 	}
 
 	m := &Model{
-		ctx:         ctx,
-		backend:     backend,
-		session:     session,
-		comments:    comments,
-		collapsed:   map[string]bool{},
-		stagedFolds: map[string]bool{},
-		sideFolds:   map[string]bool{},
-		revealed:    map[ExpandKey]int{},
-		layout:      cfg.layout,
-		theme:       cfg.theme,
-		renderer:    NewRenderer(cfg.theme, cfg.syntax),
-		input:       newInput(cfg.theme),
-		walkFolded:  map[int]bool{},
-		moves:       cfg.moves.OrDefault(),
-		stageMode:   cfg.stageMode.OrDefault(),
-		me:          cfg.me,
-		now:         time.Now,
-		follow:      cfg.follow,
-		pollEvery:   cfg.pollEvery,
+		ctx:          ctx,
+		backend:      backend,
+		session:      session,
+		comments:     comments,
+		collapsed:    map[string]bool{},
+		stagedFolds:  map[string]bool{},
+		sideFolds:    map[string]bool{},
+		revealed:     map[ExpandKey]int{},
+		layout:       cfg.layout,
+		theme:        cfg.theme,
+		renderer:     NewRenderer(cfg.theme, cfg.syntax),
+		input:        newInput(cfg.theme),
+		walkFolded:   map[int]bool{},
+		commentFolds: map[string]bool{},
+		moves:        cfg.moves.OrDefault(),
+		stageMode:    cfg.stageMode.OrDefault(),
+		me:           cfg.me,
+		now:          time.Now,
+		follow:       cfg.follow,
+		pollEvery:    cfg.pollEvery,
 	}
 	if m.pollEvery <= 0 {
 		m.pollEvery = defaultPollEvery
@@ -1954,6 +1956,7 @@ func (m *Model) toggleResolved() tea.Cmd {
 	}
 	return m.apply(func() {
 		m.comments = withResolved(m.comments, c.ID, want)
+		delete(m.commentFolds, c.ID)
 		m.status = done
 		m.relayout()
 	}, func(context.Context) error {
@@ -2550,7 +2553,7 @@ func (m *Model) currentPath() string {
 func (m *Model) rebuild() {
 	m.doc = Build(m.session, m.visibleComments(), m.collapsed, m.layout,
 		WithGroups(m.groups()), WithDraft(m.draft()), WithSideFolds(m.sideFolds),
-		WithPaneWidth(m.diffWidth()), WithExpansion(m.expansion()))
+		WithPaneWidth(m.diffWidth()), WithExpansion(m.expansion()), WithCommentFolds(m.commentFolds))
 	m.fileRows = fileTree(m.doc.Files)
 	if m.cursor >= m.doc.Len() {
 		m.cursor = m.doc.LastStop()
@@ -2607,6 +2610,10 @@ func (m *Model) fileIndex(path string) int {
 // next file with work still out of the index. Opening one again leaves the
 // cursor on it, since that is the file being read.
 func (m *Model) toggleCollapse() {
+	if c, ok := m.doc.CommentAt(m.cursor); ok {
+		m.foldComment(c)
+		return
+	}
 	if step := m.doc.StepAt(m.cursor); step >= 0 {
 		m.foldStep(step)
 		return
@@ -2886,4 +2893,22 @@ func (m *Model) author() store.Author {
 		return m.me
 	}
 	return store.AuthorUser
+}
+
+func (m *Model) foldComment(c store.Comment) {
+	folded := !m.doc.CommentFolded(c)
+	if folded == c.Resolved {
+		delete(m.commentFolds, c.ID)
+	} else {
+		m.commentFolds[c.ID] = folded
+	}
+	m.rebuild()
+	if row := m.doc.RowOfComment(c.ID); row >= 0 {
+		m.moveTo(row)
+	}
+	if folded {
+		m.status = "folded the comment on " + c.Location()
+		return
+	}
+	m.status = "unfolded the comment on " + c.Location()
 }

@@ -123,7 +123,7 @@ repository changes.
 | `h` / `l` | scroll the code sideways, for a line too long for the pane |
 | `0` / `$` | back to the first column / out to the longest line's end |
 | `b` | hide or show the file tree, giving the diff the whole width |
-| `space` | fold away the file, the half already staged, or a walkthrough note — or open it again |
+| `space` | fold away the file, the half already staged, a walkthrough note or a comment — or open it again |
 | `space` on a `▴`/`▾` row | read in twenty more lines of the code the diff left out |
 | `s` | stage the file the cursor is in, folding it away and moving to the next |
 | `S` | switch `s` between the whole file and the hunk the cursor is in |
@@ -136,7 +136,7 @@ repository changes.
 | `c` | comment at the cursor, or on the run of lines marked |
 | `enter` / `shift+enter` | in the editor: save the comment / write another line |
 | `e` | edit a comment of your own, where it stands |
-| `x` / `D` | resolve / delete the comment at the cursor |
+| `x` / `D` | resolve, folding the comment to one line / delete the comment at the cursor |
 | `C` | copy the threads you have an open comment in as text, to paste into an agent |
 | `A` / `X` | hide the comments anyone else left / delete every one of them |
 | `P` | post the review to the pull request: a summary, then approve / request changes / comment |
@@ -191,6 +191,12 @@ a whole, or one whose lines have been rewritten away — is drawn under its file
 with the others in the same position, and there the cursor lands on the next note
 down the stack instead. Working through a file's outdated notes is one key
 pressed over and over, rather than a scroll back up the file between each one.
+
+`x` resolves a note and folds it to its first line, struck through, with `…`
+where there was more — done with, but still on the line it was about, and still
+copied by `C` with the thread it belongs to. `x` again reopens it. `space` on a
+note folds or unfolds that note alone, resolved or not, and never the file it is
+in.
 
 A note can be about more than one line. `shift` with `↓` or `↑` takes the next
 line into a run and carries the cursor with it — reversing the arrow gives a line
