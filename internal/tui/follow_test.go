@@ -355,3 +355,27 @@ func TestFollowKeepsANewAgentCommentHiddenWhileAgentCommentsAreHidden(t *testing
 		t.Errorf("status = %q, want it to say the new comment is hidden", m.status)
 	}
 }
+
+func TestFollowLiftsTheAgentFilterOnceEveryAgentCommentIsGone(t *testing.T) {
+	repo, m := followModel(t)
+	note := leaveNote(t, repo, "first pass")
+	poll(t, m)
+	press(t, m, "A")
+	if !m.agentCommentsOff {
+		t.Fatal("A did not hide the agent's comments")
+	}
+
+	if err := noteStore(t, repo).Remove(note.ID); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	poll(t, m)
+
+	if m.agentCommentsOff {
+		t.Error("agent comments still read as hidden after the agent removed every one of them")
+	}
+	leaveNote(t, repo, "second pass")
+	poll(t, m)
+	if got := body(m); !strings.Contains(got, "second pass") {
+		t.Errorf("a new agent pass stayed behind a filter with nothing left under it:\n%s", got)
+	}
+}

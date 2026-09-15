@@ -2324,6 +2324,9 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 	treeMoved := fingerprint != m.fingerprint
 	m.session = msg.session
 	m.comments = msg.comments
+	if m.agentCommentsOff && len(agentComments(m.comments)) == 0 {
+		m.setAgentCommentsHidden(false)
+	}
 	// The copies the code around the hunks is read out of are left up while the
 	// read that follows this load goes out. Taking them down first would take
 	// every row offering to read more of every file with them — a whole
