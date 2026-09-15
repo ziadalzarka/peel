@@ -220,10 +220,10 @@ type fakeBackend struct {
 	// turned anything up the way the real backend does.
 	handed map[FileSide][]string
 
-	// agentHidden is whether the agent's notes were left out of the diff.
-	agentHidden      bool
-	agentHiddenSaves int
-	agentHiddenErr   error
+	// othersHidden is whether the agent's notes were left out of the diff.
+	othersHidden      bool
+	othersHiddenSaves int
+	othersHiddenErr   error
 
 	added    []store.Comment
 	edited   []edit
@@ -387,16 +387,16 @@ func (f *fakeBackend) SetFolded(paths []string) error {
 	return f.foldSaveErr
 }
 
-func (f *fakeBackend) AgentCommentsHidden() (bool, error) {
-	if f.agentHiddenErr != nil {
-		return false, f.agentHiddenErr
+func (f *fakeBackend) OthersHidden() (bool, error) {
+	if f.othersHiddenErr != nil {
+		return false, f.othersHiddenErr
 	}
-	return f.agentHidden, nil
+	return f.othersHidden, nil
 }
 
-func (f *fakeBackend) SetAgentCommentsHidden(hidden bool) error {
-	f.agentHidden = hidden
-	f.agentHiddenSaves++
+func (f *fakeBackend) SetOthersHidden(hidden bool) error {
+	f.othersHidden = hidden
+	f.othersHiddenSaves++
 	return nil
 }
 

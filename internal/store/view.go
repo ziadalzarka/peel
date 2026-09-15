@@ -12,16 +12,16 @@ import (
 // it the reviewer got: what the diff was filtered down to rather than what has
 // been read. Folds are the other half, and are kept separately.
 type View struct {
-	// AgentCommentsHidden reports whether the agent's notes were taken out of
+	// OthersHidden reports whether everyone else's notes were taken out of
 	// the diff, which `A` does and no write of the store's undoes.
-	AgentCommentsHidden bool `json:"agentCommentsHidden"`
+	OthersHidden bool `json:"agentCommentsHidden"`
 }
 
 // ViewStore remembers how each review was left.
 //
 // A filter over the diff is a decision about what is worth looking at, and that
-// decision outlives the process the way a fold does — reading a diff without an
-// agent's notes today should not put them back tomorrow. It is keyed by target
+// decision outlives the process the way a fold does — reading a diff without other
+// people's notes today should not put them back tomorrow. It is keyed by target
 // so the working tree and a pull request each keep their own.
 type ViewStore interface {
 	Load(target string) (View, error)

@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -36,7 +37,7 @@ func commentList(ctx context.Context, c *CLI, args []string) error {
 	asJSON := fs.Bool("json", false, "emit JSON")
 	file := fs.String("file", "", "only comments on this path")
 	unresolved := fs.Bool("unresolved", false, "only comments not yet resolved")
-	author := fs.String("author", "", "only comments by this author (user or agent)")
+	author := fs.String("author", "", "only comments signed with this name, e.g. claude")
 	allTargets := fs.Bool("all", false, "include every comment in this review's store, whatever its target")
 	if err := parse(fs, args); err != nil {
 		return err
@@ -81,7 +82,7 @@ func commentAdd(ctx context.Context, c *CLI, args []string) error {
 	summary := fs.String("summary", "", "alias for --body")
 	side := fs.String("side", string(store.SideNew), "which side the line is on: new or old")
 	origin := fs.String("origin", "", "which diff the line number is from: index or worktree")
-	author := fs.String("author", string(store.AuthorAgent), "who is writing: user or agent")
+	author := fs.String("author", string(store.AuthorUnknown), "the name the note is signed with, e.g. claude")
 	hunk := fs.String("hunk", "", "hunk id the comment was written against")
 	asJSON := fs.Bool("json", false, "emit the created comment as JSON")
 	if err := parse(fs, args); err != nil {
@@ -199,7 +200,7 @@ func commentClear(ctx context.Context, c *CLI, args []string) error {
 	fs := newFlagSet("comment clear")
 	file := fs.String("file", "", "only clear comments on this path")
 	resolved := fs.Bool("resolved", false, "only clear comments already resolved")
-	author := fs.String("author", "", "only clear comments by this author (user or agent)")
+	author := fs.String("author", "", "only clear comments signed with this name, e.g. claude")
 	allTargets := fs.Bool("all", false, "clear every comment in this review's store, whatever its target")
 	if err := parse(fs, args); err != nil {
 		return err
@@ -236,8 +237,8 @@ func commentClear(ctx context.Context, c *CLI, args []string) error {
 	return a.KeepAnchors(ctx)
 }
 
-// narrowToAuthor restricts a filter to one author, so `--author agent` clears
-// the review an agent left without touching the notes the user wrote. An empty
+// narrowToAuthor restricts a filter to one author, so `--author claude` clears
+// the review claude left without touching the notes anyone else wrote. An empty
 // name leaves the filter alone.
 func narrowToAuthor(filter *store.Filter, name string) error {
 	if name == "" {
@@ -245,7 +246,7 @@ func narrowToAuthor(filter *store.Filter, name string) error {
 	}
 	filter.Author = store.Author(name)
 	if !filter.Author.Valid() {
-		return usageErrorf("unknown author %q; want user or agent", name)
+		return usageErrorf("--author %q is not a name", name)
 	}
 	return nil
 }
@@ -397,6 +398,9 @@ func parseArgs(fs *flag.FlagSet, args []string) ([]string, error) {
 	var positional []string
 	for {
 		if err := fs.Parse(args); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return nil, helpRequested{fs}
+			}
 			return nil, usageErrorf("%s: %v", fs.Name(), err)
 		}
 		rest := fs.Args()

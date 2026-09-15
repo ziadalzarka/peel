@@ -10,7 +10,7 @@ import (
 func TestViewSaveAndLoad(t *testing.T) {
 	s := NewJSONViewStore(filepath.Join(t.TempDir(), "peel", "view.json"))
 
-	if err := s.Save("", View{AgentCommentsHidden: true}); err != nil {
+	if err := s.Save("", View{OthersHidden: true}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 
@@ -18,7 +18,7 @@ func TestViewSaveAndLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if !got.AgentCommentsHidden {
+	if !got.OthersHidden {
 		t.Error("the agent's notes read back as shown, and they were hidden")
 	}
 }
@@ -28,7 +28,7 @@ func TestViewSaveAndLoad(t *testing.T) {
 func TestViewsAreScopedToTheirTarget(t *testing.T) {
 	s := NewJSONViewStore(filepath.Join(t.TempDir(), "view.json"))
 
-	if err := s.Save("github:o/r#412", View{AgentCommentsHidden: true}); err != nil {
+	if err := s.Save("github:o/r#412", View{OthersHidden: true}); err != nil {
 		t.Fatalf("Save pull request: %v", err)
 	}
 
@@ -36,14 +36,14 @@ func TestViewsAreScopedToTheirTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load working tree: %v", err)
 	}
-	if tree.AgentCommentsHidden {
+	if tree.OthersHidden {
 		t.Error("the working tree hid the agent's notes, and only the pull request did")
 	}
 	pr, err := s.Load("github:o/r#412")
 	if err != nil {
 		t.Fatalf("Load pull request: %v", err)
 	}
-	if !pr.AgentCommentsHidden {
+	if !pr.OthersHidden {
 		t.Error("the pull request lost the filter it was left with")
 	}
 }
@@ -76,7 +76,7 @@ func TestViewLoadCorruptFile(t *testing.T) {
 	if got != (View{}) {
 		t.Errorf("Load returned %+v, want the default view", got)
 	}
-	if err := s.Save("", View{AgentCommentsHidden: true}); err != nil {
+	if err := s.Save("", View{OthersHidden: true}); err != nil {
 		t.Fatalf("Save over a corrupt file: %v", err)
 	}
 }
@@ -86,7 +86,7 @@ func TestViewSaveTheDefaultClearsTheTarget(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "view.json")
 	s := NewJSONViewStore(path)
 
-	if err := s.Save("github:o/r#412", View{AgentCommentsHidden: true}); err != nil {
+	if err := s.Save("github:o/r#412", View{OthersHidden: true}); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
 	if err := s.Save("github:o/r#412", View{}); err != nil {

@@ -138,7 +138,7 @@ repository changes.
 | `e` | edit a comment of your own, where it stands |
 | `x` / `D` | resolve / delete the comment at the cursor |
 | `C` | copy the threads you have an open comment in as text, to paste into an agent |
-| `A` / `X` | hide the comments an agent left / delete every one of them |
+| `A` / `X` | hide the comments anyone else left / delete every one of them |
 | `P` | post the review to the pull request: a summary, then approve / request changes / comment |
 | `\` | toggle unified and side-by-side |
 | `w` / `W` | walkthrough on-off / regenerate it |
@@ -182,8 +182,8 @@ enter.
 
 `e` on a note of your own opens the same editor holding what the note says, in
 the note's own place — a comment is corrected where it stands rather than deleted
-and written again. Emptying it does not delete it; `D` is that key. The agent's
-notes are its own: they can be resolved, answered or deleted, not rewritten.
+and written again. Emptying it does not delete it; `D` is that key. Anyone else's
+notes are theirs: they can be resolved, answered or deleted, not rewritten.
 
 `D` leaves the cursor on the code the note was about, so deleting one does not
 cost you your place. A note with no code left to go back to — one on the file as
@@ -211,18 +211,25 @@ which line, so it comes back where you wrote it instead of on the same number in
 the other diff — and what an agent reads, through the skill or through `C`, says
 which copy of the file that number counts against.
 
-A comment says who wrote it: `user:` for yours, `agent:` for one Claude Code left
-through the skill. The two are kept apart because only one of them is yours to
-lose — `A` takes the agent's notes out of the diff and puts them back, a display
+A comment says who wrote it. Yours are signed with your name: `peel.author` from
+git config, or your gh login when that is unset — which peel then saves as
+`peel.author` in your global git config, so gh is asked once. With neither it is
+`$USER`. Set `peel.author` yourself to sign with something else. A note Claude
+Code leaves through the skill says `claude:`, and one added with `peel comment
+add` and no `--author` says `unknown:`. Notes written before peel recorded names
+still say `user:` for yours and `agent:` for an agent's.
+
+Only your own notes are yours to lose, so everyone else's are kept apart — `A`
+takes every note not signed by you out of the diff and puts them back, a display
 change that deletes nothing, and `X` deletes every one of them at once, after
-asking. Neither can reach a note you wrote, and nothing an agent writes replaces
-one: comments are only ever appended.
+asking. Neither can reach a note you wrote, and nothing anyone else writes
+replaces one: comments are only ever appended.
 
 Which of the two `A` was left on is remembered between runs, with the rest of
-that review's state — `.git/peel/view.json` for the working tree — so a diff you read without the agent's
-review does not have it back the next morning. The header says `agent hidden`
-for as long as it is, and a review with no agent notes in it opens plain
-whatever was written down — there is nothing to take out.
+that review's state — `.git/peel/view.json` for the working tree — so a diff you
+read without everyone else's notes does not have them back the next morning. The
+header says `others hidden` for as long as it is, and a review with no notes but
+yours in it opens plain whatever was written down — there is nothing to take out.
 
 ### Opening a file
 
@@ -426,8 +433,8 @@ Code in [`skills/peel-review`](skills/peel-review/SKILL.md).
 peel hunks list --json                  # what changed, and what is staged
 peel --rev HEAD~2 hunks list --json     # the same, measured from an older base
 peel comment list --json                # what the user wrote while reading
-peel comment add --file F --line N --body "..."
-peel comment clear --author agent       # its own review, never the user's
+peel comment add --file F --line N --body "..." --author claude
+peel comment clear --author claude      # its own review, never the user's
 peel walkthrough                        # the cached narrative, as markdown
 ```
 
@@ -451,10 +458,10 @@ For an agent that cannot read that file — a browser tab, or one on another
 machine — `C` puts the review on the clipboard as text to paste into it: one
 block per commented line, naming the file and line once, then every note left
 there in the order it was written, each saying who wrote it. A line's thread is
-copied when it holds an open note of *yours*, and then copied whole: the agent's
-notes in it come along, and so do the notes resolved with `x`, marked
+copied when it holds an open note of *yours*, and then copied whole: everyone
+else's notes in it come along, and so do the notes resolved with `x`, marked
 `(resolved)` so they are not done twice. A thread with no open note of yours is
-left out, hidden or not — one only an agent wrote in, or one whose notes of yours
+left out, hidden or not — one only others wrote in, or one whose notes of yours
 are all resolved — and the footer says how many resolved notes stayed behind.
 Copying needs a clipboard tool on `PATH` — `pbcopy`, `wl-copy`, `xclip`, `xsel`
 or `clip.exe`.

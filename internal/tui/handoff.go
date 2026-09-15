@@ -48,7 +48,7 @@ func threadKeyOf(c store.Comment) threadKey {
 	}
 }
 
-func reviewThreads(comments []store.Comment) (copied []thread, resolvedLeftOut int) {
+func reviewThreads(comments []store.Comment, me store.Author) (copied []thread, resolvedLeftOut int) {
 	var all []thread
 	at := map[threadKey]int{}
 	for _, c := range comments {
@@ -62,12 +62,12 @@ func reviewThreads(comments []store.Comment) (copied []thread, resolvedLeftOut i
 		all[i].notes = append(all[i].notes, c)
 	}
 	for _, t := range all {
-		if t.hasOpenUserNote() {
+		if t.hasOpenNoteOf(me) {
 			copied = append(copied, t)
 			continue
 		}
 		for _, c := range t.notes {
-			if c.Author != store.AuthorAgent && c.Resolved {
+			if c.Author.Mine(me) && c.Resolved {
 				resolvedLeftOut++
 			}
 		}
@@ -75,9 +75,9 @@ func reviewThreads(comments []store.Comment) (copied []thread, resolvedLeftOut i
 	return inReadingOrder(copied), resolvedLeftOut
 }
 
-func (t thread) hasOpenUserNote() bool {
+func (t thread) hasOpenNoteOf(me store.Author) bool {
 	for _, c := range t.notes {
-		if c.Author != store.AuthorAgent && !c.Resolved {
+		if c.Author.Mine(me) && !c.Resolved {
 			return true
 		}
 	}

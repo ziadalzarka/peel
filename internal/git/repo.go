@@ -98,6 +98,14 @@ func (r *Repo) ConfigSection(ctx context.Context, section string) (map[string]st
 	return out, nil
 }
 
+func (r *Repo) SetGlobalConfig(ctx context.Context, key, value string) error {
+	args := []string{"config", "--global", key, value}
+	if _, err := r.runner.Run(ctx, exec.Command{Name: "git", Args: args, Dir: r.dir}); err != nil {
+		return fmt.Errorf("git config --global %s: %w", key, err)
+	}
+	return nil
+}
+
 // Unstaged returns changes between the index and the working tree — what
 // staging moves into the index.
 func (r *Repo) Unstaged(ctx context.Context) (Diff, error) {

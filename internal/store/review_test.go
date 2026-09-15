@@ -35,7 +35,7 @@ func TestReviewStoreHoldsEveryPartOfOneReview(t *testing.T) {
 	if err := s.Folds().Save(testTarget, []string{"z.go", "a.go"}); err != nil {
 		t.Fatalf("Save folds: %v", err)
 	}
-	if err := s.Views().Save(testTarget, View{AgentCommentsHidden: true}); err != nil {
+	if err := s.Views().Save(testTarget, View{OthersHidden: true}); err != nil {
 		t.Fatalf("Save view: %v", err)
 	}
 	if err := s.Walkthroughs().Save(Walkthrough{Target: testTarget, Fingerprint: "abc", Body: "## 1. It"}); err != nil {
@@ -66,7 +66,7 @@ func TestReviewStoreHoldsEveryPartOfOneReview(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load view: %v", err)
 	}
-	if !view.AgentCommentsHidden {
+	if !view.OthersHidden {
 		t.Error("the view did not survive the writes beside it")
 	}
 

@@ -86,7 +86,7 @@ func TestAPullRequestReviewIsReadableFromAnotherCheckout(t *testing.T) {
 	if err := state.Folds.Save(s.Target, []string{"pr.go"}); err != nil {
 		t.Fatalf("Save folds: %v", err)
 	}
-	if err := state.Views.Save(s.Target, store.View{AgentCommentsHidden: true}); err != nil {
+	if err := state.Views.Save(s.Target, store.View{OthersHidden: true}); err != nil {
 		t.Fatalf("Save view: %v", err)
 	}
 	if _, err := f.app.Walkthrough(f.ctx, s, app.WalkthroughRequest{}); err != nil {
@@ -112,7 +112,7 @@ func TestAPullRequestReviewIsReadableFromAnotherCheckout(t *testing.T) {
 	if folded, _ := read.Folds.Load(other.Target); len(folded) != 1 || folded[0] != "pr.go" {
 		t.Errorf("folds read elsewhere = %v", folded)
 	}
-	if view, _ := read.Views.Load(other.Target); !view.AgentCommentsHidden {
+	if view, _ := read.Views.Load(other.Target); !view.OthersHidden {
 		t.Error("the view did not travel with the review")
 	}
 	if _, err := elsewhere.app.Walkthrough(elsewhere.ctx, other, app.WalkthroughRequest{}); err != nil {

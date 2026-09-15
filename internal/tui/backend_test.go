@@ -160,31 +160,31 @@ func TestBackendRefusesToStageAReadOnlySession(t *testing.T) {
 func TestBackendRemembersHiddenAgentComments(t *testing.T) {
 	a, session, backend := openBackend(t)
 
-	hidden, err := backend.AgentCommentsHidden()
+	hidden, err := backend.OthersHidden()
 	if err != nil {
-		t.Fatalf("AgentCommentsHidden: %v", err)
+		t.Fatalf("OthersHidden: %v", err)
 	}
 	if hidden {
 		t.Fatal("a review nobody has filtered opens with the agent's notes hidden")
 	}
 
-	if err := backend.SetAgentCommentsHidden(true); err != nil {
-		t.Fatalf("SetAgentCommentsHidden: %v", err)
+	if err := backend.SetOthersHidden(true); err != nil {
+		t.Fatalf("SetOthersHidden: %v", err)
 	}
 
 	again := tui.NewBackend(a, session)
-	hidden, err = again.AgentCommentsHidden()
+	hidden, err = again.OthersHidden()
 	if err != nil {
-		t.Fatalf("AgentCommentsHidden: %v", err)
+		t.Fatalf("OthersHidden: %v", err)
 	}
 	if !hidden {
 		t.Error("the working tree opened showing notes it was left without")
 	}
 
 	pr := tui.NewBackend(a, &app.Session{Target: "github:cli/cli#412", Title: "pr"})
-	hidden, err = pr.AgentCommentsHidden()
+	hidden, err = pr.OthersHidden()
 	if err != nil {
-		t.Fatalf("AgentCommentsHidden: %v", err)
+		t.Fatalf("OthersHidden: %v", err)
 	}
 	if hidden {
 		t.Error("the working tree's filter reached a pull request")

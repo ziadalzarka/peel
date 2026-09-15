@@ -234,3 +234,14 @@ func (p *GitHubProvider) SubmitReview(ctx context.Context, ref Ref, review Revie
 	}
 	return nil
 }
+
+func (p *GitHubProvider) Login(ctx context.Context) (string, error) {
+	res, err := p.runner.Run(ctx, exec.Command{
+		Name: p.binary,
+		Args: []string{"api", "user", "--jq", ".login"},
+	})
+	if err != nil {
+		return "", fmt.Errorf("read the gh login: %w", err)
+	}
+	return strings.TrimSpace(string(res.Stdout)), nil
+}

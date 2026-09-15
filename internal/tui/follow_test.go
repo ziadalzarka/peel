@@ -341,7 +341,7 @@ func TestFollowKeepsANewAgentCommentHiddenWhileAgentCommentsAreHidden(t *testing
 	leaveNote(t, repo, "first pass")
 	poll(t, m)
 	press(t, m, "A")
-	if !m.agentCommentsOff {
+	if !m.othersHidden {
 		t.Fatal("A did not hide the agent's comments")
 	}
 
@@ -361,7 +361,7 @@ func TestFollowLiftsTheAgentFilterOnceEveryAgentCommentIsGone(t *testing.T) {
 	note := leaveNote(t, repo, "first pass")
 	poll(t, m)
 	press(t, m, "A")
-	if !m.agentCommentsOff {
+	if !m.othersHidden {
 		t.Fatal("A did not hide the agent's comments")
 	}
 
@@ -370,7 +370,7 @@ func TestFollowLiftsTheAgentFilterOnceEveryAgentCommentIsGone(t *testing.T) {
 	}
 	poll(t, m)
 
-	if m.agentCommentsOff {
+	if m.othersHidden {
 		t.Error("agent comments still read as hidden after the agent removed every one of them")
 	}
 	leaveNote(t, repo, "second pass")

@@ -79,6 +79,16 @@ func usageErrorf(format string, args ...any) error {
 	return errUsage{fmt.Errorf(format, args...)}
 }
 
+type helpRequested struct{ fs *flag.FlagSet }
+
+func (h helpRequested) Error() string { return h.fs.Name() + ": help requested" }
+
+func (h helpRequested) print(w io.Writer) {
+	fmt.Fprintf(w, "Usage: peel %s [flags]\n\nFlags:\n", h.fs.Name())
+	h.fs.SetOutput(w)
+	h.fs.PrintDefaults()
+}
+
 // commands is the dispatch table. Order here is the order in help.
 func commands() []command {
 	return []command{
@@ -167,6 +177,11 @@ func (c *CLI) applyDefaults() {
 // report prints an error and maps it to an exit code.
 func (c *CLI) report(err error) int {
 	if err == nil {
+		return 0
+	}
+	var help helpRequested
+	if errors.As(err, &help) {
+		help.print(c.Stdout)
 		return 0
 	}
 	fmt.Fprintf(c.Stderr, "peel: %v\n", err)
@@ -297,6 +312,11 @@ Flags:
   --split          start in the side-by-side layout
   --version        print the version and exit
   -h, --help       show this help
+
+Comments are signed with a name. The review UI signs yours with git config
+peel.author, or your gh login when that is unset. On the command line pass
+--author, e.g. peel comment add --author claude; without it a note is signed
+unknown. peel comment add -h lists every flag.
 
 Staging is available in the review UI, not on the command line: peel does not
 expose index writes to scripts or agents, which can already run git add.

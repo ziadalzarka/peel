@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // Side names which version of a file a comment is anchored to.
@@ -40,18 +41,28 @@ const (
 // Valid reports whether o is a recognised origin.
 func (o Origin) Valid() bool { return o == OriginIndex || o == OriginWorktree }
 
-// Author distinguishes notes the user wrote from notes an agent left.
+// Author is the name a note is signed with: the reviewer's own, a tool's such as
+// claude, or a pull request reviewer's login.
 type Author string
 
 const (
-	// AuthorUser marks a comment written by the person reviewing.
+	// AuthorUser is what the reviewer's own notes were signed with before notes
+	// carried a name, and is still read as the reviewer's.
 	AuthorUser Author = "user"
-	// AuthorAgent marks a comment written by Claude Code or another tool.
-	AuthorAgent Author = "agent"
+	// AuthorAgent is what an agent's notes were signed with before notes carried
+	// a name.
+	AuthorAgent   Author = "agent"
+	AuthorUnknown Author = "unknown"
 )
 
-// Valid reports whether a is a recognised author.
-func (a Author) Valid() bool { return a == AuthorUser || a == AuthorAgent }
+func (a Author) Valid() bool {
+	name := string(a)
+	return strings.TrimSpace(name) == name && name != "" && !strings.ContainsFunc(name, unicode.IsControl)
+}
+
+func (a Author) Mine(me Author) bool {
+	return a == "" || a == AuthorUser || (me != "" && a == me)
+}
 
 // Comment is one inline review note.
 type Comment struct {
@@ -131,7 +142,7 @@ func (c Comment) Validate() error {
 		return fmt.Errorf("comment: unknown origin %q", c.Origin)
 	}
 	if c.Author != "" && !c.Author.Valid() {
-		return fmt.Errorf("comment: unknown author %q", c.Author)
+		return fmt.Errorf("comment: author %q is not a name", c.Author)
 	}
 	return nil
 }
@@ -219,7 +230,7 @@ func prepareComment(c Comment, p params) (Comment, error) {
 		c.Side = SideNew
 	}
 	if c.Author == "" {
-		c.Author = AuthorUser
+		c.Author = AuthorUnknown
 	}
 	if c.CreatedAt.IsZero() {
 		c.CreatedAt = p.now().UTC()

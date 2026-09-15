@@ -104,10 +104,10 @@ func (m *Model) headerView() string {
 	if m.follow {
 		right = append([]string{m.theme.Status.Render("following")}, right...)
 	}
-	// Hidden notes are said to be hidden, so a diff the agent has commented on
+	// Hidden notes are said to be hidden, so a diff someone else has commented on
 	// does not read as one it has not.
-	if m.agentCommentsOff {
-		right = append([]string{m.theme.Partial.Render("agent hidden")}, right...)
+	if m.othersHidden {
+		right = append([]string{m.theme.Partial.Render("others hidden")}, right...)
 	}
 	if n := len(m.visibleComments()); n > 0 {
 		right = append([]string{m.theme.Comment.Render(plural(n, "comment"))}, right...)
@@ -343,8 +343,8 @@ func (m *Model) helpBindings() []binding {
 		{"x / D", "resolve or reopen / delete the comment at the cursor"},
 		{"C", "copy the threads you have an open comment in as text, to paste into an agent"},
 		{"drag", "sweep the mouse over the screen to select text — letting go copies it"},
-		{"A", "hide or show the comments an agent left, leaving your own"},
-		{"X", "delete every agent comment — it asks first"},
+		{"A", "hide or show the comments anyone else left, leaving your own"},
+		{"X", "delete every comment anyone else left — it asks first"},
 		{"P", "post the review to the pull request: a summary, then approve / request changes / comment"},
 		{`\`, "toggle unified and side-by-side"},
 		{"w", "walkthrough: group the diff into steps, with a note before each"},

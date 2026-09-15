@@ -448,17 +448,15 @@ func TestCommentAddReadsStdin(t *testing.T) {
 	}
 }
 
-func TestCommentAddDefaultsToAgentAuthor(t *testing.T) {
-	// The CLI is what an agent drives, so its notes are attributed to the agent
-	// unless it says otherwise.
+func TestCommentAddWithoutAnAuthorIsSignedUnknown(t *testing.T) {
 	h := newHarness(t)
 	h.dirty()
 	h.mustRun("comment", "add", "--file", "a.txt", "--line", "1", "--body", "x")
 
 	var got []map[string]any
 	mustJSON(t, h.mustRun("comment", "list", "--json"), &got)
-	if got[0]["author"] != "agent" {
-		t.Errorf("author = %v, want agent", got[0]["author"])
+	if got[0]["author"] != "unknown" {
+		t.Errorf("author = %v, want unknown", got[0]["author"])
 	}
 }
 
@@ -526,7 +524,7 @@ func TestCommentListFilters(t *testing.T) {
 func TestCommentListRejectsBadAuthor(t *testing.T) {
 	h := newHarness(t)
 	h.dirty()
-	if code := h.run("comment", "list", "--author", "robot"); code != 2 {
+	if code := h.run("comment", "list", "--author", " claude"); code != 2 {
 		t.Errorf("exit code = %d, want 2", code)
 	}
 }
@@ -624,9 +622,9 @@ func TestCommentClearByAuthorLeavesTheUsersNotes(t *testing.T) {
 	h := newHarness(t)
 	h.dirty()
 	h.mustRun("comment", "add", "--file", "a.txt", "--line", "1", "--body", "mine", "--author", "user")
-	h.mustRun("comment", "add", "--file", "a.txt", "--line", "2", "--body", "theirs")
+	h.mustRun("comment", "add", "--file", "a.txt", "--line", "2", "--body", "theirs", "--author", "claude")
 
-	if got := h.mustRun("comment", "clear", "--author", "agent"); !strings.Contains(got, "1 comment") {
+	if got := h.mustRun("comment", "clear", "--author", "claude"); !strings.Contains(got, "1 comment") {
 		t.Errorf("clear output = %q", got)
 	}
 
@@ -637,13 +635,13 @@ func TestCommentClearByAuthorLeavesTheUsersNotes(t *testing.T) {
 	}
 }
 
-func TestCommentClearRejectsAnUnknownAuthor(t *testing.T) {
+func TestCommentClearRejectsAnAuthorThatIsNotAName(t *testing.T) {
 	h := newHarness(t)
 	h.dirty()
-	if code := h.run("comment", "clear", "--author", "robot"); code != 2 {
+	if code := h.run("comment", "clear", "--author", " claude"); code != 2 {
 		t.Errorf("exit code = %d, want 2 — %s", code, h.err())
 	}
-	if !strings.Contains(h.err(), "want user or agent") {
+	if !strings.Contains(h.err(), "is not a name") {
 		t.Errorf("stderr = %q", h.err())
 	}
 }
@@ -1216,5 +1214,35 @@ func TestCommentRejectsAnUnknownOrigin(t *testing.T) {
 	h.dirty()
 	if code := h.run("comment", "add", "--file", "a.txt", "--line", "2", "--body", "x", "--origin", "elsewhere"); code == 0 {
 		t.Fatal("an unknown origin was accepted")
+	}
+}
+
+func TestCommentAddHelpNamesTheAuthorFlag(t *testing.T) {
+	h := newHarness(t)
+	if code := h.run("comment", "add", "-h"); code != 0 {
+		t.Fatalf("exit code = %d, want 0 — %s", code, h.err())
+	}
+	if !strings.Contains(h.out(), "-author") || !strings.Contains(h.out(), "claude") {
+		t.Errorf("help = %q, want --author and an example name in it", h.out())
+	}
+}
+
+func TestUsageSaysCommentsAreSignedWithAuthor(t *testing.T) {
+	h := newHarness(t)
+	if got := h.mustRun("--help"); !strings.Contains(got, "--author") {
+		t.Errorf("usage = %q, want it to name --author", got)
+	}
+}
+
+func TestCommentAddSignsTheNoteWithTheNameGiven(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+	h.mustRun("comment", "add", "--file", "a.txt", "--line", "1", "--body", "x", "--author", "claude")
+	h.mustRun("comment", "add", "--file", "a.txt", "--line", "2", "--body", "y", "--author", "ziadalzarka")
+
+	var got []map[string]any
+	mustJSON(t, h.mustRun("comment", "list", "--json", "--author", "claude"), &got)
+	if len(got) != 1 || got[0]["author"] != "claude" || got[0]["body"] != "x" {
+		t.Errorf("comments by claude = %v, want the one claude signed", got)
 	}
 }

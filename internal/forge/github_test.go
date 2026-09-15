@@ -350,3 +350,23 @@ func TestReviewEventValid(t *testing.T) {
 }
 
 var _ Provider = (*GitHubProvider)(nil)
+
+func TestLoginAsksGhWhoIsSignedIn(t *testing.T) {
+	runner := exec.NewFakeRunner().Respond("gh api user", "octocat\n")
+
+	got, err := newGitHub(runner).Login(context.Background())
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if got != "octocat" {
+		t.Errorf("Login = %q, want octocat", got)
+	}
+}
+
+func TestLoginReportsAGhThatIsNotSignedIn(t *testing.T) {
+	runner := exec.NewFakeRunner().RespondErr("gh api user", "gh auth login", 4)
+
+	if _, err := newGitHub(runner).Login(context.Background()); err == nil {
+		t.Fatal("Login succeeded with gh signed out")
+	}
+}

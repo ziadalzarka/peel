@@ -46,12 +46,13 @@ type Model struct {
 
 	session  *app.Session
 	comments []store.Comment
-	// agentCommentsOff keeps the agent's notes out of the diff, leaving the
+	// othersHidden keeps the notes anyone else signed out of the diff, leaving the
 	// reviewer's own. It is a display change and nothing else: what is hidden is
 	// still in the store, and `A` puts it back.
-	agentCommentsOff bool
-	doc              Document
-	collapsed        map[string]bool
+	othersHidden bool
+	me           store.Author
+	doc          Document
+	collapsed    map[string]bool
 	// stagedFolds are the files folded away because they were staged, as opposed
 	// to put away by hand. A change arriving in one of those is unreviewed work
 	// in a file the reviewer was finished with, so it opens again; a file folded
@@ -219,6 +220,7 @@ type options struct {
 	provider  string
 	moves     app.Moves
 	stageMode app.StageMode
+	me        store.Author
 }
 
 // Option customises a Model.
@@ -258,6 +260,8 @@ func WithMoves(m app.Moves) Option { return func(o *options) { o.moves = m } }
 // cursor is in, or the one hunk it is in.
 func WithStageMode(m app.StageMode) Option { return func(o *options) { o.stageMode = m } }
 
+func WithAuthor(name store.Author) Option { return func(o *options) { o.me = name } }
+
 // New builds the review UI for a session and the comments already on it.
 func New(ctx context.Context, backend Backend, session *app.Session, comments []store.Comment, opts ...Option) *Model {
 	cfg := options{theme: DefaultTheme(), syntax: NewHighlighter(), width: 100, height: 30}
@@ -281,6 +285,7 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 		walkFolded:  map[int]bool{},
 		moves:       cfg.moves.OrDefault(),
 		stageMode:   cfg.stageMode.OrDefault(),
+		me:          cfg.me,
 		now:         time.Now,
 		follow:      cfg.follow,
 		pollEvery:   cfg.pollEvery,
@@ -290,7 +295,7 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 	}
 	m.fingerprint = fingerprintOf(session)
 	m.restoreFolds()
-	m.restoreAgentComments()
+	m.restoreOthersHidden()
 	m.resize(cfg.width, cfg.height)
 	m.rebuild()
 	m.cursor = m.doc.FirstStop()
@@ -323,21 +328,21 @@ func (m *Model) restoreFolds() {
 	}
 }
 
-// restoreAgentComments opens the review with the agent's notes hidden if that
+// restoreOthersHidden opens the review with everyone else's notes hidden if that
 // is how it was last left, so a diff read without them stays that way rather
 // than putting a review back that has been dealt with already.
 //
-// A review with no agent notes in it opens showing them whatever was written
+// A review with nobody else's notes in it opens showing them whatever was written
 // down. There is nothing to take out, and `A` says so rather than lifting a
 // filter, so honouring one here would leave a header claiming notes are hidden
 // and no key to disagree with it.
-func (m *Model) restoreAgentComments() {
-	hidden, err := m.backend.AgentCommentsHidden()
+func (m *Model) restoreOthersHidden() {
+	hidden, err := m.backend.OthersHidden()
 	if err != nil {
 		m.err = err
 		return
 	}
-	m.agentCommentsOff = hidden && len(agentComments(m.comments)) > 0
+	m.othersHidden = hidden && len(m.others(m.comments)) > 0
 }
 
 // draftMinHeight and draftMaxHeight bound the inline editor. It opens small, so
@@ -716,9 +721,9 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 	case "C":
 		return m.copyComments()
 	case "A":
-		m.toggleAgentComments()
+		m.toggleOthers()
 	case "X":
-		m.askClearAgentComments()
+		m.askClearOthers()
 	case "P":
 		m.openReview()
 	case `\`:
@@ -1619,18 +1624,18 @@ func (m *Model) openComment() {
 // editComment opens the editor on the note at the cursor, holding what it says,
 // so a note is corrected where it stands rather than deleted and written again.
 //
-// Only the reviewer's own. An agent's note is signed by the agent, and rewriting
-// one would put the reviewer's words behind that name — where `C` would then
-// leave them out of the review it hands over, and `X` would clear them with the
-// rest of the agent's pass. What to do with a note of the agent's is answer it,
-// resolve it or delete it.
+// Only the reviewer's own. Anyone else's note is signed with their name, and
+// rewriting one would put the reviewer's words behind that name — where `C` would
+// then leave them out of the review it hands over, and `X` would clear them with
+// everyone else's. What to do with someone else's note is answer it, resolve it
+// or delete it.
 func (m *Model) editComment() {
 	c, ok := m.commentAtCursor("edit")
 	if !ok {
 		return
 	}
-	if c.Author == store.AuthorAgent {
-		m.status = "that note is the agent's — x resolves it, D deletes it"
+	if !c.Author.Mine(m.me) {
+		m.status = "that note is " + string(c.Author) + "'s — x resolves it, D deletes it"
 		return
 	}
 	m.openEditor(anchor{path: c.File, line: c.Line, end: c.EndLine, side: sideOr(c.Side),
@@ -1889,7 +1894,7 @@ func (m *Model) submitComment() tea.Cmd {
 		Origin:  got.origin,
 		Body:    body,
 		Hunk:    got.hunk,
-		Author:  store.AuthorUser,
+		Author:  m.author(),
 	}
 	// The note takes its place in the diff on the keypress, under the code it was
 	// written about, with the cursor left on that code: writing a note is not
@@ -1974,21 +1979,21 @@ func (m *Model) deleteComment() tea.Cmd {
 //
 // An agent working in this repository reads the store instead, so what this is
 // for is the one that cannot: a browser tab, or another machine. What it hands
-// over is every thread the person still has an open note in, with the agent's
-// notes and the resolved ones in that thread alongside. A thread with no open
+// over is every thread the person still has an open note in, with everyone
+// else's notes and the resolved ones in that thread alongside. A thread with no open
 // note of the person's own stays behind.
 //
 // Nothing about the review changes, so there is nothing to queue: the copy is
 // reported as done straight away, and only comes back if there was nothing on
 // PATH to copy with.
 func (m *Model) copyComments() tea.Cmd {
-	threads, resolved := reviewThreads(m.comments)
+	threads, resolved := reviewThreads(m.comments, m.me)
 	if len(threads) == 0 {
 		switch {
 		case resolved > 0:
 			m.status = "every comment of your own is resolved — nothing to copy"
-		case len(agentComments(m.comments)) > 0:
-			m.status = "no comments of your own to copy — the agent's are left out"
+		case len(m.others(m.comments)) > 0:
+			m.status = "no comments of your own to copy — the rest are left out"
 		default:
 			m.status = "no comments to copy"
 		}
@@ -2010,65 +2015,65 @@ func (m *Model) copyComments() tea.Cmd {
 	}
 }
 
-// toggleAgentComments takes the agent's notes out of the diff, or puts them
+// toggleOthers takes everyone else's notes out of the diff, or puts them
 // back — for reading the code without a review that has already been read
 // sitting in it. Nothing is written: `X` is the one that deletes.
-func (m *Model) toggleAgentComments() {
-	n := len(agentComments(m.comments))
+func (m *Model) toggleOthers() {
+	n := len(m.others(m.comments))
 	if n == 0 {
-		m.status = "no agent comments"
+		m.status = "no comments by others"
 		return
 	}
-	m.setAgentCommentsHidden(!m.agentCommentsOff)
+	m.setOthersHidden(!m.othersHidden)
 	m.relayout()
-	if m.agentCommentsOff {
-		m.status = plural(n, "agent comment") + " hidden"
+	if m.othersHidden {
+		m.status = plural(n, "comment") + " by others hidden"
 		return
 	}
-	m.status = plural(n, "agent comment") + " shown"
+	m.status = plural(n, "comment") + " by others shown"
 }
 
-// setAgentCommentsHidden takes the agent's notes out of the diff or puts them
+// setOthersHidden takes everyone else's notes out of the diff or puts them
 // back. It is the only place that changes, so it is also where the choice is
 // written down for the next reading of this review.
 //
 // A choice that fails to persist is worth saying but not worth undoing, the way
 // a fold is: the diff on screen is the one that was asked for either way.
-func (m *Model) setAgentCommentsHidden(hidden bool) {
-	if m.agentCommentsOff == hidden {
+func (m *Model) setOthersHidden(hidden bool) {
+	if m.othersHidden == hidden {
 		return
 	}
-	m.agentCommentsOff = hidden
-	if err := m.backend.SetAgentCommentsHidden(hidden); err != nil {
+	m.othersHidden = hidden
+	if err := m.backend.SetOthersHidden(hidden); err != nil {
 		m.err = err
 	}
 }
 
-// askClearAgentComments puts the deletion to the reviewer before doing it. One
+// askClearOthers puts the deletion to the reviewer before doing it. One
 // comment deleted by mistake is a comment to write again; a whole review is
 // not, so `X` asks and `D` does not.
-func (m *Model) askClearAgentComments() {
-	ids := savedIDs(agentComments(m.comments))
+func (m *Model) askClearOthers() {
+	ids := savedIDs(m.others(m.comments))
 	if len(ids) == 0 {
-		m.status = "no agent comments to delete"
+		m.status = "no comments by others to delete"
 		return
 	}
 	m.mode = modeConfirm
 	m.ask = &confirm{
-		question: "delete " + plural(len(ids), "agent comment") + "?",
-		yes:      func() tea.Cmd { return m.clearAgentComments(ids) },
+		question: "delete " + plural(len(ids), "comment") + " by others?",
+		yes:      func() tea.Cmd { return m.clearOthers(ids) },
 	}
 }
 
-// clearAgentComments removes the agent's notes, a store call each behind a
+// clearOthers removes everyone else's notes, a store call each behind a
 // single change on screen. Hiding them again would say nothing once they are
 // gone, so the filter comes off with them.
-func (m *Model) clearAgentComments(ids []string) tea.Cmd {
+func (m *Model) clearOthers(ids []string) tea.Cmd {
 	backend := m.backend
 	return m.apply(func() {
 		m.comments = withoutComments(m.comments, ids)
-		m.setAgentCommentsHidden(false)
-		m.status = "deleted " + plural(len(ids), "agent comment")
+		m.setOthersHidden(false)
+		m.status = "deleted " + plural(len(ids), "comment") + " by others"
 		m.relayout()
 	}, func(ctx context.Context) error {
 		for _, id := range ids {
@@ -2080,24 +2085,24 @@ func (m *Model) clearAgentComments(ids []string) tea.Cmd {
 	})
 }
 
-// agentComments picks out the notes an agent left. A comment written here is
-// the reviewer's own, so `A` and `X` never reach one.
-func agentComments(comments []store.Comment) []store.Comment {
+// others picks out the notes signed by anyone but the reviewer. A comment
+// written here is the reviewer's own, so `A` and `X` never reach one.
+func (m *Model) others(comments []store.Comment) []store.Comment {
 	out := make([]store.Comment, 0, len(comments))
 	for _, c := range comments {
-		if c.Author == store.AuthorAgent {
+		if !c.Author.Mine(m.me) {
 			out = append(out, c)
 		}
 	}
 	return out
 }
 
-// userComments picks out the reviewer's own notes — what is left on screen once
+// own picks out the reviewer's own notes — what is left on screen once
 // `A` hides the rest.
-func userComments(comments []store.Comment) []store.Comment {
+func (m *Model) own(comments []store.Comment) []store.Comment {
 	out := make([]store.Comment, 0, len(comments))
 	for _, c := range comments {
-		if c.Author != store.AuthorAgent {
+		if c.Author.Mine(m.me) {
 			out = append(out, c)
 		}
 	}
@@ -2105,12 +2110,12 @@ func userComments(comments []store.Comment) []store.Comment {
 }
 
 // visibleComments is the list the document is built from: all of them, until
-// the agent's are hidden.
+// everyone else's are hidden.
 func (m *Model) visibleComments() []store.Comment {
-	if !m.agentCommentsOff {
+	if !m.othersHidden {
 		return m.comments
 	}
-	return userComments(m.comments)
+	return m.own(m.comments)
 }
 
 // savedIDs collects the ids of comments the store knows about, leaving out any
@@ -2324,8 +2329,8 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 	treeMoved := fingerprint != m.fingerprint
 	m.session = msg.session
 	m.comments = msg.comments
-	if m.agentCommentsOff && len(agentComments(m.comments)) == 0 {
-		m.setAgentCommentsHidden(false)
+	if m.othersHidden && len(m.others(m.comments)) == 0 {
+		m.setOthersHidden(false)
 	}
 	// The copies the code around the hunks is read out of are left up while the
 	// read that follows this load goes out. Taking them down first would take
@@ -2426,8 +2431,8 @@ func (m *Model) pollNote(treeMoved bool, before []store.Comment) string {
 		return "reloaded — the comments changed"
 	}
 	note := plural(len(arrived), "new comment")
-	if m.agentCommentsOff && len(agentComments(arrived)) > 0 {
-		note += " — agent comments are hidden, A shows them"
+	if m.othersHidden && len(m.others(arrived)) > 0 {
+		note += " — comments by others are hidden, A shows them"
 	}
 	return note
 }
@@ -2874,4 +2879,11 @@ func (m *Model) resize(width, height int) {
 	m.ensureVisible(m.cursor)
 	m.ensureFileVisible()
 	m.revealDraft()
+}
+
+func (m *Model) author() store.Author {
+	if m.me.Valid() {
+		return m.me
+	}
+	return store.AuthorUser
 }

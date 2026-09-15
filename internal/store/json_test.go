@@ -45,8 +45,8 @@ func TestAddAndList(t *testing.T) {
 	if got.Side != SideNew {
 		t.Errorf("Side = %q, want new by default", got.Side)
 	}
-	if got.Author != AuthorUser {
-		t.Errorf("Author = %q, want user by default", got.Author)
+	if got.Author != AuthorUnknown {
+		t.Errorf("Author = %q, want unknown by default", got.Author)
 	}
 	if got.CreatedAt.IsZero() {
 		t.Error("Add did not set CreatedAt")
@@ -87,7 +87,8 @@ func TestAddValidation(t *testing.T) {
 		{"negative line", Comment{File: "f.go", Body: "x", Line: -1}},
 		{"bad side", Comment{File: "f.go", Body: "x", Side: "sideways"}},
 		{"bad origin", Comment{File: "f.go", Body: "x", Origin: "somewhere"}},
-		{"bad author", Comment{File: "f.go", Body: "x", Author: "robot"}},
+		{"author with a newline", Comment{File: "f.go", Body: "x", Author: "two\nlines"}},
+		{"author padded with spaces", Comment{File: "f.go", Body: "x", Author: " claude"}},
 	}
 
 	s := newTestStore(t)
@@ -456,4 +457,23 @@ func mustAdd(t *testing.T, s *JSONStore, c Comment) Comment {
 		t.Fatalf("Add(%+v): %v", c, err)
 	}
 	return got
+}
+
+func TestAuthorMine(t *testing.T) {
+	for _, tc := range []struct {
+		author, me Author
+		want       bool
+	}{
+		{"ziadalzarka", "ziadalzarka", true},
+		{AuthorUser, "ziadalzarka", true},
+		{"", "ziadalzarka", true},
+		{"claude", "ziadalzarka", false},
+		{AuthorUnknown, "ziadalzarka", false},
+		{AuthorAgent, "", false},
+		{"claude", "", false},
+	} {
+		if got := tc.author.Mine(tc.me); got != tc.want {
+			t.Errorf("Author(%q).Mine(%q) = %v, want %v", tc.author, tc.me, got, tc.want)
+		}
+	}
 }

@@ -1571,7 +1571,7 @@ func TestAHidesTheAgentsCommentsAndLeavesTheReviewersOwn(t *testing.T) {
 	if m.doc.RowOfComment("u1") < 0 {
 		t.Error("the reviewer's own comment went with them")
 	}
-	if !strings.Contains(m.headerView(), "agent hidden") {
+	if !strings.Contains(m.headerView(), "others hidden") {
 		t.Errorf("header = %q, want it to say the notes are hidden", m.headerView())
 	}
 	if len(backend.removed) != 0 {
@@ -1594,7 +1594,7 @@ func TestHiddenAgentCommentsAreRememberedAcrossSessions(t *testing.T) {
 	m := newModel(t, backend)
 
 	press(t, m, "A")
-	if !backend.agentHidden {
+	if !backend.othersHidden {
 		t.Fatal("hiding the agent's notes was not written down")
 	}
 
@@ -1604,12 +1604,12 @@ func TestHiddenAgentCommentsAreRememberedAcrossSessions(t *testing.T) {
 			t.Errorf("agent comment %s came back on row %d, want it still hidden", id, row)
 		}
 	}
-	if !strings.Contains(again.headerView(), "agent hidden") {
+	if !strings.Contains(again.headerView(), "others hidden") {
 		t.Errorf("header = %q, want it to say the notes are hidden", again.headerView())
 	}
 
 	press(t, again, "A")
-	if backend.agentHidden {
+	if backend.othersHidden {
 		t.Error("showing them again was not written down")
 	}
 }
@@ -1622,13 +1622,13 @@ func TestARemembersNothingWhenThereAreNoAgentComments(t *testing.T) {
 	backend.comments = []store.Comment{
 		{ID: "u1", File: "alpha.go", Line: 4, Body: "mine, keep it", Author: store.AuthorUser},
 	}
-	backend.agentHidden = true
+	backend.othersHidden = true
 
 	m := newModel(t, backend)
-	if m.agentCommentsOff {
+	if m.othersHidden {
 		t.Error("the review opened filtered with nothing to filter")
 	}
-	if strings.Contains(m.headerView(), "agent hidden") {
+	if strings.Contains(m.headerView(), "others hidden") {
 		t.Errorf("header = %q, want no claim that notes are hidden", m.headerView())
 	}
 }
@@ -1642,7 +1642,7 @@ func TestDeletingTheAgentsCommentsForgetsThatTheyWereHidden(t *testing.T) {
 	press(t, m, "A")
 	press(t, m, "X", "y")
 
-	if backend.agentHidden {
+	if backend.othersHidden {
 		t.Error("the notes are deleted and still written down as hidden")
 	}
 }
@@ -1655,7 +1655,7 @@ func TestXDeletesEveryAgentCommentOnlyAfterYes(t *testing.T) {
 	if m.mode != modeConfirm {
 		t.Fatalf("mode = %v, want the question to be up", m.mode)
 	}
-	if !strings.Contains(m.footerView(), "delete 2 agent comments?") {
+	if !strings.Contains(m.footerView(), "delete 2 comments by others?") {
 		t.Errorf("footer = %q, want it to ask", m.footerView())
 	}
 
@@ -1674,7 +1674,7 @@ func TestXDeletesEveryAgentCommentOnlyAfterYes(t *testing.T) {
 	if m.doc.RowOfComment("u1") < 0 {
 		t.Error("the reviewer's own comment was deleted with the agent's")
 	}
-	if !strings.Contains(m.status, "deleted 2 agent comments") {
+	if !strings.Contains(m.status, "deleted 2 comments by others") {
 		t.Errorf("status = %q", m.status)
 	}
 }
@@ -1687,8 +1687,8 @@ func TestTheAgentCommentKeysSayWhenThereAreNone(t *testing.T) {
 	m := newModel(t, backend)
 
 	press(t, m, "A")
-	if m.agentCommentsOff || !strings.Contains(m.status, "no agent comments") {
-		t.Errorf("hidden = %v, status = %q", m.agentCommentsOff, m.status)
+	if m.othersHidden || !strings.Contains(m.status, "no comments by others") {
+		t.Errorf("hidden = %v, status = %q", m.othersHidden, m.status)
 	}
 
 	press(t, m, "X")

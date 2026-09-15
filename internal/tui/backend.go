@@ -59,11 +59,11 @@ type Backend interface {
 	// SetFolded records the files folded away now.
 	SetFolded(paths []string) error
 
-	// AgentCommentsHidden reports whether the agent's notes were out of the
+	// OthersHidden reports whether everyone else's notes were out of the
 	// diff when this review was last read.
-	AgentCommentsHidden() (bool, error)
-	// SetAgentCommentsHidden records whether they are out of it now.
-	SetAgentCommentsHidden(hidden bool) error
+	OthersHidden() (bool, error)
+	// SetOthersHidden records whether they are out of it now.
+	SetOthersHidden(hidden bool) error
 
 	// Walkthrough returns the AI narrative of the session.
 	Walkthrough(ctx context.Context, regenerate bool) (string, error)
@@ -414,19 +414,19 @@ func (b *appBackend) SetFolded(paths []string) error {
 	return b.state.Folds.Save(b.session.Target, paths)
 }
 
-func (b *appBackend) AgentCommentsHidden() (bool, error) {
+func (b *appBackend) OthersHidden() (bool, error) {
 	view, err := b.state.Views.Load(b.session.Target)
-	return view.AgentCommentsHidden, err
+	return view.OthersHidden, err
 }
 
-// SetAgentCommentsHidden reads the view back before writing it, so a filter
+// SetOthersHidden reads the view back before writing it, so a filter
 // added later is not dropped by the one being changed here.
-func (b *appBackend) SetAgentCommentsHidden(hidden bool) error {
+func (b *appBackend) SetOthersHidden(hidden bool) error {
 	view, err := b.state.Views.Load(b.session.Target)
 	if err != nil {
 		return err
 	}
-	view.AgentCommentsHidden = hidden
+	view.OthersHidden = hidden
 	return b.state.Views.Save(b.session.Target, view)
 }
 

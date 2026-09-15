@@ -8,7 +8,7 @@ import (
 )
 
 func handoffOf(comments []store.Comment) string {
-	threads, _ := reviewThreads(comments)
+	threads, _ := reviewThreads(comments, "")
 	return commentHandoff(threads, nil)
 }
 
@@ -83,7 +83,7 @@ func TestReviewThreadsLeaveOutAThreadWithNoOpenNoteOfTheReviewers(t *testing.T) 
 		{ID: "u1", File: "alpha.go", Line: 5, Body: "dealt with", Author: store.AuthorUser, Resolved: true},
 		{ID: "a2", File: "alpha.go", Line: 5, Body: "still open on my side", Author: store.AuthorAgent},
 		{ID: "u2", File: "beta.txt", Line: 2, Body: "wrong fixture", Author: store.AuthorUser},
-	})
+	}, "")
 
 	if len(threads) != 1 || len(threads[0].notes) != 1 || threads[0].notes[0].ID != "u2" {
 		t.Errorf("threads = %+v, want only the one holding u2", threads)
@@ -117,7 +117,7 @@ func TestHandoffKeepsTheTwoSidesOfALineApart(t *testing.T) {
 		{File: "alpha.go", Line: 3, Side: store.SideOld, Body: "old", Author: store.AuthorUser},
 		{File: "alpha.go", Line: 3, Side: store.SideNew, Origin: store.OriginIndex, Body: "staged", Author: store.AuthorUser},
 		{File: "alpha.go", Line: 3, Side: store.SideNew, Origin: store.OriginWorktree, Body: "on disk", Author: store.AuthorUser},
-	})
+	}, "")
 
 	if len(threads) != 3 {
 		t.Fatalf("got %d threads, want new, old and staged apart: %+v", len(threads), threads)

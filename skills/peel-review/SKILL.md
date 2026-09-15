@@ -40,7 +40,7 @@ user asked for it.
 
 ```bash
 peel hunks list [--json] [--file <path>] [--staged | --unstaged]
-peel comment list [--json] [--file <path>] [--unresolved] [--author user|agent] [--all]
+peel comment list [--json] [--file <path>] [--unresolved] [--author <name>] [--all]
 peel providers
 ```
 
@@ -134,11 +134,11 @@ things behave differently in these sessions:
 ## Comment
 
 ```bash
-peel comment add --file <path> --line <n> --body "..." [--end-line <n>] [--side new|old] [--origin index|worktree] [--hunk <id>] [--json]
-peel comment add --file <path> --body "..."                       # file-level note
+peel comment add --author claude --file <path> --line <n> --body "..." [--end-line <n>] [--side new|old] [--origin index|worktree] [--hunk <id>] [--json]
+peel comment add --author claude --file <path> --body "..."       # file-level note
 peel comment resolve <id>... [--undo]
 peel comment rm <id>...
-peel comment clear [--file <path>] [--resolved] [--author user|agent] [--all]
+peel comment clear [--file <path>] [--resolved] [--author <name>] [--all]
 ```
 
 - `--file` is required. `--line` is 1-based on `--side`; omit it for a note about
@@ -153,8 +153,8 @@ peel comment clear [--file <path>] [--resolved] [--author user|agent] [--all]
   is the file on disk. Pass `--origin index` only for a note about the staged
   half of a file `hunks list` reports twice: the two halves both have a line 12,
   and a note that names neither lands on whichever the TUI draws first.
-- `--author` defaults to `agent`, which is what marks the note as yours in the
-  TUI. Don't pass `--author user`.
+- **Always pass `--author claude`.** The name is what marks the note as yours;
+  without it the note is signed `unknown`. Never sign with the user's name.
 - Pass `--hunk <id>` when you have it: the TUI can still show the comment in
   context after line numbers move.
 - `--line` is read against the file as it is at that moment, and peel freezes
@@ -166,30 +166,31 @@ peel comment clear [--file <path>] [--resolved] [--author user|agent] [--all]
 
 ```bash
 printf 'This drops the error.\n\nWorth returning it instead.\n' \
-  | peel comment add --file internal/git/status.go --line 42
+  | peel comment add --author claude --file internal/git/status.go --line 42
 ```
 
 ## The user's comments are not yours to delete
 
-One store holds both reviews. Yours are `"author": "agent"` and the user's are
-`"author": "user"`, and `rm` and `clear` do not know the difference unless you
+One store holds every review. Yours are `"author": "claude"` — or `"agent"` on
+notes from before peel recorded names — and the user's carry their own name, or
+`"user"` on older notes. `rm` and `clear` do not know the difference unless you
 tell them — `peel comment clear` with no flags wipes the user's notes along with
 your own, which is a review they cannot get back.
 
 So: **only ever remove your own.**
 
 ```bash
-peel comment clear --author agent          # your review, and nothing else
-peel comment list --json --author agent    # check before rm-ing an id
+peel comment clear --author claude          # your review, and nothing else
+peel comment list --json --author claude    # check before rm-ing an id
 ```
 
 Nothing you write can overwrite a user comment — `add` always appends a new one
 — so deleting is the only way to lose one. When the user asks you to clear
 comments and does not say whose, clear yours and say so; if they meant all of
-them, that is `--author user` as a second, deliberate command.
+them, that is a second, deliberate command naming their author.
 
-The user has the same distinction in the TUI: `A` hides your comments and shows
-theirs, and `X` deletes every one of yours after asking. A review of yours that
+The user has the same distinction in the TUI: `A` hides every comment not signed
+with their name, yours included, and `X` deletes every one of those after asking. A review of yours that
 is in their way is one keypress from being gone, so leaving fewer, better notes
 is worth more than covering everything.
 
