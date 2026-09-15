@@ -2320,6 +2320,9 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 		return nil
 	}
 	at := m.spot()
+	before := m.comments
+	fingerprint := fingerprintOf(msg.session)
+	treeMoved := fingerprint != m.fingerprint
 	m.session = msg.session
 	m.comments = msg.comments
 	// The copies the code around the hunks is read out of are left up while the
@@ -2349,7 +2352,7 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 	// reviewer knows whether waiting for a new one is worth it.
 	m.walkStale = m.walkStale || (m.walkLoaded && codeFingerprintOf(msg.session) != m.walkCode)
 
-	m.fingerprint = fingerprintOf(msg.session)
+	m.fingerprint = fingerprint
 	// Not on a reconciling read-back: that is the reviewer's own stage coming
 	// back from git, and a file folded a moment ago by pressing `s` is not a file
 	// that has changed since it was staged.
@@ -2366,7 +2369,7 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 		m.status = msg.note
 	}
 	if msg.poll {
-		m.status = "reloaded — the working tree changed"
+		m.status = m.pollNote(treeMoved, before)
 	}
 	// A file that had been dealt with is open again, which is a change to the
 	// screen nobody asked for: it is worth saying which file, and why.
@@ -2409,7 +2412,46 @@ func (m *Model) acceptPoll(msg loadedMsg) bool {
 	if msg.drawn != m.drawn.Load() {
 		return false
 	}
-	return fingerprintOf(msg.session) != m.fingerprint
+	return fingerprintOf(msg.session) != m.fingerprint || !sameComments(msg.comments, m.comments)
+}
+
+func (m *Model) pollNote(treeMoved bool, before []store.Comment) string {
+	if treeMoved {
+		return "reloaded — the working tree changed"
+	}
+	arrived := newComments(before, m.comments)
+	if len(arrived) == 0 {
+		return "reloaded — the comments changed"
+	}
+	note := plural(len(arrived), "new comment")
+	if m.agentCommentsOff && len(agentComments(arrived)) > 0 {
+		note += " — agent comments are hidden, A shows them"
+	}
+	return note
+}
+
+func newComments(before, after []store.Comment) []store.Comment {
+	seen := make(map[string]bool, len(before))
+	for _, c := range before {
+		seen[c.ID] = true
+	}
+	var out []store.Comment
+	for _, c := range after {
+		if !seen[c.ID] {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func sameComments(a, b []store.Comment) bool {
+	return slices.EqualFunc(a, b, func(x, y store.Comment) bool {
+		if !x.CreatedAt.Equal(y.CreatedAt) {
+			return false
+		}
+		x.CreatedAt, y.CreatedAt = time.Time{}, time.Time{}
+		return x == y
+	})
 }
 
 // fingerprintOf identifies what a session puts on screen, cheaply enough to

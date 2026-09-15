@@ -11,6 +11,7 @@ import (
 	"github.com/ziadalzarka/peel/internal/app"
 	"github.com/ziadalzarka/peel/internal/forge"
 	"github.com/ziadalzarka/peel/internal/gittest"
+	"github.com/ziadalzarka/peel/internal/store"
 )
 
 // followModel builds a model over a real repository with follow mode on.
@@ -256,5 +257,101 @@ func TestFollowKeepsWatchingAfterAStage(t *testing.T) {
 	}
 	if !m.doc.Files[fileIndexOf(t, m, "main.go")].Collapsed {
 		t.Error("a later follow check reopened the staged file")
+	}
+}
+
+func noteStore(t *testing.T, repo *gittest.Repo) store.CommentStore {
+	t.Helper()
+	a, err := app.Open(context.Background(), repo.Dir,
+		app.WithAIRegistry(ai.NewRegistry()),
+		app.WithForgeRegistry(forge.NewRegistry()),
+	)
+	if err != nil {
+		t.Fatalf("app.Open: %v", err)
+	}
+	session, err := a.LoadWorkingTree(context.Background())
+	if err != nil {
+		t.Fatalf("LoadWorkingTree: %v", err)
+	}
+	return a.StateFor(session).Comments
+}
+
+func leaveNote(t *testing.T, repo *gittest.Repo, body string) store.Comment {
+	t.Helper()
+	created, err := noteStore(t, repo).Add(store.Comment{
+		File:   "main.go",
+		Line:   3,
+		Side:   store.SideNew,
+		Body:   body,
+		Author: store.AuthorAgent,
+	})
+	if err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	return created
+}
+
+func TestFollowPicksUpACommentAnAgentLeft(t *testing.T) {
+	repo, m := followModel(t)
+
+	leaveNote(t, repo, "this never returns an error")
+	poll(t, m)
+
+	if got := body(m); !strings.Contains(got, "this never returns an error") {
+		t.Errorf("follow did not pick up the agent's comment:\n%s", got)
+	}
+	if m.status != "1 new comment" {
+		t.Errorf("status = %q, want it to say a comment arrived", m.status)
+	}
+}
+
+func TestFollowDropsACommentAnAgentRemoved(t *testing.T) {
+	repo, m := followModel(t)
+	note := leaveNote(t, repo, "this never returns an error")
+	poll(t, m)
+
+	if err := noteStore(t, repo).Remove(note.ID); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	poll(t, m)
+
+	if got := body(m); strings.Contains(got, "this never returns an error") {
+		t.Errorf("follow kept a comment the agent removed:\n%s", got)
+	}
+	if m.status != "reloaded — the comments changed" {
+		t.Errorf("status = %q, want it to say the comments changed", m.status)
+	}
+}
+
+func TestFollowIgnoresAPollWhoseCommentsHaveNotChanged(t *testing.T) {
+	repo, m := followModel(t)
+	leaveNote(t, repo, "this never returns an error")
+	poll(t, m)
+	m.status = ""
+
+	poll(t, m)
+
+	if m.status != "" {
+		t.Errorf("a poll over the same comments reported %q, want silence", m.status)
+	}
+}
+
+func TestFollowKeepsANewAgentCommentHiddenWhileAgentCommentsAreHidden(t *testing.T) {
+	repo, m := followModel(t)
+	leaveNote(t, repo, "first pass")
+	poll(t, m)
+	press(t, m, "A")
+	if !m.agentCommentsOff {
+		t.Fatal("A did not hide the agent's comments")
+	}
+
+	leaveNote(t, repo, "second pass")
+	poll(t, m)
+
+	if got := body(m); strings.Contains(got, "second pass") {
+		t.Errorf("a new agent comment was drawn while agent comments are hidden:\n%s", got)
+	}
+	if !strings.Contains(m.status, "A shows them") {
+		t.Errorf("status = %q, want it to say the new comment is hidden", m.status)
 	}
 }

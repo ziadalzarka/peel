@@ -36,7 +36,8 @@ keymap.
   for an agent that cannot.
 - **A walkthrough in the diff.** `w` reorders the diff into the steps an AI
   narrative reads it in, each explanation above the code it covers.
-- **It keeps up.** Follow mode re-reads the repository as it changes, and the
+- **It keeps up.** Follow mode re-reads the repository and the review's notes as
+  they change, so a note an agent leaves shows up without a reload, and the
   screen moves on the keypress rather than waiting for git.
 - **Read-only bases.** `--rev` reviews further back than HEAD, `--pr` reviews a
   GitHub pull request — from any checkout, or none at all.
