@@ -32,8 +32,8 @@ keymap.
   after staging it and it opens again, on the new work alone.
 - **Notes an agent can read.** Comments go to a JSON file — `.git/peel/comments.json`
   for the working tree — which Claude Code reads through the bundled skill, so
-  "address my review comments" needs no copy-paste. `C` copies your own as text
-  for an agent that cannot.
+  "address my review comments" needs no copy-paste. `C` copies the threads you
+  commented in as text for an agent that cannot.
 - **A walkthrough in the diff.** `w` reorders the diff into the steps an AI
   narrative reads it in, each explanation above the code it covers.
 - **It keeps up.** Follow mode re-reads the repository and the review's notes as
@@ -137,7 +137,7 @@ repository changes.
 | `enter` / `shift+enter` | in the editor: save the comment / write another line |
 | `e` | edit a comment of your own, where it stands |
 | `x` / `D` | resolve / delete the comment at the cursor |
-| `C` | copy your own comments as text, to paste into an agent |
+| `C` | copy the threads you have an open comment in as text, to paste into an agent |
 | `A` / `X` | hide the comments an agent left / delete every one of them |
 | `P` | post the review to the pull request: a summary, then approve / request changes / comment |
 | `\` | toggle unified and side-by-side |
@@ -440,10 +440,13 @@ list`, since that is what says which review is being asked about.
 
 For an agent that cannot read that file — a browser tab, or one on another
 machine — `C` puts the review on the clipboard as text to paste into it: one
-block per note, saying which file and line it was left on and what it says. What
-it hands over is the review *you* wrote — an agent's own notes are what a review
-was already given for, so they are never copied, hidden or not. Resolved notes
-are left out too, since those have been dealt with, and the footer says how many.
+block per commented line, naming the file and line once, then every note left
+there in the order it was written, each saying who wrote it. A line's thread is
+copied when it holds an open note of *yours*, and then copied whole: the agent's
+notes in it come along, and so do the notes resolved with `x`, marked
+`(resolved)` so they are not done twice. A thread with no open note of yours is
+left out, hidden or not — one only an agent wrote in, or one whose notes of yours
+are all resolved — and the footer says how many resolved notes stayed behind.
 Copying needs a clipboard tool on `PATH` — `pbcopy`, `wl-copy`, `xclip`, `xsel`
 or `clip.exe`.
 

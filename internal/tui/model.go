@@ -1974,17 +1974,16 @@ func (m *Model) deleteComment() tea.Cmd {
 //
 // An agent working in this repository reads the store instead, so what this is
 // for is the one that cannot: a browser tab, or another machine. What it hands
-// over is the review the person wrote — an agent's notes are what a review was
-// already given for, not something to send back out to be addressed — and the
-// resolved ones stay behind, since those have been dealt with and an agent asked
-// to address them would only redo work already done.
+// over is every thread the person still has an open note in, with the agent's
+// notes and the resolved ones in that thread alongside. A thread with no open
+// note of the person's own stays behind.
 //
 // Nothing about the review changes, so there is nothing to queue: the copy is
 // reported as done straight away, and only comes back if there was nothing on
 // PATH to copy with.
 func (m *Model) copyComments() tea.Cmd {
-	open, resolved := stillOpen(userComments(m.comments))
-	if len(open) == 0 {
+	threads, resolved := reviewThreads(m.comments)
+	if len(threads) == 0 {
 		switch {
 		case resolved > 0:
 			m.status = "every comment of your own is resolved — nothing to copy"
@@ -1996,9 +1995,9 @@ func (m *Model) copyComments() tea.Cmd {
 		return nil
 	}
 
-	text := commentHandoff(open, m.doc.orphanPaths())
+	text := commentHandoff(threads, m.doc.orphanPaths())
 	before := m.snapshot()
-	m.status = "copied " + plural(len(open), "comment")
+	m.status = "copied " + plural(noteCount(threads), "comment")
 	if resolved > 0 {
 		m.status += " — " + plural(resolved, "resolved one") + " left out"
 	}
@@ -2093,8 +2092,8 @@ func agentComments(comments []store.Comment) []store.Comment {
 	return out
 }
 
-// userComments picks out the reviewer's own notes — what `C` hands over, and
-// what is left on screen once `A` hides the rest.
+// userComments picks out the reviewer's own notes — what is left on screen once
+// `A` hides the rest.
 func userComments(comments []store.Comment) []store.Comment {
 	out := make([]store.Comment, 0, len(comments))
 	for _, c := range comments {

@@ -13,8 +13,9 @@ import (
 // An agent working in the repository reads `peel comment list --json` and needs
 // nothing from here. An agent in a browser tab, or one on another machine, has
 // no store to read — so `C` renders the same notes as text meant to be pasted
-// into a conversation: what the paste is, where each note was left, and the note
-// itself. No IDs, no timestamps, nothing that only means something inside peel.
+// into a conversation: what the paste is, where each thread was left, and the
+// notes in it. No IDs, no timestamps, nothing that only means something inside
+// peel.
 
 // handoffHeader says what the paste is and what to do with it, in one line above
 // the notes.
@@ -24,31 +25,126 @@ import (
 // nothing to a reader who has not been told what the two sides are.
 const handoffHeader = "Review comments copied from peel. Review them one by one."
 
-// commentHandoff renders review notes as text to hand an agent.
-//
-// The notes are grouped by file, in the order the files are first commented on
-// and by line within a file, so the agent reads a file's notes together instead
-// of being sent back and forth in the order they happened to be written.
+type thread struct {
+	key   threadKey
+	notes []store.Comment
+}
+
+type threadKey struct {
+	file     string
+	line     int
+	old      bool
+	staged   bool
+	outdated bool
+}
+
+func threadKeyOf(c store.Comment) threadKey {
+	return threadKey{
+		file:     c.File,
+		line:     hangsOn(c.Line, c.EndLine),
+		old:      c.Side == store.SideOld,
+		staged:   c.Origin == store.OriginIndex,
+		outdated: c.Outdated,
+	}
+}
+
+func reviewThreads(comments []store.Comment) (copied []thread, resolvedLeftOut int) {
+	var all []thread
+	at := map[threadKey]int{}
+	for _, c := range comments {
+		key := threadKeyOf(c)
+		i, seen := at[key]
+		if !seen {
+			i = len(all)
+			at[key] = i
+			all = append(all, thread{key: key})
+		}
+		all[i].notes = append(all[i].notes, c)
+	}
+	for _, t := range all {
+		if t.hasOpenUserNote() {
+			copied = append(copied, t)
+			continue
+		}
+		for _, c := range t.notes {
+			if c.Author != store.AuthorAgent && c.Resolved {
+				resolvedLeftOut++
+			}
+		}
+	}
+	return inReadingOrder(copied), resolvedLeftOut
+}
+
+func (t thread) hasOpenUserNote() bool {
+	for _, c := range t.notes {
+		if c.Author != store.AuthorAgent && !c.Resolved {
+			return true
+		}
+	}
+	return false
+}
+
+func (t thread) span() store.Comment {
+	span := t.notes[0]
+	for _, c := range t.notes[1:] {
+		span.Line = min(span.Line, c.Line)
+	}
+	span.EndLine = 0
+	if t.key.line > span.Line {
+		span.EndLine = t.key.line
+	}
+	return span
+}
+
+func noteCount(threads []thread) int {
+	n := 0
+	for _, t := range threads {
+		n += len(t.notes)
+	}
+	return n
+}
+
+// commentHandoff renders review threads as text to hand an agent: one anchor per
+// thread, with every note in it under the anchor in the order it was written.
 //
 // gone names the files the change no longer touches, which the reader has to be
 // told about: the agent is being sent to a path on disk, and a note left on a
 // change that has since gone is the one case where that path holds nothing the
 // review was ever about.
-func commentHandoff(comments []store.Comment, gone map[string]bool) string {
+func commentHandoff(threads []thread, gone map[string]bool) string {
 	var b strings.Builder
 	b.WriteString(handoffHeader)
 	b.WriteString("\n")
-	for _, c := range inReadingOrder(comments) {
-		fmt.Fprintf(&b, "\n%s\n", handoffAnchor(c, gone[c.File]))
-		for _, line := range strings.Split(strings.TrimSpace(c.Body), "\n") {
-			if strings.TrimSpace(line) == "" {
-				b.WriteString("\n")
-				continue
-			}
-			fmt.Fprintf(&b, "  %s\n", strings.TrimRight(line, " \t"))
+	for _, t := range threads {
+		fmt.Fprintf(&b, "\n%s\n", handoffAnchor(t.span(), gone[t.key.file]))
+		for _, c := range t.notes {
+			writeHandoffNote(&b, c)
 		}
 	}
 	return b.String()
+}
+
+func writeHandoffNote(b *strings.Builder, c store.Comment) {
+	lines := strings.Split(strings.TrimSpace(c.Body), "\n")
+	fmt.Fprintf(b, "  %s: %s\n", handoffAuthor(c), strings.TrimRight(lines[0], " \t"))
+	for _, line := range lines[1:] {
+		if strings.TrimSpace(line) == "" {
+			b.WriteString("\n")
+			continue
+		}
+		fmt.Fprintf(b, "    %s\n", strings.TrimRight(line, " \t"))
+	}
+}
+
+func handoffAuthor(c store.Comment) string {
+	author := string(c.Author)
+	if author == "" {
+		author = string(store.AuthorUser)
+	}
+	if c.Resolved {
+		author += " (resolved)"
+	}
+	return author
 }
 
 // handoffAnchor names where a note was left, in the file:line form every tool
@@ -104,39 +200,20 @@ func lineNumberNote(c store.Comment) string {
 	return ""
 }
 
-// inReadingOrder groups the notes by file and orders each file's by line,
+// inReadingOrder groups the threads by file and orders each file's by line,
 // keeping the files in the order they were first commented on.
-func inReadingOrder(comments []store.Comment) []store.Comment {
+func inReadingOrder(threads []thread) []thread {
 	first := map[string]int{}
-	for _, c := range comments {
-		if _, seen := first[c.File]; !seen {
-			first[c.File] = len(first)
+	for _, t := range threads {
+		if _, seen := first[t.key.file]; !seen {
+			first[t.key.file] = len(first)
 		}
 	}
-	out := append([]store.Comment(nil), comments...)
-	sort.SliceStable(out, func(i, j int) bool {
-		if first[out[i].File] != first[out[j].File] {
-			return first[out[i].File] < first[out[j].File]
+	sort.SliceStable(threads, func(i, j int) bool {
+		if first[threads[i].key.file] != first[threads[j].key.file] {
+			return first[threads[i].key.file] < first[threads[j].key.file]
 		}
-		return out[i].Line < out[j].Line
+		return threads[i].key.line < threads[j].key.line
 	})
-	return out
-}
-
-// stillOpen splits the notes into the ones left to deal with and a count of the
-// ones already resolved.
-//
-// A resolved note has been dealt with, so handing it to an agent asked to
-// address the review would only send it after work already done. The count comes
-// back so the footer can say those notes were left out rather than dropping them
-// silently.
-func stillOpen(comments []store.Comment) (open []store.Comment, resolved int) {
-	for _, c := range comments {
-		if c.Resolved {
-			resolved++
-			continue
-		}
-		open = append(open, c)
-	}
-	return open, resolved
+	return threads
 }

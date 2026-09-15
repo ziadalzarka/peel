@@ -341,7 +341,7 @@ func (m *Model) helpBindings() []binding {
 		{"enter / shift+enter", "in the editor: save the comment / write another line"},
 		{"e", "edit a comment of your own, where it stands"},
 		{"x / D", "resolve or reopen / delete the comment at the cursor"},
-		{"C", "copy your own comments as text, to paste into an agent"},
+		{"C", "copy the threads you have an open comment in as text, to paste into an agent"},
 		{"drag", "sweep the mouse over the screen to select text — letting go copies it"},
 		{"A", "hide or show the comments an agent left, leaving your own"},
 		{"X", "delete every agent comment — it asks first"},

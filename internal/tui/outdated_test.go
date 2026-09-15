@@ -55,7 +55,7 @@ func TestACurrentNoteSaysNothingExtra(t *testing.T) {
 // cannot read the store is handed the notes as text, and a line number it must
 // not take at face value has to say so there too.
 func TestTheHandoffWarnsAboutAnOutdatedLine(t *testing.T) {
-	got := commentHandoff([]store.Comment{outdatedNote()}, nil)
+	got := handoffOf([]store.Comment{outdatedNote()})
 	if !strings.Contains(got, "svc.go:42") {
 		t.Errorf("the handoff lost the anchor:\n%s", got)
 	}
@@ -68,7 +68,7 @@ func TestTheHandoffWarnsAboutAnOutdatedLine(t *testing.T) {
 func TestTheHandoffLeavesACurrentLinePlain(t *testing.T) {
 	c := outdatedNote()
 	c.Outdated = false
-	got := commentHandoff([]store.Comment{c}, nil)
+	got := handoffOf([]store.Comment{c})
 	if strings.Contains(got, "since changed") {
 		t.Errorf("a note that is where it says was warned about:\n%s", got)
 	}

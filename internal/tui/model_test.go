@@ -1735,9 +1735,63 @@ func TestCCopiesTheReviewAsTextToPaste(t *testing.T) {
 	}
 }
 
-// What `C` hands an agent is the review the person wrote: the agent's own notes
-// are left out whether or not they are on screen.
-func TestCCopiesOnlyTheReviewersOwnNotes(t *testing.T) {
+func TestCCopiesTheAgentsNotesOnlyInAThreadTheReviewerIsIn(t *testing.T) {
+	for _, showing := range []bool{true, false} {
+		backend := newFakeBackend(newSession(t, twoFileDiff))
+		backend.comments = []store.Comment{
+			{ID: "u1", File: "alpha.go", Line: 3, Side: store.SideNew, Body: "name it", Author: store.AuthorUser, Resolved: true},
+			{ID: "a1", File: "alpha.go", Line: 3, Side: store.SideNew, Body: "renamed", Author: store.AuthorAgent},
+			{ID: "u2", File: "alpha.go", Line: 3, Side: store.SideNew, Body: "and the test", Author: store.AuthorUser},
+			{ID: "a2", File: "beta.txt", Line: 2, Side: store.SideNew, Body: "nobody answered this", Author: store.AuthorAgent},
+		}
+		m := newModel(t, backend)
+		if !showing {
+			press(t, m, "A")
+		}
+
+		press(t, m, "C")
+
+		if len(backend.copied) != 1 {
+			t.Fatalf("agent notes showing = %v: Copy called %d times, want 1", showing, len(backend.copied))
+		}
+		text := backend.copied[0]
+		want := "alpha.go:3\n" +
+			"  user (resolved): name it\n" +
+			"  agent: renamed\n" +
+			"  user: and the test\n"
+		if !strings.HasSuffix(text, want) {
+			t.Errorf("agent notes showing = %v: copied =\n%s\nwant it to end with\n%s", showing, text, want)
+		}
+		if strings.Contains(text, "nobody answered this") {
+			t.Errorf("agent notes showing = %v: an agent note on a line the reviewer left alone was copied:\n%s", showing, text)
+		}
+		if !strings.Contains(m.status, "copied 3 comments") || strings.Contains(m.status, "left out") {
+			t.Errorf("agent notes showing = %v: status = %q, want the whole thread counted and nothing left out", showing, m.status)
+		}
+	}
+}
+
+func TestCLeavesOutAThreadWhoseNotesOfTheReviewersAreAllResolved(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "u1", File: "alpha.go", Line: 3, Side: store.SideNew, Body: "name it", Author: store.AuthorUser, Resolved: true},
+		{ID: "a1", File: "alpha.go", Line: 3, Side: store.SideNew, Body: "renamed", Author: store.AuthorAgent},
+	}
+	m := newModel(t, backend)
+
+	press(t, m, "C")
+
+	if len(backend.copied) != 0 {
+		t.Fatalf("a finished thread was copied: %q", backend.copied)
+	}
+	if !strings.Contains(m.status, "every comment of your own is resolved") {
+		t.Errorf("status = %q", m.status)
+	}
+}
+
+// An agent's note on a line the reviewer has no note on is left out, whether or
+// not the agent's notes are on screen.
+func TestCLeavesOutTheAgentsNotesOnLinesTheReviewerLeftAlone(t *testing.T) {
 	for _, showing := range []bool{true, false} {
 		backend := reviewedByBoth(t)
 		m := newModel(t, backend)

@@ -7,29 +7,123 @@ import (
 	"github.com/ziadalzarka/peel/internal/store"
 )
 
-// The handoff is one block per note: where it was left, then the note indented
-// under it. Notes on the same file are grouped and ordered by line, however they
-// were written, so the agent reads a file once.
+func handoffOf(comments []store.Comment) string {
+	threads, _ := reviewThreads(comments)
+	return commentHandoff(threads, nil)
+}
+
+// The handoff is one block per thread: where it was left, then its notes
+// indented under it. Threads on the same file are grouped and ordered by line,
+// however they were written, so the agent reads a file once.
 func TestHandoffGroupsTheNotesByFile(t *testing.T) {
-	got := commentHandoff([]store.Comment{
+	got := handoffOf([]store.Comment{
 		{File: "beta.txt", Line: 2, Side: store.SideNew, Body: "wrong fixture"},
 		{File: "alpha.go", Line: 9, Side: store.SideNew, Body: "this leaks the tx"},
 		{File: "alpha.go", Line: 3, Side: store.SideNew, Body: "name it"},
-	}, nil)
+	})
 
 	want := "beta.txt:2\n" +
-		"  wrong fixture\n" +
+		"  user: wrong fixture\n" +
 		"\n" +
 		"alpha.go:3\n" +
-		"  name it\n" +
+		"  user: name it\n" +
 		"\n" +
 		"alpha.go:9\n" +
-		"  this leaks the tx\n"
+		"  user: this leaks the tx\n"
 	if !strings.HasSuffix(got, want) {
 		t.Errorf("handoff =\n%s\nwant it to end with\n%s", got, want)
 	}
 	if firstLineOf(got) != "Review comments copied from peel. Review them one by one." {
 		t.Errorf("handoff opens with %q, want it to say where the notes came from and what to do with them", firstLineOf(got))
+	}
+}
+
+func TestHandoffPutsTheNotesOnOneLineUnderOneAnchor(t *testing.T) {
+	got := handoffOf([]store.Comment{
+		{File: "alpha.go", Line: 3, Side: store.SideNew, Body: "this leaks the tx", Author: store.AuthorUser},
+		{File: "beta.txt", Line: 2, Side: store.SideNew, Body: "wrong fixture", Author: store.AuthorUser},
+		{File: "alpha.go", Line: 3, Side: store.SideNew, Body: "closed it in the defer", Author: store.AuthorAgent},
+		{File: "alpha.go", Line: 3, Side: store.SideNew, Body: "the retry still hides it", Author: store.AuthorUser},
+	})
+
+	want := "alpha.go:3\n" +
+		"  user: this leaks the tx\n" +
+		"  agent: closed it in the defer\n" +
+		"  user: the retry still hides it\n" +
+		"\n" +
+		"beta.txt:2\n" +
+		"  user: wrong fixture\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("handoff =\n%s\nwant it to end with\n%s", got, want)
+	}
+	if n := strings.Count(got, "alpha.go:3"); n != 1 {
+		t.Errorf("alpha.go:3 is named %d times, want once:\n%s", n, got)
+	}
+}
+
+func TestHandoffCarriesTheResolvedNotesOfAThreadStillOpen(t *testing.T) {
+	got := handoffOf([]store.Comment{
+		{File: "alpha.go", Line: 3, Side: store.SideNew, Body: "name it", Author: store.AuthorUser, Resolved: true},
+		{File: "alpha.go", Line: 3, Side: store.SideNew, Body: "renamed", Author: store.AuthorAgent, Resolved: true},
+		{File: "alpha.go", Line: 3, Side: store.SideNew, Body: "and the test too", Author: store.AuthorUser},
+	})
+
+	want := "alpha.go:3\n" +
+		"  user (resolved): name it\n" +
+		"  agent (resolved): renamed\n" +
+		"  user: and the test too\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("handoff =\n%s\nwant it to end with\n%s", got, want)
+	}
+}
+
+func TestReviewThreadsLeaveOutAThreadWithNoOpenNoteOfTheReviewers(t *testing.T) {
+	threads, resolved := reviewThreads([]store.Comment{
+		{ID: "a1", File: "alpha.go", Line: 3, Body: "this drops the error", Author: store.AuthorAgent},
+		{ID: "u1", File: "alpha.go", Line: 5, Body: "dealt with", Author: store.AuthorUser, Resolved: true},
+		{ID: "a2", File: "alpha.go", Line: 5, Body: "still open on my side", Author: store.AuthorAgent},
+		{ID: "u2", File: "beta.txt", Line: 2, Body: "wrong fixture", Author: store.AuthorUser},
+	})
+
+	if len(threads) != 1 || len(threads[0].notes) != 1 || threads[0].notes[0].ID != "u2" {
+		t.Errorf("threads = %+v, want only the one holding u2", threads)
+	}
+	if resolved != 1 {
+		t.Errorf("resolved left out = %d, want 1", resolved)
+	}
+}
+
+func TestHandoffThreadsANoteOnARunWithTheNotesUnderItsLastLine(t *testing.T) {
+	got := handoffOf([]store.Comment{
+		{File: "alpha.go", Line: 4, Side: store.SideNew, Body: "why here", Author: store.AuthorAgent},
+		{File: "alpha.go", Line: 2, EndLine: 4, Side: store.SideNew, Body: "these three", Author: store.AuthorUser},
+		{File: "alpha.go", Line: 2, Side: store.SideNew, Body: "just this one", Author: store.AuthorUser},
+	})
+
+	want := "alpha.go:2\n" +
+		"  user: just this one\n" +
+		"\n" +
+		"alpha.go:2-4\n" +
+		"  agent: why here\n" +
+		"  user: these three\n"
+	if !strings.HasSuffix(got, want) {
+		t.Errorf("handoff =\n%s\nwant it to end with\n%s", got, want)
+	}
+}
+
+func TestHandoffKeepsTheTwoSidesOfALineApart(t *testing.T) {
+	threads, _ := reviewThreads([]store.Comment{
+		{File: "alpha.go", Line: 3, Side: store.SideNew, Body: "new", Author: store.AuthorUser},
+		{File: "alpha.go", Line: 3, Side: store.SideOld, Body: "old", Author: store.AuthorUser},
+		{File: "alpha.go", Line: 3, Side: store.SideNew, Origin: store.OriginIndex, Body: "staged", Author: store.AuthorUser},
+		{File: "alpha.go", Line: 3, Side: store.SideNew, Origin: store.OriginWorktree, Body: "on disk", Author: store.AuthorUser},
+	})
+
+	if len(threads) != 3 {
+		t.Fatalf("got %d threads, want new, old and staged apart: %+v", len(threads), threads)
+	}
+	if len(threads[0].notes) != 2 {
+		t.Errorf("the note with no origin and the one on disk were split: %+v", threads[0].notes)
 	}
 }
 
@@ -90,14 +184,14 @@ func TestHandoffAnchorsSayWhichSideAndWhichLine(t *testing.T) {
 // Every line of a multi-line note is indented under its anchor, so the block a
 // note occupies is unambiguous even when it has a blank line in it.
 func TestHandoffIndentsEveryLineOfANote(t *testing.T) {
-	got := commentHandoff([]store.Comment{
+	got := handoffOf([]store.Comment{
 		{File: "alpha.go", Line: 3, Side: store.SideNew, Body: "this leaks the tx\n\nand the retry hides it\n"},
-	}, nil)
+	})
 
 	want := "alpha.go:3\n" +
-		"  this leaks the tx\n" +
+		"  user: this leaks the tx\n" +
 		"\n" +
-		"  and the retry hides it\n"
+		"    and the retry hides it\n"
 	if !strings.HasSuffix(got, want) {
 		t.Errorf("handoff =\n%s\nwant it to end with\n%s", got, want)
 	}
@@ -106,27 +200,12 @@ func TestHandoffIndentsEveryLineOfANote(t *testing.T) {
 // The store's own ids and timestamps mean nothing outside peel, so they are not
 // pasted into a conversation that cannot look them up.
 func TestHandoffLeavesPeelsOwnBookkeepingOut(t *testing.T) {
-	got := commentHandoff([]store.Comment{
+	got := handoffOf([]store.Comment{
 		{ID: "cmt_abc123", File: "alpha.go", Line: 3, Side: store.SideNew, Body: "name it"},
-	}, nil)
+	})
 
 	if strings.Contains(got, "cmt_abc123") {
 		t.Errorf("handoff carries the comment id:\n%s", got)
-	}
-}
-
-func TestStillOpenLeavesTheResolvedNotesOutAndCountsThem(t *testing.T) {
-	open, resolved := stillOpen([]store.Comment{
-		{ID: "c1", File: "alpha.go", Body: "one"},
-		{ID: "c2", File: "alpha.go", Body: "two", Resolved: true},
-		{ID: "c3", File: "beta.txt", Body: "three"},
-	})
-
-	if len(open) != 2 || open[0].ID != "c1" || open[1].ID != "c3" {
-		t.Errorf("open = %+v, want c1 and c3", open)
-	}
-	if resolved != 1 {
-		t.Errorf("resolved = %d, want 1", resolved)
 	}
 }
 
