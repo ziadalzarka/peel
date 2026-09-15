@@ -28,10 +28,15 @@ func newCountingHighlighter(t *testing.T) (*Highlighter, *countingFormatter) {
 	if inner == nil || style == nil {
 		t.Fatal("chroma is missing its terminal256 formatter or github-dark style")
 	}
+	markdown, err := markdownStyle(style)
+	if err != nil {
+		t.Fatalf("markdownStyle: %v", err)
+	}
 	counter := &countingFormatter{inner: inner}
 	return &Highlighter{
 		formatter: counter,
 		style:     style,
+		markdown:  markdown,
 		lexers:    map[string]chroma.Lexer{},
 		lines:     map[lineKey]string{},
 	}, counter

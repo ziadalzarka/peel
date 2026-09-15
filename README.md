@@ -163,6 +163,15 @@ the next. Everything works on the code that arrives the way it works on the rest
 `c` leaves a note on it, side-by-side pairs it, and the line numbers are the
 file's own.
 
+### Markdown
+
+A Markdown file is drawn to be read rather than scanned as code. An added line
+has a green `│` where the `+` goes and no green behind it, so a page of new text
+is not a solid block of colour; a removed line keeps its red. Headings and
+`**bold**` text are bold, `*italic*` text is italic, link text is underlined with
+the address dimmed, and a table's pipes and its `---` row are dimmed so the cells
+stand out. Only the colour changes — every character is still the file's own.
+
 ### Comments
 
 `c` opens the editor inline, in the diff, exactly where the comment will sit once

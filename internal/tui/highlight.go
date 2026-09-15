@@ -23,6 +23,7 @@ import (
 type Highlighter struct {
 	formatter chroma.Formatter
 	style     *chroma.Style
+	markdown  *chroma.Style
 
 	mu     sync.Mutex
 	lexers map[string]chroma.Lexer
@@ -45,9 +46,14 @@ func NewHighlighter() *Highlighter {
 	if formatter == nil || style == nil {
 		return nil
 	}
+	markdown, err := markdownStyle(style)
+	if err != nil {
+		return nil
+	}
 	return &Highlighter{
 		formatter: formatter,
 		style:     style,
+		markdown:  markdown,
 		lexers:    map[string]chroma.Lexer{},
 		lines:     map[lineKey]string{},
 	}
@@ -72,10 +78,14 @@ func (h *Highlighter) Line(path, text string) string {
 		return cached
 	}
 
+	style := h.style
+	if isMarkdown(path) {
+		style = h.markdown
+	}
 	out := text
 	if iterator, err := lexer.Tokenise(nil, text); err == nil {
 		var b strings.Builder
-		if err := h.formatter.Format(&b, h.style, iterator); err == nil {
+		if err := h.formatter.Format(&b, style, iterator); err == nil {
 			// A trailing newline would break the caller's single-line layout.
 			out = strings.TrimRight(b.String(), "\n")
 		}
@@ -109,6 +119,10 @@ func (h *Highlighter) lexerFor(key, path string) chroma.Lexer {
 		return lexer
 	}
 
+	if isMarkdown(path) {
+		h.lexers[key] = markdownLexer
+		return markdownLexer
+	}
 	lexer := lexers.Match(path)
 	if lexer != nil {
 		lexer = chroma.Coalesce(lexer)

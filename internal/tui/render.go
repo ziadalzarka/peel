@@ -345,7 +345,7 @@ func (r *Renderer) line(d Document, row Row, st RowState) string {
 func (r *Renderer) unifiedBody(ref HunkRef, row Row, width int) string {
 	l := ref.Hunk.Lines[row.Left]
 	body := r.gutter(lineNumberOf(l)) + " " + r.content(ref.Path, l)
-	return fill(r.fillFor(l), fit(body, width))
+	return fill(r.fillFor(ref.Path, l), fit(body, width))
 }
 
 // splitBody puts the old side left of the new side. Either index may be -1,
@@ -371,12 +371,15 @@ func (r *Renderer) halfLine(ref HunkRef, index int, old bool, width int) string 
 	if old {
 		num = l.OldLine
 	}
-	return fill(r.fillFor(l), fit(r.gutter(num)+" "+r.content(ref.Path, l), width))
+	return fill(r.fillFor(ref.Path, l), fit(r.gutter(num)+" "+r.content(ref.Path, l), width))
 }
 
-func (r *Renderer) fillFor(l git.Line) string {
+func (r *Renderer) fillFor(path string, l git.Line) string {
 	switch l.Kind {
 	case git.LineAdded:
+		if isMarkdown(path) {
+			return ""
+		}
 		return r.addedFill
 	case git.LineRemoved:
 		return r.removedFill
@@ -393,6 +396,9 @@ func (r *Renderer) fillFor(l git.Line) string {
 // scrolled sideways still reads as a diff.
 func (r *Renderer) content(path string, l git.Line) string {
 	origin := string(l.Kind.Origin())
+	if l.Kind == git.LineAdded && isMarkdown(path) {
+		origin = markdownAddedMark
+	}
 	text := expandTabs(l.Text)
 	if l.Kind == git.LineNoNewline {
 		return r.theme.Dim.Render(origin + shift(text, r.xoff))
