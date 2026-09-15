@@ -1246,3 +1246,7 @@ func TestCommentAddSignsTheNoteWithTheNameGiven(t *testing.T) {
 		t.Errorf("comments by claude = %v, want the one claude signed", got)
 	}
 }
+
+func (f *fakeForge) Comments(context.Context, forge.Ref) ([]forge.RemoteComment, error) {
+	return nil, nil
+}

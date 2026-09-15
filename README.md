@@ -416,6 +416,16 @@ else. Notes written on a pull request before this — the ones stranded in some
 checkout's `.git/peel` — are moved into the pull request's file the next time you
 open it from that checkout.
 
+What other people have already said on the pull request comes in when you open
+it: each review comment is drawn on its line, signed with the reviewer's GitHub
+login. A thread resolved on GitHub comes in resolved and folded, and an outdated
+one is left out. They are notes like any other here — `A` hides them with
+everyone else's, `X` deletes them, `x` resolves them — but they stay GitHub's:
+`e` does not rewrite them and `P` never posts them back. A comment you delete does
+not come back on the next open, a thread resolved on GitHub since then does come
+in resolved, and one that has gone from the pull request is taken out. If the
+comments cannot be read, the review opens anyway and says so.
+
 `P` posts the review. It asks for a summary, then what the review does — `a`
 approve, `r` request changes, `c` comment — and then the last question, which
 says how many notes are about to go where:
@@ -424,7 +434,7 @@ says how many notes are about to go where:
 post 6 comments to cli/cli#412 as request changes?
 ```
 
-Only `y` sends it. What goes is every unresolved note on the review, and posting
+Only `y` sends it. What goes is every unresolved note written here, and posting
 resolves them: they are the other side's to answer now. A note left on a file
 rather than a line has nowhere inline to attach, so the panel says it is staying
 behind. `peel pr submit` does the same thing from the command line, and prints

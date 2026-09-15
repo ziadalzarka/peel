@@ -1636,6 +1636,10 @@ func (m *Model) editComment() {
 	if !ok {
 		return
 	}
+	if c.Remote != "" {
+		m.status = "that note came from " + c.Remote + " — x resolves it, D deletes it"
+		return
+	}
 	if !c.Author.Mine(m.me) {
 		m.status = "that note is " + string(c.Author) + "'s — x resolves it, D deletes it"
 		return

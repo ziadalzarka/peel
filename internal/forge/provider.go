@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ziadalzarka/peel/internal/registry"
 )
@@ -163,6 +164,7 @@ type Provider interface {
 	// SubmitReview posts a review. This is the one outward-facing operation in
 	// peel, so callers must confirm with the user before invoking it.
 	SubmitReview(ctx context.Context, ref Ref, review Review) error
+	Comments(ctx context.Context, ref Ref) ([]RemoteComment, error)
 }
 
 // Registry holds the known forge providers and picks between them.
@@ -172,4 +174,16 @@ type Registry = registry.Registry[Provider]
 // order.
 func NewRegistry(providers ...Provider) *Registry {
 	return registry.New("forge provider", providers...)
+}
+
+type RemoteComment struct {
+	ID        string
+	Path      string
+	Line      int
+	EndLine   int
+	Side      string
+	Body      string
+	Author    string
+	CreatedAt time.Time
+	Resolved  bool
 }

@@ -28,7 +28,8 @@ type Session struct {
 	// its changes are not in this working tree, so there is nothing to stage.
 	Stageable bool
 	// PR is set when reviewing a pull request.
-	PR *forge.PullRequest
+	PR          *forge.PullRequest
+	CommentsErr error
 }
 
 // IsEmpty reports whether there is nothing to review.
@@ -179,14 +180,16 @@ func (a *App) LoadPullRequest(ctx context.Context, providerName, ref string) (*S
 		return nil, err
 	}
 
-	return &Session{
+	session := &Session{
 		Target:    target,
 		Title:     pr.Describe(),
 		Files:     files,
 		DiffText:  pr.Diff,
 		Stageable: false,
 		PR:        pr,
-	}, nil
+	}
+	session.CommentsErr = a.importComments(ctx, provider, parsed, target)
+	return session, nil
 }
 
 // needRepo reports the session that cannot be loaded because peel is not in a

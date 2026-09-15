@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ziadalzarka/peel/internal/exec"
 )
@@ -244,4 +245,122 @@ func (p *GitHubProvider) Login(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("read the gh login: %w", err)
 	}
 	return strings.TrimSpace(string(res.Stdout)), nil
+}
+
+const reviewThreadsQuery = `query($owner: String!, $repo: String!, $number: Int!, $cursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $cursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          isResolved isOutdated path line startLine diffSide subjectType
+          comments(first: 100) {
+            nodes { fullDatabaseId body createdAt author { login } }
+          }
+        }
+      }
+    }
+  }
+}`
+
+type ghReviewThreads struct {
+	Data struct {
+		Repository struct {
+			PullRequest struct {
+				ReviewThreads struct {
+					PageInfo struct {
+						HasNextPage bool   `json:"hasNextPage"`
+						EndCursor   string `json:"endCursor"`
+					} `json:"pageInfo"`
+					Nodes []ghReviewThread `json:"nodes"`
+				} `json:"reviewThreads"`
+			} `json:"pullRequest"`
+		} `json:"repository"`
+	} `json:"data"`
+}
+
+type ghReviewThread struct {
+	IsResolved  bool   `json:"isResolved"`
+	IsOutdated  bool   `json:"isOutdated"`
+	Path        string `json:"path"`
+	Line        *int   `json:"line"`
+	StartLine   *int   `json:"startLine"`
+	DiffSide    string `json:"diffSide"`
+	SubjectType string `json:"subjectType"`
+	Comments    struct {
+		Nodes []struct {
+			FullDatabaseID string    `json:"fullDatabaseId"`
+			Body           string    `json:"body"`
+			CreatedAt      time.Time `json:"createdAt"`
+			Author         *struct {
+				Login string `json:"login"`
+			} `json:"author"`
+		} `json:"nodes"`
+	} `json:"comments"`
+}
+
+func (p *GitHubProvider) Comments(ctx context.Context, ref Ref) ([]RemoteComment, error) {
+	if !ref.Valid() {
+		return nil, fmt.Errorf("incomplete pull request reference %+v", ref)
+	}
+	var out []RemoteComment
+	cursor := ""
+	for {
+		args := []string{"api", "graphql", "-f", "query=" + reviewThreadsQuery,
+			"-f", "owner=" + ref.Owner, "-f", "repo=" + ref.Repo, "-F", "number=" + strconv.Itoa(ref.Number)}
+		if cursor != "" {
+			args = append(args, "-f", "cursor="+cursor)
+		}
+		res, err := p.runner.Run(ctx, exec.Command{Name: p.binary, Args: args})
+		if err != nil {
+			return nil, fmt.Errorf("read review comments on %s: %w", ref, err)
+		}
+		var page ghReviewThreads
+		if err := json.Unmarshal(res.Stdout, &page); err != nil {
+			return nil, fmt.Errorf("read review comments on %s: parse gh output: %w", ref, err)
+		}
+		threads := page.Data.Repository.PullRequest.ReviewThreads
+		for _, thread := range threads.Nodes {
+			out = append(out, thread.remoteComments()...)
+		}
+		if !threads.PageInfo.HasNextPage || threads.PageInfo.EndCursor == "" {
+			return out, nil
+		}
+		cursor = threads.PageInfo.EndCursor
+	}
+}
+
+func (t ghReviewThread) remoteComments() []RemoteComment {
+	if t.IsOutdated {
+		return nil
+	}
+	line, endLine := 0, 0
+	switch {
+	case t.Line != nil:
+		line = *t.Line
+		if t.StartLine != nil && *t.StartLine < line {
+			line, endLine = *t.StartLine, *t.Line
+		}
+	case t.SubjectType != "FILE":
+		return nil
+	}
+	out := make([]RemoteComment, 0, len(t.Comments.Nodes))
+	for _, c := range t.Comments.Nodes {
+		author := "ghost"
+		if c.Author != nil && c.Author.Login != "" {
+			author = c.Author.Login
+		}
+		out = append(out, RemoteComment{
+			ID:        c.FullDatabaseID,
+			Path:      t.Path,
+			Line:      line,
+			EndLine:   endLine,
+			Side:      t.DiffSide,
+			Body:      c.Body,
+			Author:    author,
+			CreatedAt: c.CreatedAt,
+			Resolved:  t.IsResolved,
+		})
+	}
+	return out
 }

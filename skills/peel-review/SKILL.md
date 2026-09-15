@@ -68,7 +68,7 @@ peel providers
 
 `comment list --json` returns `id`, `file`, `line`, `side`, `origin`, `body`,
 `hunk`, `author`, `resolved`, `createdAt`, `target`, and — when they apply —
-`endLine`, `movedFrom` and `outdated`.
+`endLine`, `movedFrom`, `outdated` and `remote`.
 
 `endLine` is on a note written about a run of lines: the note covers `line`
 through `endLine` inclusive, on `side`, and every line between them is what it is
@@ -79,6 +79,12 @@ answered by editing line 12. A note without `endLine` is about `line` alone.
 says which of the two diffs `line` counts lines in. `"worktree"` — or no `origin`
 at all — means the file on disk, which is what you read. `"index"` means the
 staged copy, so find the code by what the note says rather than by the number.
+
+`remote` is only on a pull request's review, on a comment copied in from the
+pull request itself: `"remote": "github"`, signed with that reviewer's GitHub
+login. It is neither yours nor the user's. Answer it with a note of your own
+rather than removing it — peel never posts it back, and removing it here does
+not remove it from the pull request.
 
 ### `line` is where the code is now
 

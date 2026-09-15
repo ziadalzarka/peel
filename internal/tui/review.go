@@ -211,7 +211,7 @@ func eventName(event forge.ReviewEvent) string {
 // yet, so it is not one the payload can be built from.
 func (m *Model) pendingReview() (inline, fileLevel int) {
 	for _, c := range m.comments {
-		if c.Resolved || unsaved(c) {
+		if c.Resolved || unsaved(c) || c.Remote != "" {
 			continue
 		}
 		if c.Line > 0 {

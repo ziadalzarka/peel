@@ -102,6 +102,9 @@ func (a *App) buildReview(s *Session, opts SubmitOptions) (forge.Review, []store
 	var included []store.Comment
 	var skipped []string
 	for _, c := range comments {
+		if c.Remote != "" {
+			continue
+		}
 		// A review comment must anchor to a line in the diff; a file-level note
 		// has nowhere to attach, so it is reported rather than dropped quietly.
 		if c.Line <= 0 {

@@ -33,7 +33,7 @@ func Run(ctx context.Context, a *app.App, s *app.Session, opts ...Option) error 
 	// it has to stay.
 	mode, modeErr := a.StageMode(ctx)
 	model := New(ctx, backend, s, comments, append(opts, WithMoves(moves), WithStageMode(mode), WithAuthor(a.Author(ctx)))...)
-	if err := settingsErr(moveErr, modeErr); err != nil {
+	if err := settingsErr(moveErr, modeErr, s.CommentsErr); err != nil {
 		model.err = err
 	}
 	// Mouse reporting is on so the wheel arrives as a wheel event. Without it

@@ -53,12 +53,13 @@ func (s *ReviewStore) Walkthroughs() WalkthroughCache { return reviewWalkthrough
 // reviewFile is the on-disk shape: everything one review is, under a version so
 // the format can change later without silently misreading an older file.
 type reviewFile struct {
-	Version     int          `json:"version"`
-	Target      string       `json:"target,omitempty"`
-	Comments    []Comment    `json:"comments,omitempty"`
-	Folded      []string     `json:"folded,omitempty"`
-	View        View         `json:"view"`
-	Walkthrough *Walkthrough `json:"walkthrough,omitempty"`
+	Version     int             `json:"version"`
+	Target      string          `json:"target,omitempty"`
+	Comments    []Comment       `json:"comments,omitempty"`
+	Folded      []string        `json:"folded,omitempty"`
+	View        View            `json:"view"`
+	Walkthrough *Walkthrough    `json:"walkthrough,omitempty"`
+	Imported    map[string]bool `json:"imported,omitempty"`
 }
 
 // read loads the file, treating a missing one as a review nobody has read yet.

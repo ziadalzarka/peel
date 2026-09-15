@@ -38,13 +38,15 @@ func (f *fakeAI) Walkthrough(_ context.Context, req ai.Request) (string, error) 
 
 // fakeForge is a forge.Provider whose behaviour tests control.
 type fakeForge struct {
-	name      string
-	available bool
-	pr        *forge.PullRequest
-	parseErr  error
-	fetchErr  error
-	submitErr error
-	submitted []forge.Review
+	name        string
+	available   bool
+	pr          *forge.PullRequest
+	parseErr    error
+	fetchErr    error
+	submitErr   error
+	submitted   []forge.Review
+	comments    []forge.RemoteComment
+	commentsErr error
 }
 
 func (f *fakeForge) Name() string        { return f.name }
@@ -1228,4 +1230,8 @@ func mustAddComment(t *testing.T, f *fixture, c store.Comment) store.Comment {
 		t.Fatalf("Add(%+v): %v", c, err)
 	}
 	return got
+}
+
+func (f *fakeForge) Comments(context.Context, forge.Ref) ([]forge.RemoteComment, error) {
+	return f.comments, f.commentsErr
 }

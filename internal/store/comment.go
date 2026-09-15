@@ -114,6 +114,7 @@ type Comment struct {
 	// Target scopes the comment to what was being reviewed: empty for the
 	// working tree, or a pull request reference such as "github:cli/cli#123".
 	Target string `json:"target,omitempty"`
+	Remote string `json:"remote,omitempty"`
 }
 
 // Validate reports whether the comment is well-formed enough to store.

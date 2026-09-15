@@ -297,6 +297,7 @@ type commentJSON struct {
 	Resolved bool   `json:"resolved"`
 	Created  string `json:"createdAt"`
 	Target   string `json:"target,omitempty"`
+	Remote   string `json:"remote,omitempty"`
 }
 
 func commentToJSON(c store.Comment) commentJSON {
@@ -315,6 +316,7 @@ func commentToJSON(c store.Comment) commentJSON {
 		Resolved: c.Resolved,
 		Created:  c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		Target:   c.Target,
+		Remote:   c.Remote,
 	}
 }
 

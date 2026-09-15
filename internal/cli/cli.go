@@ -222,6 +222,9 @@ func (c *CLI) openSession(ctx context.Context) (*app.App, *app.Session, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if s.CommentsErr != nil {
+		fmt.Fprintf(c.Stderr, "peel: %v\n", s.CommentsErr)
+	}
 	return a, s, nil
 }
 

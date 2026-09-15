@@ -370,3 +370,69 @@ func TestLoginReportsAGhThatIsNotSignedIn(t *testing.T) {
 		t.Fatal("Login succeeded with gh signed out")
 	}
 }
+
+const reviewThreadsFirstPage = `{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":true,"endCursor":"next"},"nodes":[
+{"isResolved":true,"isOutdated":false,"path":"go.mod","line":21,"startLine":21,"diffSide":"RIGHT","subjectType":"LINE","comments":{"nodes":[
+  {"fullDatabaseId":"11","body":"pin this","createdAt":"2026-09-15T12:03:40Z","author":{"login":"octocat"}},
+  {"fullDatabaseId":"12","body":"pinned","createdAt":"2026-09-15T12:05:00Z","author":{"login":"hubot"}}]}},
+{"isResolved":false,"isOutdated":true,"path":"main.go","line":null,"startLine":null,"diffSide":"RIGHT","subjectType":"LINE","comments":{"nodes":[
+  {"fullDatabaseId":"13","body":"gone","createdAt":"2026-09-15T12:06:00Z","author":{"login":"octocat"}}]}},
+{"isResolved":false,"isOutdated":false,"path":"old.go","line":6,"startLine":4,"diffSide":"LEFT","subjectType":"LINE","comments":{"nodes":[
+  {"fullDatabaseId":"14","body":"these three","createdAt":"2026-09-15T12:07:00Z","author":null}]}}
+]}}}}}`
+
+const reviewThreadsSecondPage = `{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":"end"},"nodes":[
+{"isResolved":false,"isOutdated":false,"path":"README.md","line":null,"startLine":null,"diffSide":"RIGHT","subjectType":"FILE","comments":{"nodes":[
+  {"fullDatabaseId":"15","body":"whole file","createdAt":"2026-09-15T12:08:00Z","author":{"login":"octocat"}}]}}
+]}}}}}`
+
+func TestCommentsReadsEveryThreadThatIsNotOutdated(t *testing.T) {
+	runner := exec.NewFakeRunner().RespondFunc("gh api graphql", func(_ context.Context, cmd exec.Command) (exec.Result, error) {
+		if strings.Contains(strings.Join(cmd.Args, " "), "cursor=next") {
+			return exec.Result{Stdout: []byte(reviewThreadsSecondPage)}, nil
+		}
+		return exec.Result{Stdout: []byte(reviewThreadsFirstPage)}, nil
+	})
+
+	got, err := newGitHub(runner).Comments(context.Background(), Ref{"cli", "cli", 412})
+	if err != nil {
+		t.Fatalf("Comments: %v", err)
+	}
+
+	want := []RemoteComment{
+		{ID: "11", Path: "go.mod", Line: 21, Side: "RIGHT", Body: "pin this", Author: "octocat", Resolved: true},
+		{ID: "12", Path: "go.mod", Line: 21, Side: "RIGHT", Body: "pinned", Author: "hubot", Resolved: true},
+		{ID: "14", Path: "old.go", Line: 4, EndLine: 6, Side: "LEFT", Body: "these three", Author: "ghost"},
+		{ID: "15", Path: "README.md", Side: "RIGHT", Body: "whole file", Author: "octocat"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d comments, want %d: %+v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i].CreatedAt.IsZero() {
+			t.Errorf("comment %s has no creation time", got[i].ID)
+		}
+		g := got[i]
+		g.CreatedAt = want[i].CreatedAt
+		if g != want[i] {
+			t.Errorf("comment %d = %+v, want %+v", i, g, want[i])
+		}
+	}
+
+	calls := runner.Calls()
+	if len(calls) != 2 {
+		t.Fatalf("gh ran %d times, want one per page", len(calls))
+	}
+	first := strings.Join(calls[0].Cmd.Args, " ")
+	if !strings.Contains(first, "-f owner=cli") || !strings.Contains(first, "-F number=412") {
+		t.Errorf("first call = %q, want the owner as a string and the number as a number", first)
+	}
+}
+
+func TestCommentsReportsAFailedRead(t *testing.T) {
+	runner := exec.NewFakeRunner().RespondErr("gh api graphql", "HTTP 502", 1)
+
+	if _, err := newGitHub(runner).Comments(context.Background(), Ref{"cli", "cli", 412}); err == nil {
+		t.Fatal("Comments succeeded with gh failing")
+	}
+}
