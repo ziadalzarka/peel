@@ -69,6 +69,9 @@ const (
 	RowExpand
 	// RowBlank separates files.
 	RowBlank
+	// RowTableEdge is the rule along the top or the bottom of a drawn Markdown
+	// table. It is the one row that stands for no line of the file.
+	RowTableEdge
 )
 
 // Row is one rendered line of the document.
@@ -118,6 +121,7 @@ type HunkRef struct {
 	// header of a run of hunks git named alike — so the header has nothing left
 	// to add by repeating it.
 	SectionShown bool
+	markdown     *markdownHunk
 }
 
 // Origin names the diff this hunk was read from, which is what a note left on
@@ -671,6 +675,7 @@ func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *co
 		hi := len(d.Hunks)
 		shown := h
 		shown.Lines = withContext(gaps.bottom(i), h.Lines, gaps.top(i+1))
+		md := markdownHunkOf(entry.Path, shown.Lines)
 		d.Hunks = append(d.Hunks, HunkRef{
 			File:         fi,
 			Path:         entry.Path,
@@ -678,6 +683,7 @@ func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *co
 			ID:           s.diff.ID(h),
 			Hunk:         shown,
 			SectionShown: said[h.Section] || sectionShown(h.Section, above, gaps.bottom(i)),
+			markdown:     md,
 		})
 		if h.Section != "" {
 			said[h.Section] = true
@@ -689,20 +695,39 @@ func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *co
 		}
 		d.add(Row{Kind: RowHunk, File: fi, Hunk: hi, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1})
 		d.addDraft(fi, hi, d.draftOnHunk(d.Hunks[hi]))
-		d.measure(shown.Lines)
+		d.measure(shown.Lines, md)
 
 		// The run above this hunk is marked under its header rather than over it:
 		// the lines it opens arrive directly below, so the row stands where the
 		// code it is about to show will be.
 		d.addExpand(fi, gaps, i, count, gaps.above)
-		for _, pair := range pairLines(shown.Lines, d.Layout) {
+		pairs := pairLines(shown.Lines, d.Layout)
+		for pi, pair := range pairs {
+			table := md.tableOf(lineOf(pair))
+			if table >= 0 && (pi == 0 || md.tableOf(lineOf(pairs[pi-1])) != table) {
+				d.addTableEdge(fi, hi, lineOf(pair), true)
+			}
 			d.add(Row{Kind: RowLine, File: fi, Hunk: hi, Left: pair.left, Right: pair.right, Step: -1, Side: -1, Expand: -1,
 				Noted: idx.covers(d.Hunks[hi], pair)})
+			if table >= 0 && (pi+1 == len(pairs) || md.tableOf(lineOf(pairs[pi+1])) != table) {
+				d.addTableEdge(fi, hi, lineOf(pair), false)
+			}
 			d.addComments(fi, hi, idx.takeLine(d.Hunks[hi], pair))
 			d.addDraft(fi, hi, d.draftOnLine(d.Hunks[hi], pair))
 		}
 		d.addExpand(fi, gaps, i+1, count, gaps.below)
 	}
+}
+
+func lineOf(p linePair) int {
+	if p.left >= 0 {
+		return p.left
+	}
+	return p.right
+}
+
+func (d *Document) addTableEdge(fi, hi, line int, head bool) {
+	d.add(Row{Kind: RowTableEdge, File: fi, Hunk: hi, Left: line, Right: -1, Step: -1, Side: -1, Expand: -1, Head: head})
 }
 
 // sectionShown reports that the line git named after a hunk's @@ is one of the
@@ -755,9 +780,9 @@ func (d *Document) addExpand(fi int, g gaps, i, hunks int, where func(int, int) 
 // measure widens CodeWidth to hold a hunk's longest line. Tabs are expanded
 // first, since the offset the width bounds is counted in screen columns and a
 // tab is eight of them.
-func (d *Document) measure(lines []git.Line) {
-	for _, l := range lines {
-		d.CodeWidth = max(d.CodeWidth, ansi.StringWidth(expandTabs(l.Text)))
+func (d *Document) measure(lines []git.Line, md *markdownHunk) {
+	for i, l := range lines {
+		d.CodeWidth = max(d.CodeWidth, ansi.StringWidth(md.textAt(i, l.Text)))
 	}
 }
 
@@ -888,7 +913,7 @@ func (d Document) IsStop(i int) bool {
 	switch d.Rows[i].Kind {
 	case RowComment:
 		return d.Rows[i].Head
-	case RowBlank, RowStepText, RowDraft:
+	case RowBlank, RowStepText, RowDraft, RowTableEdge:
 		return false
 	default:
 		return true

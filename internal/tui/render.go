@@ -123,6 +123,8 @@ func (r *Renderer) Row(d Document, i int, st RowState) string {
 		return r.hunk(d, row, st)
 	case RowLine:
 		return r.line(d, row, st)
+	case RowTableEdge:
+		return r.tableEdge(d, row, st)
 	case RowSide:
 		return r.side(d, row, st)
 	case RowExpand:
@@ -342,9 +344,38 @@ func (r *Renderer) line(d Document, row Row, st RowState) string {
 	return prefix + r.unifiedBody(ref, row, width)
 }
 
+func (r *Renderer) tableEdge(d Document, row Row, st RowState) string {
+	ref := d.Hunks[row.Hunk]
+	block, ok := ref.markdown.tableAt(row.Left)
+	if !ok {
+		return r.fit("")
+	}
+	edge := tableFoot(block.widths)
+	if row.Head {
+		edge = tableTop(block.widths)
+	}
+
+	prefix := r.lineMarker(row, st)
+	width := r.width - ansi.StringWidth(prefix)
+	drawn := codeIndent(d.Layout) + shift(r.syntax.Line(ref.Path, edge), r.xoff)
+	if d.Layout != LayoutSplit {
+		return prefix + fit(drawn, width)
+	}
+
+	lw, rw := splitHalves(width)
+	left, right := "", ""
+	if block.old {
+		left = drawn
+	}
+	if block.new {
+		right = drawn
+	}
+	return prefix + fit(left, lw) + r.divider(prefix) + fit(right, rw)
+}
+
 func (r *Renderer) unifiedBody(ref HunkRef, row Row, width int) string {
 	l := ref.Hunk.Lines[row.Left]
-	body := r.gutter(lineNumberOf(l)) + " " + r.content(ref.Path, l)
+	body := r.gutter(lineNumberOf(l)) + " " + r.content(ref, row.Left)
 	return fill(r.fillFor(ref.Path, l), fit(body, width))
 }
 
@@ -371,7 +402,7 @@ func (r *Renderer) halfLine(ref HunkRef, index int, old bool, width int) string 
 	if old {
 		num = l.OldLine
 	}
-	return fill(r.fillFor(ref.Path, l), fit(r.gutter(num)+" "+r.content(ref.Path, l), width))
+	return fill(r.fillFor(ref.Path, l), fit(r.gutter(num)+" "+r.content(ref, index), width))
 }
 
 func (r *Renderer) fillFor(path string, l git.Line) string {
@@ -394,19 +425,24 @@ func (r *Renderer) fillFor(path string, l git.Line) string {
 //
 // The horizontal offset slides the text and leaves the origin behind, so a diff
 // scrolled sideways still reads as a diff.
-func (r *Renderer) content(path string, l git.Line) string {
+func (r *Renderer) content(ref HunkRef, index int) string {
+	l := ref.Hunk.Lines[index]
 	origin := string(l.Kind.Origin())
-	if l.Kind == git.LineAdded && isMarkdown(path) {
+	if l.Kind == git.LineAdded && isMarkdown(ref.Path) {
 		origin = markdownAddedMark
 	}
-	text := expandTabs(l.Text)
+	md := ref.markdown.at(index)
+	text := ref.markdown.textAt(index, l.Text)
 	if l.Kind == git.LineNoNewline {
 		return r.theme.Dim.Render(origin + shift(text, r.xoff))
 	}
-	if r.syntax.Active() {
-		return r.styleFor(l).Render(origin) + shift(r.syntax.Line(path, text), r.xoff)
+	if !r.syntax.Active() {
+		return r.styleFor(l).Render(origin + shift(text, r.xoff))
 	}
-	return r.styleFor(l).Render(origin + shift(text, r.xoff))
+	if md.code {
+		return r.styleFor(l).Render(origin) + shift(r.syntax.Code(md.lang, text), r.xoff)
+	}
+	return r.styleFor(l).Render(origin) + shift(r.syntax.Line(ref.Path, text), r.xoff)
 }
 
 // shift drops the first off columns of a line.

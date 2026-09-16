@@ -32,7 +32,10 @@ type Highlighter struct {
 
 // lineKey identifies a highlighted line by the lexer that coloured it rather
 // than by path, so the same text in two files of one language is lexed once.
-type lineKey struct{ lang, text string }
+type lineKey struct {
+	lang, text string
+	code       bool
+}
 
 // maxHighlightCache bounds what a very large diff can hold on to. Past it the
 // cache is dropped whole: the window is a screenful, so it refills at once, and
@@ -82,6 +85,25 @@ func (h *Highlighter) Line(path, text string) string {
 	if isMarkdown(path) {
 		style = h.markdown
 	}
+	return h.format(key, lexer, style, text)
+}
+
+func (h *Highlighter) Code(lang, text string) string {
+	if h == nil || lang == "" || strings.TrimSpace(text) == "" {
+		return text
+	}
+	key := lineKey{lang: lang, text: text, code: true}
+	if cached, ok := h.cached(key); ok {
+		return cached
+	}
+	lexer := h.codeLexer(lang)
+	if lexer == nil {
+		return text
+	}
+	return h.format(key, lexer, h.style, text)
+}
+
+func (h *Highlighter) format(key lineKey, lexer chroma.Lexer, style *chroma.Style, text string) string {
 	out := text
 	if iterator, err := lexer.Tokenise(nil, text); err == nil {
 		var b strings.Builder
@@ -108,6 +130,21 @@ func (h *Highlighter) remember(key lineKey, out string) {
 		h.lines = map[lineKey]string{}
 	}
 	h.lines[key] = out
+}
+
+func (h *Highlighter) codeLexer(lang string) chroma.Lexer {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	key := "```" + lang
+	if lexer, ok := h.lexers[key]; ok {
+		return lexer
+	}
+	lexer := lexers.Get(lang)
+	if lexer != nil {
+		lexer = chroma.Coalesce(lexer)
+	}
+	h.lexers[key] = lexer
+	return lexer
 }
 
 // lexerFor resolves and caches a lexer per file extension, since matching by

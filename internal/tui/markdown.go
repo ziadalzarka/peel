@@ -25,6 +25,7 @@ var markdownLexer = chroma.Coalesce(chroma.MustNewLexer(
 		return chroma.Rules{
 			"root": {
 				{Pattern: `^ {0,3}#{1,6}(?:[ \t].*)?$`, Type: chroma.GenericHeading},
+				{Pattern: "^[ \t]*(?:`{3,}[^`]*|~{3,}.*)$", Type: chroma.Punctuation},
 				{Pattern: `^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)*\|?[ \t]*$`, Type: chroma.Punctuation},
 				{Pattern: `\\.`, Type: chroma.Text},
 				{Pattern: "(`+)[^`].*?(?<!`)\\1(?!`)", Type: chroma.LiteralStringBacktick},
@@ -37,7 +38,8 @@ var markdownLexer = chroma.Coalesce(chroma.MustNewLexer(
 				{Pattern: `\*(?![\s*])[^*]*?(?<![\s*])\*`, Type: chroma.GenericEmph},
 				{Pattern: `(?<!\w)_(?![\s_])[^_]*?(?<![\s_])_(?!\w)`, Type: chroma.GenericEmph},
 				{Pattern: `\|`, Type: chroma.Punctuation},
-				{Pattern: "[^\\\\`*_\\[!<|h]+", Type: chroma.Text},
+				{Pattern: `[│├┼┤─┌┬┐└┴┘]+`, Type: chroma.Operator},
+				{Pattern: "[^\\\\`*_\\[!<|h│├┼┤─┌┬┐└┴┘]+", Type: chroma.Text},
 				{Pattern: `.`, Type: chroma.Text},
 			},
 		}
@@ -52,5 +54,6 @@ func markdownStyle(base *chroma.Style) (*chroma.Style, error) {
 		Add(chroma.GenericUnderline, "underline #79c0ff").
 		Add(chroma.NameAttribute, "#8b949e").
 		Add(chroma.Punctuation, "#8b949e").
+		Add(chroma.Operator, "#c9d1d9").
 		Build()
 }

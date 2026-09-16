@@ -168,9 +168,24 @@ file's own.
 A Markdown file is drawn to be read rather than scanned as code. An added line
 has a green `│` where the `+` goes and no green behind it, so a page of new text
 is not a solid block of colour; a removed line keeps its red. Headings and
-`**bold**` text are bold, `*italic*` text is italic, link text is underlined with
-the address dimmed, and a table's pipes and its `---` row are dimmed so the cells
-stand out. Only the colour changes — every character is still the file's own.
+`**bold**` text are bold, `*italic*` text is italic, and link text is underlined
+with the address dimmed.
+
+A table is drawn as a table, closed on all four sides. Every cell in a column is
+padded to the same width, the pipes become `│`, and the `---` row becomes a
+`├───┼───┤` rule, so the cells sit under their headings instead of being counted
+out by eye. Column widths are measured across both sides of the diff at once, so
+a rewritten row lines up under the one it replaced. The rules along the top and
+the bottom are the one thing peel draws that stands for no line of the file —
+they carry no line number and the cursor passes over them.
+
+Code inside a ``` block is coloured as the language the block names — `sql` as
+SQL, `go` as Go — and Markdown styling stops at the ``` line, so `**stars**` in a
+code sample stay stars. The two sides are read separately, so a block whose
+language was rewritten colours the old lines one way and the new lines the other.
+
+The border and the padding of a drawn table are peel's. Every other character on
+screen is the file's own.
 
 ### Comments
 
