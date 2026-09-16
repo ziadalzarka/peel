@@ -23,6 +23,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -37,6 +38,25 @@ import (
 // runs off the UI goroutine and is followed by a reload, so what the reviewer
 // ends up looking at is what git has rather than what peel guessed.
 func (m *Model) apply(show func(), op func(context.Context) error) tea.Cmd {
+	return m.write(show, plain(op), nil, nil)
+}
+
+func (m *Model) reapply(show func(), op func(context.Context) error, missed func()) tea.Cmd {
+	return m.write(show, plain(op), nil, missed)
+}
+
+func (m *Model) record(e *entry, show func(), op writeOp) tea.Cmd {
+	m.hist.add(e)
+	return m.write(show, op, e, nil)
+}
+
+type writeOp func(ctx context.Context) (recorded, error)
+
+func plain(op func(context.Context) error) writeOp {
+	return func(ctx context.Context) (recorded, error) { return recorded{}, op(ctx) }
+}
+
+func (m *Model) write(show func(), op writeOp, e *entry, missed func()) tea.Cmd {
 	before := m.snapshot()
 	show()
 
@@ -52,9 +72,16 @@ func (m *Model) apply(show func(), op func(context.Context) error) tea.Cmd {
 		}
 		defer done()
 
-		if err := op(ctx); err != nil {
+		got, err := op(ctx)
+		if err != nil {
 			writes.Add(-1)
-			return revertMsg{err: err, before: before}
+			if e != nil {
+				e.failed()
+			}
+			return revertMsg{err: err, before: before, missed: missed}
+		}
+		if e != nil {
+			e.wrote(got)
 		}
 		// A change pressed after this one is on screen already and queued
 		// already: its own reload will bring the truth for both, so this one is
@@ -92,33 +119,82 @@ func (m *Model) enqueue() (wait <-chan struct{}, done func()) {
 type revertMsg struct {
 	err    error
 	before snapshot
+	missed func()
 }
 
 // snapshot is the screen as it was before a change was drawn on it, kept so a
 // write that fails can put it back without asking git for anything.
 type snapshot struct {
-	session   *app.Session
-	comments  []store.Comment
-	collapsed map[string]bool
-	cursor    int
-	top       int
-	fileTop   int
-	status    string
+	session  *app.Session
+	comments []store.Comment
+	folds    folds
+	cursor   int
+	top      int
+	fileTop  int
+	status   string
+}
+
+type folds struct {
+	collapsed    map[string]bool
+	staged       map[string]bool
+	sides        map[string]bool
+	walk         map[int]bool
+	comments     map[string]bool
+	othersHidden bool
+}
+
+func (m *Model) folds() folds {
+	return folds{
+		collapsed:    copied(m.collapsed),
+		staged:       copied(m.stagedFolds),
+		sides:        copied(m.sideFolds),
+		walk:         copied(m.walkFolded),
+		comments:     copied(m.commentFolds),
+		othersHidden: m.othersHidden,
+	}
+}
+
+func copied[K comparable, V any](from map[K]V) map[K]V {
+	out := make(map[K]V, len(from))
+	maps.Copy(out, from)
+	return out
+}
+
+func (m *Model) putFolds(before folds) {
+	m.putFoldsBack(before.collapsed)
+	m.stagedFolds = copied(before.staged)
+	m.sideFolds = copied(before.sides)
+	m.walkFolded = copied(before.walk)
+	m.commentFolds = copied(before.comments)
+	m.setOthersHidden(before.othersHidden)
+}
+
+type viewport struct {
+	cursor  int
+	top     int
+	fileTop int
+}
+
+func (m *Model) viewport() viewport {
+	return viewport{cursor: m.cursor, top: m.top, fileTop: m.fileTop}
+}
+
+func (m *Model) putViewport(v viewport) {
+	m.cursor = min(v.cursor, max(m.doc.Len()-1, 0))
+	m.top, m.fileTop = v.top, v.fileTop
+	m.clampTop()
+	m.clampFileTop()
 }
 
 func (m *Model) snapshot() snapshot {
-	folded := make(map[string]bool, len(m.collapsed))
-	for path, hidden := range m.collapsed {
-		folded[path] = hidden
-	}
 	return snapshot{
-		session:   m.session,
-		comments:  m.comments,
-		collapsed: folded,
-		cursor:    m.cursor,
-		top:       m.top,
-		fileTop:   m.fileTop,
-		status:    m.status,
+		session:  m.session,
+		comments: m.comments,
+		folds:    m.folds(),
+		cursor:   m.cursor,
+		top:      m.top,
+		fileTop:  m.fileTop,
+		status:   m.status,
 	}
 }
 
@@ -127,12 +203,9 @@ func (m *Model) restore(before snapshot) {
 	m.session = before.session
 	m.comments = before.comments
 	m.status = before.status
-	m.putFoldsBack(before.collapsed)
+	m.putFolds(before.folds)
 	m.rebuild()
-	m.cursor = min(before.cursor, max(m.doc.Len()-1, 0))
-	m.top, m.fileTop = before.top, before.fileTop
-	m.clampTop()
-	m.clampFileTop()
+	m.putViewport(viewport{cursor: before.cursor, top: before.top, fileTop: before.fileTop})
 }
 
 // putFoldsBack undoes the folding a change did, through setCollapsed so that
@@ -207,6 +280,19 @@ func restagedHunk(s *app.Session, id git.HunkID) (*app.Session, git.FileEntry, b
 		return &out, moved, true
 	}
 	return s, git.FileEntry{}, false
+}
+
+func withEntry(s *app.Session, entry git.FileEntry) *app.Session {
+	out := *s
+	out.Files = make([]git.FileEntry, len(s.Files))
+	copy(out.Files, s.Files)
+	for i := range out.Files {
+		if out.Files[i].Path == entry.Path {
+			out.Files[i] = entry
+			return &out
+		}
+	}
+	return s
 }
 
 // only names one file for restaged, and every names all of them.

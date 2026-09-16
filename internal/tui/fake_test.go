@@ -230,6 +230,13 @@ type fakeBackend struct {
 	removed  []string
 	resolved map[string]bool
 
+	// indexTree names what the index holds now, and moves on with every change
+	// to it, the way a real tree object would. restored is every put-back asked
+	// for, as the pair it was asked with.
+	indexTree    string
+	restored     [][2]string
+	indexTreeErr error
+
 	walkCalls  int
 	regenerate bool
 	walkBody   string
@@ -284,9 +291,13 @@ func (f *fakeBackend) AddComment(_ context.Context, c store.Comment) (store.Comm
 	if err := f.take(); err != nil {
 		return store.Comment{}, err
 	}
-	f.nextID++
-	c.ID = fmt.Sprintf("c%d", f.nextID)
-	c.CreatedAt = time.Unix(int64(f.nextID), 0).UTC()
+	if c.ID == "" {
+		f.nextID++
+		c.ID = fmt.Sprintf("c%d", f.nextID)
+	}
+	if c.CreatedAt.IsZero() {
+		c.CreatedAt = time.Unix(int64(f.nextID), 0).UTC()
+	}
 	f.added = append(f.added, c)
 	f.comments = append(f.comments, c)
 	return c, nil
@@ -333,11 +344,48 @@ func (f *fakeBackend) SetResolved(id string, resolved bool) error {
 	return nil
 }
 
+func (f *fakeBackend) StoredComments() ([]store.Comment, error) {
+	return f.comments, nil
+}
+
+func (f *fakeBackend) IndexTree(context.Context) (string, error) {
+	if f.indexTreeErr != nil {
+		return "", f.indexTreeErr
+	}
+	if f.indexTree == "" {
+		f.indexTree = "tree0"
+	}
+	return f.indexTree, nil
+}
+
+func (f *fakeBackend) RestoreIndex(ctx context.Context, from, to string) error {
+	now, err := f.IndexTree(ctx)
+	if err != nil {
+		return err
+	}
+	if now != from {
+		return fmt.Errorf("the index has moved since that press — reload and take it back by hand")
+	}
+	f.restored = append(f.restored, [2]string{from, to})
+	f.indexTree = to
+	return nil
+}
+
+// moveIndex is what every change to the index does to the tree it reads as.
+func (f *fakeBackend) moveIndex() {
+	if f.indexTree == "" {
+		f.indexTree = "tree0"
+	}
+	n, _ := strconv.Atoi(strings.TrimPrefix(f.indexTree, "tree"))
+	f.indexTree = fmt.Sprintf("tree%d", n+1)
+}
+
 func (f *fakeBackend) StageFile(_ context.Context, path string) error {
 	if err := f.take(); err != nil {
 		return err
 	}
 	f.stagedFiles = append(f.stagedFiles, path)
+	f.moveIndex()
 	return nil
 }
 
@@ -346,6 +394,7 @@ func (f *fakeBackend) StageHunk(_ context.Context, id git.HunkID) error {
 		return err
 	}
 	f.stagedHunks = append(f.stagedHunks, id)
+	f.moveIndex()
 	return nil
 }
 
@@ -354,6 +403,7 @@ func (f *fakeBackend) UnstageFile(_ context.Context, path string) error {
 		return err
 	}
 	f.unstagedFiles = append(f.unstagedFiles, path)
+	f.moveIndex()
 	return nil
 }
 
@@ -362,6 +412,7 @@ func (f *fakeBackend) StageAll(context.Context) error {
 		return err
 	}
 	f.stageAll++
+	f.moveIndex()
 	return nil
 }
 
@@ -370,6 +421,7 @@ func (f *fakeBackend) UnstageAll(context.Context) error {
 		return err
 	}
 	f.unstageAll++
+	f.moveIndex()
 	return nil
 }
 

@@ -143,6 +143,7 @@ repository changes.
 | `\` | toggle unified and side-by-side |
 | `w` / `W` | walkthrough on-off / regenerate it |
 | `f` | follow: re-read the repository as it changes |
+| `z` / `Z` | undo / redo the last staging, comment or fold — `cmd+z` / `cmd+shift+z` in the terminals that send `cmd` through |
 | `r` | reload from git |
 | `?` / `q` | help / quit |
 

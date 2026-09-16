@@ -158,7 +158,7 @@ func (m *Model) hints() string {
 			stage = "s stage hunk · S stage by file"
 		}
 		hints := `j/k hunk · ↓/↑ line · [/] ten lines · opt+↓/↑ file · cmd+p go to file · shift+↓/↑ mark · ` +
-			stage + ` · u unstage · space fold · c comment · b files · \ layout · w walkthrough`
+			stage + ` · u unstage · space fold · c comment · z undo · b files · \ layout · w walkthrough`
 		// The key that posts is only worth a place in the footer where there is
 		// something to post to.
 		if m.session != nil && m.session.PR != nil {
@@ -349,6 +349,7 @@ func (m *Model) helpBindings() []binding {
 		{`\`, "toggle unified and side-by-side"},
 		{"w", "walkthrough: group the diff into steps, with a note before each"},
 		{"W", "regenerate the walkthrough"},
+		{"z / Z", "undo / redo a staging, a comment or a fold — cmd+z and cmd+shift+z too, where the terminal sends them"},
 		{"r", "reload from git"},
 		{"f", "follow: re-read the repository as it changes"},
 		{"? / q", "help / quit"},

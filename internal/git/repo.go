@@ -303,6 +303,22 @@ func (r *Repo) ApplyToIndex(ctx context.Context, patch string) error {
 	return nil
 }
 
+func (r *Repo) WriteTree(ctx context.Context) (string, error) {
+	out, err := r.git(ctx, "write-tree")
+	if err != nil {
+		return "", fmt.Errorf("record the index: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
+func (r *Repo) ReadTree(ctx context.Context, tree string) error {
+	if _, err := r.git(ctx, "read-tree", tree); err != nil {
+		return fmt.Errorf("put the index back: %w", err)
+	}
+	_, _ = r.git(ctx, "update-index", "-q", "--refresh")
+	return nil
+}
+
 // StageFile stages every change to one path, including deletions and untracked
 // files.
 func (r *Repo) StageFile(ctx context.Context, path string) error {

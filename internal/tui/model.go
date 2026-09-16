@@ -133,6 +133,8 @@ type Model struct {
 	// walkFolded hides a step's explanation, by step index.
 	walkFolded   map[int]bool
 	commentFolds map[string]bool
+	// hist is what has been pressed and what has been taken back.
+	hist history
 	// walkCode identifies the code the narrative was written about: git diff
 	// HEAD, which reads the same whether a change is staged or not, so staging a
 	// hunk does not date the narrative.
@@ -426,6 +428,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case revertMsg:
 		m.restore(msg.before)
+		if msg.missed != nil {
+			msg.missed()
+		}
 		m.busy = ""
 		m.err = msg.err
 		return m, nil
@@ -446,8 +451,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if key, named := unnamedKey(seq); named {
 		return m, m.key(key)
 	}
-	if cmdLetter(seq) == 'p' {
+	switch letter, shift := cmdLetter(seq); {
+	case letter == 'p':
 		return m, m.cmdFind()
+	case letter == 'z' && !shift:
+		return m, m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'z'}})
+	case letter == 'z' && shift:
+		return m, m.key(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'Z'}})
 	}
 	return m, nil
 }
@@ -500,10 +510,11 @@ var modifiedArrowRe = regexp.MustCompile(`^\x1b\[1;(\d+)(?::\d+)?([AB])$`)
 // the event type it appends when it is asked to report one, and the older
 // modifyOtherKeys `ESC [ 27 ; <modifiers> ; <letter> ~` — the same two forms
 // shiftEnterSeqs is written out for. The letter is its code point, so `112` is
-// `p`.
+// `p`, and the shifted key a terminal asked to report alternates puts after it
+// is read and thrown away: the modifier mask already says shift was held.
 //
 // bubbletea names no press in either form, so what reaches peel is the bytes.
-var cmdKeyRe = regexp.MustCompile(`^\x1b\[(?:(\d+);(\d+)(?::\d+)?u|27;(\d+);(\d+)~)$`)
+var cmdKeyRe = regexp.MustCompile(`^\x1b\[(?:(\d+)(?::\d+)*;(\d+)(?::\d+)?u|27;(\d+);(\d+)~)$`)
 
 // cmdBits are the places cmd can take in that mask. Terminals disagree on which
 // it is — kitty's protocol calls the key super and gives it bit 8, xterm's older
@@ -515,6 +526,10 @@ var cmdKeyRe = regexp.MustCompile(`^\x1b\[(?:(\d+);(\d+)(?::\d+)?u|27;(\d+);(\d+
 // the press being read, and a terminal reporting cmd+shift+↓ means the same
 // thing by it.
 const cmdBits = 8 | 32
+
+// shiftBit is shift's place in that same mask, which is what tells cmd+z from
+// cmd+shift+z: the letter reported is the same for both.
+const shiftBit = 1
 
 // unnamedKey turns a press bubbletea could not name into one peel already
 // handles, and reports whether it was one.
@@ -542,13 +557,17 @@ func unnamedKey(seq string) (tea.KeyMsg, bool) {
 	return tea.KeyMsg{}, false
 }
 
-// cmdLetter is the letter a terminal has reported cmd being held on, and zero
-// for a sequence that is not one — including a letter reported for some other
-// modifier, which is a press meant for something else.
-func cmdLetter(seq string) rune {
+// cmdLetter is the letter a terminal has reported cmd being held on, and
+// whether shift was held with it. The letter is zero for a sequence that is not
+// one — including a letter reported for some other modifier, which is a press
+// meant for something else.
+//
+// A terminal reports the unshifted letter and says shift in the mask, so cmd+z
+// and cmd+shift+z are the same letter and only the bit tells them apart.
+func cmdLetter(seq string) (rune, bool) {
 	match := cmdKeyRe.FindStringSubmatch(seq)
 	if match == nil {
-		return 0
+		return 0, false
 	}
 	// The two forms write the letter and the modifiers in opposite orders.
 	code, mods := match[1], match[2]
@@ -557,13 +576,13 @@ func cmdLetter(seq string) rune {
 	}
 	held, err := strconv.Atoi(mods)
 	if err != nil || (held-1)&cmdBits == 0 {
-		return 0
+		return 0, false
 	}
 	letter, err := strconv.Atoi(code)
 	if err != nil {
-		return 0
+		return 0, false
 	}
-	return rune(letter)
+	return rune(letter), (held-1)&shiftBit != 0
 }
 
 // wheelLines is how far one notch of the wheel scrolls.
@@ -734,6 +753,10 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 		return m.toggleWalkthrough()
 	case "W":
 		return m.walkCmd(true)
+	case "z":
+		return m.undoLast()
+	case "Z":
+		return m.redoLast()
 	case "r":
 		return m.reload("reloaded")
 	case "f":
@@ -1037,9 +1060,11 @@ func (m *Model) relayout() {
 
 // foldStep hides the explanation of the step at the cursor, so a walkthrough
 // that has been read stops taking room from the diff it describes.
-func (m *Model) foldStep(step int) {
+func (m *Model) foldStep(step int) string {
+	what := "folding a walkthrough note"
 	if m.walkFolded[step] {
 		delete(m.walkFolded, step)
+		what = "opening a walkthrough note"
 	} else {
 		m.walkFolded[step] = true
 	}
@@ -1047,6 +1072,7 @@ func (m *Model) foldStep(step int) {
 	if step < len(m.doc.Steps) {
 		m.moveTo(m.doc.Steps[step].Row)
 	}
+	return what
 }
 
 // helpKey closes the help screen, or reads further down it — the list of keys
@@ -1147,20 +1173,35 @@ func (m *Model) stageAt() tea.Cmd {
 		// Nothing to write, but `s` still means "done with this one" — a file
 		// reopened with `space` folds again, and moves on, without a pointless git
 		// call.
+		view := m.viewport()
+		was, wasStaged := m.collapsed[path], m.stagedFolds[path]
 		m.status = path + " is already staged"
 		m.foldStaged(path)
+		m.hist.add(drawn("folding "+path,
+			fileFold(path, was, wasStaged, view),
+			fileFold(path, m.collapsed[path], m.stagedFolds[path], m.viewport())))
 		return nil
 	}
 	if !m.canStage() {
 		return nil
 	}
-	return m.apply(func() {
+	before, view := file.Entry, m.viewport()
+	folded := m.collapsed[path]
+	show := func() {
 		m.session = restaged(m.session, true, only(path))
 		m.status = "staged " + path
 		m.foldStaged(path)
-	}, func(ctx context.Context) error {
-		return m.backend.StageFile(ctx, path)
-	})
+	}
+	staged := m.stagedFolds[path]
+	back := func(m *Model) {
+		m.session = withEntry(m.session, before)
+		fileFold(path, folded, staged, view)(m)
+	}
+	backend := m.backend
+	return m.record(written("staged "+path, back, func(*Model) { show() }), show,
+		indexWrite(backend, func(ctx context.Context) error {
+			return backend.StageFile(ctx, path)
+		}))
 }
 
 // stageHunkAt stages the one hunk the cursor is in and leaves the rest of the
@@ -1224,7 +1265,8 @@ func (m *Model) stageHunkAt() tea.Cmd {
 	}
 
 	m.staged = lastStage{path: path, at: m.now()}
-	return m.apply(func() {
+	before, view := file.Entry, m.viewport()
+	show := func() {
 		// There is always work left over: a file whose work was one hunk went in
 		// as the file above, so what is being patched here had at least two.
 		session, _, ok := restagedHunk(m.session, id)
@@ -1233,9 +1275,17 @@ func (m *Model) stageHunkAt() tea.Cmd {
 			m.carryOnInside(path)
 		}
 		m.status = "staged one hunk of " + path
-	}, func(ctx context.Context) error {
-		return m.backend.StageHunk(ctx, id)
-	})
+	}
+	back := func(m *Model) {
+		m.session = withEntry(m.session, before)
+		m.rebuild()
+		m.putViewport(view)
+	}
+	backend := m.backend
+	return m.record(written("staged one hunk of "+path, back, func(*Model) { show() }), show,
+		indexWrite(backend, func(ctx context.Context) error {
+			return backend.StageHunk(ctx, id)
+		}))
 }
 
 // onlyHunkInTheFile reports that what the file has out of the index is a single
@@ -1333,14 +1383,24 @@ func (m *Model) unstageAt() tea.Cmd {
 	if !m.canStage() {
 		return nil
 	}
-	return m.apply(func() {
+	before, view := file.Entry, m.viewport()
+	folded := m.collapsed[path]
+	show := func() {
 		m.session = restaged(m.session, false, only(path))
 		m.setCollapsed(unfold(path))
 		m.status = "unstaged " + path
 		m.relayout()
-	}, func(ctx context.Context) error {
-		return m.backend.UnstageFile(ctx, path)
-	})
+	}
+	staged := m.stagedFolds[path]
+	back := func(m *Model) {
+		m.session = withEntry(m.session, before)
+		fileFold(path, folded, staged, view)(m)
+	}
+	backend := m.backend
+	return m.record(written("unstaged "+path, back, func(*Model) { show() }), show,
+		indexWrite(backend, func(ctx context.Context) error {
+			return backend.UnstageFile(ctx, path)
+		}))
 }
 
 // stageEverything and unstageEverything are `a` and `U`: the whole tree in one
@@ -1349,7 +1409,8 @@ func (m *Model) stageEverything() tea.Cmd {
 	if !m.canStage() {
 		return nil
 	}
-	return m.apply(func() {
+	before, was, view := m.session, m.folds(), m.viewport()
+	show := func() {
 		m.session = restaged(m.session, true, every)
 		folds := m.foldEvery(true)
 		m.setCollapsed(folds)
@@ -1358,19 +1419,38 @@ func (m *Model) stageEverything() tea.Cmd {
 		}
 		m.status = "staged everything"
 		m.relayout()
-	}, m.backend.StageAll)
+	}
+	back := func(m *Model) {
+		m.session = before
+		m.putFolds(was)
+		m.rebuild()
+		m.putViewport(view)
+	}
+	backend := m.backend
+	return m.record(written("staged everything", back, func(*Model) { show() }), show,
+		indexWrite(backend, backend.StageAll))
 }
 
 func (m *Model) unstageEverything() tea.Cmd {
 	if !m.canStage() {
 		return nil
 	}
-	return m.apply(func() {
+	before, was, view := m.session, m.folds(), m.viewport()
+	show := func() {
 		m.session = restaged(m.session, false, every)
 		m.setCollapsed(m.foldEvery(false))
 		m.status = "unstaged everything"
 		m.relayout()
-	}, m.backend.UnstageAll)
+	}
+	back := func(m *Model) {
+		m.session = before
+		m.putFolds(was)
+		m.rebuild()
+		m.putViewport(view)
+	}
+	backend := m.backend
+	return m.record(written("unstaged everything", back, func(*Model) { show() }), show,
+		indexWrite(backend, backend.UnstageAll))
 }
 
 // canStage reports whether staging applies here, saying why on the spot when it
@@ -1905,16 +1985,43 @@ func (m *Model) submitComment() tea.Cmd {
 	// The note takes its place in the diff on the keypress, under the code it was
 	// written about, with the cursor left on that code: writing a note is not
 	// progress through the diff.
-	return m.apply(func() {
+	drafted := m.unsavedID()
+	show := func() {
 		shown := comment
-		shown.ID = m.unsavedID()
+		shown.ID = drafted
 		shown.CreatedAt = time.Now()
 		m.comments = withComment(m.comments, shown)
 		m.status = "commented on " + got.location()
 		m.relayout()
-	}, func(ctx context.Context) error {
-		_, err := m.backend.AddComment(ctx, comment)
-		return err
+	}
+	backend := m.backend
+	e := written("commented on "+got.location(), nil, nil)
+	e.back = func(m *Model) {
+		m.comments = withoutComment(m.comments, drafted)
+		if saved, ok := e.carried().(store.Comment); ok {
+			m.comments = withoutComment(m.comments, saved.ID)
+		}
+		m.relayout()
+	}
+	e.forth = func(m *Model) {
+		shown := comment
+		shown.ID = drafted
+		if saved, ok := e.carried().(store.Comment); ok {
+			shown = saved
+		}
+		m.comments = withComment(m.comments, shown)
+		m.relayout()
+	}
+	return m.record(e, show, func(ctx context.Context) (recorded, error) {
+		saved, err := backend.AddComment(ctx, comment)
+		if err != nil {
+			return recorded{}, err
+		}
+		e.carry(saved)
+		return recorded{
+			undo: func(ctx context.Context) error { return backend.RemoveComment(ctx, saved.ID) },
+			redo: func(ctx context.Context) error { _, err := backend.AddComment(ctx, saved); return err },
+		}, nil
 	})
 }
 
@@ -1939,12 +2046,28 @@ func (m *Model) saveEdit(id, body string) tea.Cmd {
 		m.status = "comment unchanged"
 		return nil
 	}
-	return m.apply(func() {
+	was := c.Body
+	show := func() {
 		m.comments = withBody(m.comments, id, body)
 		m.status = "edited the comment on " + c.Location()
 		m.relayout()
-	}, func(context.Context) error {
-		return m.backend.EditComment(id, body)
+	}
+	back := func(m *Model) {
+		m.comments = withBody(m.comments, id, was)
+		m.relayout()
+	}
+	backend := m.backend
+	return m.record(written("edited the comment on "+c.Location(), back, func(m *Model) {
+		m.comments = withBody(m.comments, id, body)
+		m.relayout()
+	}), show, func(ctx context.Context) (recorded, error) {
+		if err := backend.EditComment(id, body); err != nil {
+			return recorded{}, err
+		}
+		return recorded{
+			undo: rewrite(backend, id, body, was),
+			redo: rewrite(backend, id, was, body),
+		}, nil
 	})
 }
 
@@ -1958,13 +2081,31 @@ func (m *Model) toggleResolved() tea.Cmd {
 	if !want {
 		done = "reopened " + c.Location()
 	}
-	return m.apply(func() {
+	fold, hadFold := m.commentFolds[c.ID]
+	show := func() {
 		m.comments = withResolved(m.comments, c.ID, want)
 		delete(m.commentFolds, c.ID)
 		m.status = done
 		m.relayout()
-	}, func(context.Context) error {
-		return m.backend.SetResolved(c.ID, want)
+	}
+	back := func(m *Model) {
+		m.comments = withResolved(m.comments, c.ID, !want)
+		if hadFold {
+			m.commentFolds[c.ID] = fold
+		} else {
+			delete(m.commentFolds, c.ID)
+		}
+		m.relayout()
+	}
+	backend := m.backend
+	return m.record(written(done, back, func(*Model) { show() }), show, func(ctx context.Context) (recorded, error) {
+		if err := backend.SetResolved(c.ID, want); err != nil {
+			return recorded{}, err
+		}
+		return recorded{
+			undo: func(context.Context) error { return backend.SetResolved(c.ID, !want) },
+			redo: func(context.Context) error { return backend.SetResolved(c.ID, want) },
+		}, nil
 	})
 }
 
@@ -1973,13 +2114,30 @@ func (m *Model) deleteComment() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	return m.apply(func() {
+	show := func() {
 		m.comments = withoutComment(m.comments, c.ID)
 		m.status = "deleted comment on " + c.Location()
 		m.relayout()
-	}, func(ctx context.Context) error {
-		return m.backend.RemoveComment(ctx, c.ID)
-	})
+	}
+	back := func(m *Model) {
+		m.comments = withComment(m.comments, c)
+		m.relayout()
+	}
+	backend := m.backend
+	return m.record(written("deleted the comment on "+c.Location(), back, func(*Model) { show() }), show,
+		func(ctx context.Context) (recorded, error) {
+			stored, err := storedComments(backend, c.ID)
+			if err != nil {
+				return recorded{}, err
+			}
+			if err := backend.RemoveComment(ctx, c.ID); err != nil {
+				return recorded{}, err
+			}
+			return recorded{
+				undo: writeBack(backend, stored...),
+				redo: func(ctx context.Context) error { return backend.RemoveComment(ctx, c.ID) },
+			}, nil
+		})
 }
 
 // copyComments puts the review on the clipboard as text to paste into an agent.
@@ -2077,18 +2235,48 @@ func (m *Model) askClearOthers() {
 // gone, so the filter comes off with them.
 func (m *Model) clearOthers(ids []string) tea.Cmd {
 	backend := m.backend
-	return m.apply(func() {
+	what := "deleted " + plural(len(ids), "comment") + " by others"
+	gone := make([]store.Comment, 0, len(ids))
+	for _, c := range m.comments {
+		if slices.Contains(ids, c.ID) {
+			gone = append(gone, c)
+		}
+	}
+	hidden := m.othersHidden
+	show := func() {
 		m.comments = withoutComments(m.comments, ids)
 		m.setOthersHidden(false)
-		m.status = "deleted " + plural(len(ids), "comment") + " by others"
+		m.status = what
 		m.relayout()
-	}, func(ctx context.Context) error {
+	}
+	back := func(m *Model) {
+		for _, c := range gone {
+			m.comments = withComment(m.comments, c)
+		}
+		m.setOthersHidden(hidden)
+		m.relayout()
+	}
+	return m.record(written(what, back, func(*Model) { show() }), show, func(ctx context.Context) (recorded, error) {
+		stored, err := storedComments(backend, ids...)
+		if err != nil {
+			return recorded{}, err
+		}
 		for _, id := range ids {
 			if err := backend.RemoveComment(ctx, id); err != nil {
-				return err
+				return recorded{}, err
 			}
 		}
-		return nil
+		return recorded{
+			undo: writeBack(backend, stored...),
+			redo: func(ctx context.Context) error {
+				for _, id := range ids {
+					if err := backend.RemoveComment(ctx, id); err != nil {
+						return err
+					}
+				}
+				return nil
+			},
+		}, nil
 	})
 }
 
@@ -2614,37 +2802,63 @@ func (m *Model) fileIndex(path string) int {
 // next file with work still out of the index. Opening one again leaves the
 // cursor on it, since that is the file being read.
 func (m *Model) toggleCollapse() {
-	if c, ok := m.doc.CommentAt(m.cursor); ok {
-		m.foldComment(c)
-		return
-	}
-	if step := m.doc.StepAt(m.cursor); step >= 0 {
-		m.foldStep(step)
-		return
-	}
-	if side := m.doc.SideAt(m.cursor); side >= 0 {
-		m.foldSide(side)
-		return
-	}
 	if at := m.doc.ExpandAt(m.cursor); at >= 0 {
 		m.expandAt(at)
 		return
 	}
-	file := m.doc.FileAt(m.cursor)
-	if file < 0 || file >= len(m.doc.Files) {
+	what, back, forth, ok := m.foldAt()
+	if !ok {
 		return
 	}
+	m.hist.add(drawn(what, back, forth))
+}
+
+func (m *Model) foldAt() (what string, back, forth func(*Model), ok bool) {
+	view := m.viewport()
+	if c, ok := m.doc.CommentAt(m.cursor); ok {
+		was, had := m.commentFolds[c.ID]
+		what := m.foldComment(c)
+		now, has := m.commentFolds[c.ID]
+		return what, commentFold(c.ID, was, had, view), commentFold(c.ID, now, has, m.viewport()), true
+	}
+	if step := m.doc.StepAt(m.cursor); step >= 0 {
+		was, had := m.walkFolded[step]
+		what := m.foldStep(step)
+		now, has := m.walkFolded[step]
+		return what, stepFold(step, was, had, view), stepFold(step, now, has, m.viewport()), true
+	}
+	if side := m.doc.SideAt(m.cursor); side >= 0 {
+		path := m.doc.Sides[side].Path
+		was, had := m.sideFolds[path]
+		what, ok := m.foldSide(side)
+		if !ok {
+			return "", nil, nil, false
+		}
+		now, has := m.sideFolds[path]
+		return what, sideFold(path, was, had, view), sideFold(path, now, has, m.viewport()), true
+	}
+	file := m.doc.FileAt(m.cursor)
+	if file < 0 || file >= len(m.doc.Files) {
+		return "", nil, nil, false
+	}
 	path := m.doc.Files[file].Entry.Path
+	was, wasStaged := m.collapsed[path], m.stagedFolds[path]
 	if !m.collapsed[path] {
 		// A file put away by hand is put away for good: it was read and closed,
 		// where a file folded by staging opens again when something lands in it.
 		delete(m.stagedFolds, path)
 		m.foldNow(path, m.moves.AfterFold)
-		return
+		what = "folding " + path
+	} else {
+		m.setCollapsed(unfold(path))
+		m.rebuild()
+		m.moveTo(m.doc.RowOfFile(file))
+		what = "opening " + path
 	}
-	m.setCollapsed(unfold(path))
-	m.rebuild()
-	m.moveTo(m.doc.RowOfFile(file))
+	return what,
+		fileFold(path, was, wasStaged, view),
+		fileFold(path, m.collapsed[path], m.stagedFolds[path], m.viewport()),
+		true
 }
 
 // foldSide hides or shows one half of a part-staged file, leaving the cursor on
@@ -2653,11 +2867,11 @@ func (m *Model) toggleCollapse() {
 // Only the index half can be hidden: the working tree's is the change still to
 // be reviewed, and folding that away would leave a file that says it has changes
 // and shows none.
-func (m *Model) foldSide(side int) {
+func (m *Model) foldSide(side int) (string, bool) {
 	ref := m.doc.Sides[side]
 	if !ref.Staged {
 		m.status = "only the staged half folds — this is what is left to review"
-		return
+		return "", false
 	}
 	m.sideFolds[ref.Path] = !ref.Folded
 	m.rebuild()
@@ -2666,9 +2880,10 @@ func (m *Model) foldSide(side int) {
 	}
 	if ref.Folded {
 		m.status = "showing what is already staged in " + ref.Path
-	} else {
-		m.status = "hiding what is already staged in " + ref.Path
+		return m.status, true
 	}
+	m.status = "hiding what is already staged in " + ref.Path
+	return m.status, true
 }
 
 // showFile moves to the top of a file — its walkthrough note, where it has one —
@@ -2899,7 +3114,7 @@ func (m *Model) author() store.Author {
 	return store.AuthorUser
 }
 
-func (m *Model) foldComment(c store.Comment) {
+func (m *Model) foldComment(c store.Comment) string {
 	folded := !m.doc.CommentFolded(c)
 	if folded == c.Resolved {
 		delete(m.commentFolds, c.ID)
@@ -2911,8 +3126,9 @@ func (m *Model) foldComment(c store.Comment) {
 		m.moveTo(row)
 	}
 	if folded {
-		m.status = "folded the comment on " + c.Location()
-		return
+		m.status = "folding the comment on " + c.Location()
+		return m.status
 	}
-	m.status = "unfolded the comment on " + c.Location()
+	m.status = "opening the comment on " + c.Location()
+	return m.status
 }

@@ -536,9 +536,40 @@ that report one; `h`/`l` are the path that always works.
 | `\` | toggle unified ↔ side-by-side |
 | `w` | walkthrough on / off |
 | `W` | regenerate the walkthrough |
+| `z` / `Z` | take back the last staging, comment or fold / put it again — `cmd+z` and `cmd+shift+z` where the terminal sends them |
 | `r` | reload from git |
 | `?` | help |
 | `q` | quit |
+
+### Taking a press back
+
+`z` takes back the last press that changed something, and `Z` puts it again.
+`cmd+z` and `cmd+shift+z` do the same where the terminal reports them; several
+keep `cmd` to themselves, which is why the plain letters are bound as well.
+
+What they cover is what a press writes down: staging — a file, a hunk, `a` and
+`U` — a comment written, edited, resolved, deleted or cleared with `X`, and a
+fold. What they do not cover is everything that only changes what is on screen:
+the cursor, `b`, `\`, `A`, `w`, `f`, the `▴`/`▾` rows that read more of a file
+in, and `P`, which has left the machine and cannot be called back.
+
+A press is taken back the way it was made: the screen moves on the keypress and
+the write goes behind it. The two halves are recorded separately, because only
+the write knows how to reverse itself — staging records the index as a tree
+object either side of the change and puts the first one back, and a note records
+what it did to the store.
+
+Nothing is taken back over somebody else's work. The index is only put back when
+it still reads as the tree the press left, and a note's words are only put back
+when the note still says what the edit left it saying; either way the press is
+refused in words rather than applied over the top. A repository being written to
+by an agent while the review is open is the ordinary case, not the exception, so
+undo asks first and does nothing when the answer has changed.
+
+Folds are the one thing here that writes nothing git can see, so taking one back
+is only the screen. Staging is never lost either way: nothing undone touches the
+working tree, so the worst an undo can do is move a change back between the index
+and the file on disk.
 
 `?` lists all of them. There are more keys than rows on a short terminal, so the
 list scrolls — `↓`/`↑` read on, any other key closes it — since a list cut off at

@@ -69,6 +69,21 @@ func (s *Stager) StageHunk(ctx context.Context, id HunkID) error {
 	return fmt.Errorf("hunk %s has moved since it was read — reload and try again", id)
 }
 
+func (s *Stager) IndexTree(ctx context.Context) (string, error) {
+	return s.repo.WriteTree(ctx)
+}
+
+func (s *Stager) RestoreIndex(ctx context.Context, from, to string) error {
+	now, err := s.repo.WriteTree(ctx)
+	if err != nil {
+		return err
+	}
+	if now != from {
+		return fmt.Errorf("the index has moved since that press — reload and take it back by hand")
+	}
+	return s.repo.ReadTree(ctx, to)
+}
+
 // UnstageFile removes every staged change to path, leaving the working tree
 // untouched.
 func (s *Stager) UnstageFile(ctx context.Context, path string) error {

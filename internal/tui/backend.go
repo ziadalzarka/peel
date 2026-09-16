@@ -24,11 +24,20 @@ type Backend interface {
 	// line its code sits on now.
 	Comments(ctx context.Context) ([]store.Comment, error)
 	AddComment(ctx context.Context, c store.Comment) (store.Comment, error)
+	// StoredComments returns the comments as the store holds them, without the
+	// relocation Comments does, so one can be written back exactly as it was.
+	StoredComments() ([]store.Comment, error)
 	// EditComment rewrites the body of a comment already stored, leaving
 	// everything about where it is anchored alone.
 	EditComment(id, body string) error
 	RemoveComment(ctx context.Context, id string) error
 	SetResolved(id string, resolved bool) error
+
+	// IndexTree records the index as it stands, and RestoreIndex puts it back to
+	// a tree recorded that way — refusing when the index is not the one the
+	// change being taken back left behind.
+	IndexTree(ctx context.Context) (string, error)
+	RestoreIndex(ctx context.Context, from, to string) error
 
 	StageFile(ctx context.Context, path string) error
 	// StageHunk stages one hunk of what a file has out of the index. The hunk is
@@ -181,6 +190,24 @@ func (b *appBackend) keepAnchors(ctx context.Context) error {
 		return nil
 	}
 	return b.app.KeepAnchors(ctx)
+}
+
+func (b *appBackend) StoredComments() ([]store.Comment, error) {
+	return b.state.Comments.List(b.session.CommentFilter())
+}
+
+func (b *appBackend) IndexTree(ctx context.Context) (string, error) {
+	if err := b.stageable(); err != nil {
+		return "", err
+	}
+	return b.app.Stager.IndexTree(ctx)
+}
+
+func (b *appBackend) RestoreIndex(ctx context.Context, from, to string) error {
+	if err := b.stageable(); err != nil {
+		return err
+	}
+	return b.app.Stager.RestoreIndex(ctx, from, to)
 }
 
 func (b *appBackend) StageFile(ctx context.Context, path string) error {
