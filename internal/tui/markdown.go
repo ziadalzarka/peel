@@ -24,7 +24,9 @@ var markdownLexer = chroma.Coalesce(chroma.MustNewLexer(
 	func() chroma.Rules {
 		return chroma.Rules{
 			"root": {
-				{Pattern: `^ {0,3}#{1,6}(?:[ \t].*)?$`, Type: chroma.GenericHeading},
+				{Pattern: `^( {0,3}#{1,6})([ \t].*)?$`, Type: chroma.ByGroups(
+					chroma.Punctuation, chroma.GenericHeading,
+				)},
 				{Pattern: "^[ \t]*(?:`{3,}[^`]*|~{3,}.*)$", Type: chroma.Punctuation},
 				{Pattern: `^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)*\|?[ \t]*$`, Type: chroma.Punctuation},
 				{Pattern: `\\.`, Type: chroma.Text},

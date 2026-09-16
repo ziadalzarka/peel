@@ -169,7 +169,9 @@ A Markdown file is drawn to be read rather than scanned as code. An added line
 has a green `│` where the `+` goes and no green behind it, so a page of new text
 is not a solid block of colour; a removed line keeps its red. Headings and
 `**bold**` text are bold, `*italic*` text is italic, and link text is underlined
-with the address dimmed.
+with the address dimmed. A heading's `#` marks are dimmed and its words are not,
+so the words carry the line and the level is still there to be counted. Terminals
+draw every character at one size, so the six levels differ in nothing else.
 
 A table is drawn as a table, closed on all four sides. Every cell in a column is
 padded to the same width, the pipes become `│`, and the `---` row becomes a

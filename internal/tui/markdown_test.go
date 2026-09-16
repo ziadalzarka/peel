@@ -171,3 +171,32 @@ func TestMarkdownIsRecognisedByExtension(t *testing.T) {
 		}
 	}
 }
+
+func TestAHeadingsHashMarksAreDimmedAndItsWordsAreNot(t *testing.T) {
+	h := NewHighlighter()
+	if h == nil {
+		t.Fatal("chroma is missing its terminal256 formatter or github-dark style, or the Markdown style failed to build")
+	}
+	separator := h.Line("notes.md", "|---|---|")
+	dim := separator[:strings.Index(separator, "|")]
+	if dim == "" {
+		t.Fatalf("separator row = %q, want it coloured", separator)
+	}
+
+	for _, line := range []string{"# Title", "## Ledgers", "###### Aside"} {
+		got := h.Line("notes.md", line)
+		marks, words, _ := strings.Cut(line, " ")
+		if !strings.Contains(got, dim+marks) {
+			t.Errorf("%q = %q, want its %q dimmed", line, got, marks)
+		}
+		if !strings.Contains(got, markdownBold) {
+			t.Errorf("%q = %q, want its words bold at every level", line, got)
+		}
+		if strings.Contains(got, dim+" "+words) {
+			t.Errorf("%q = %q, want the words left undimmed", line, got)
+		}
+		if plain := ansi.Strip(got); plain != line {
+			t.Errorf("styling changed the text to %q, want %q", plain, line)
+		}
+	}
+}
