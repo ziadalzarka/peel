@@ -449,13 +449,23 @@ scrolled past unread. The next press carries on past whichever stopped it, so a
 leap held down still walks the whole review — it just breaks where something
 happens.
 
-The one place it goes further than the ten it counted is a run of lines a note
-was already written about. Ending on one of them is ending on the code with the
-note still a row ahead — the reviewer looking at the lines and not at what was
-said about them — so the count is given up rather than the note, and `]` carries
-on to it. What that crosses is the rest of the run, which is what the note it
-arrives on covers. It reaches for the note ahead only: `[` out of a note walks up
-into the run it was written about rather than being pulled back down onto it.
+Either edge of a run of changed lines stops it too. A jump that crossed one went
+from code nobody touched, over the change, and back out into code nobody touched
+— the reviewer reading the context either side of a change and not the change
+itself. Stopping on the edges walks the diff change by change: `]` from the
+unchanged code above a run lands on its first line, and the next press lands on
+its last. Inside a run longer than ten lines there is no edge to stop on and the
+ten are ten, so the rule shortens a jump at the edges of a change and nowhere
+else.
+
+The one place it goes further than where it stopped — the ten it counted, or the
+edge of a change it ran into — is a run of lines a note was already written
+about. Ending on one of them is ending on the code with the note still a row
+ahead — the reviewer looking at the lines and not at what was said about them —
+so the stop is given up rather than the note, and `]` carries on to it. What
+that crosses is the rest of the run, which is what the note it arrives on covers.
+It reaches for the note ahead only: `[` out of a note walks up into the run it
+was written about rather than being pulled back down onto it.
 
 `opt`+`↓`/`↑` move a whole file at a time and `cmd`+`↓`/`↑` reach the ends of the
 diff, so the modifier held says how far the arrow goes, the way it does in an
@@ -494,7 +504,7 @@ that report one; `h`/`l` are the path that always works.
 | Key | Action |
 |---|---|
 | `↓` / `↑` | move the cursor one line, diff body included |
-| `]` / `[` | move the cursor up to ten lines, stopping short at any heading or run of hidden code |
+| `]` / `[` | move the cursor up to ten lines, stopping short at any heading, run of hidden code, or edge of a run of changed lines |
 | `cmd+↓` / `cmd+↑` | last / first row, in the terminals that report the key |
 | `j` / `k` | next / previous hunk, file or comment |
 | wheel | scroll the diff, dragging the cursor along |
@@ -565,20 +575,21 @@ index. A stage that fails leaves the file open and the cursor on it, because it
 still has to be dealt with.
 
 `S` moves `s` onto the hunk, which is the same decision at the size the diff is
-read in, and it ends in the same place by a different route: what it stages moves
-into the file's index half, which opens folded, so the press leaves exactly the
-work still out of the index on screen, and the cursor carries on to the next hunk
-still out of it — the rule the file follows between files, inside one. From a
-file's header — where finishing the file above leaves the cursor — it takes the
-change at the top of what that file has left, since a key that only worked from
-inside a hunk would stop the pass at every file one press short of the change it
-was about to make. A file whose work is one hunk is staged as the file instead:
-that is what staging its only hunk comes to, and it puts an untracked path, a
-deletion, a mode change and a missing trailing newline through `git add`, which is
-what all of them need. What is left for the patch is refused where it cannot be
-applied rather than half-applied: a binary file has no hunks at all, and a hunk
-that has moved since the screen was drawn is named by an ID that no longer
-resolves.
+read in, and it ends in the same place by a different route: what it stages
+moves into the file's index half, which opens folded, so the press leaves
+exactly the work still out of the index on screen, and the cursor carries on to
+the first changed line of the next hunk still out of it — the rule the file
+follows between files, inside one, landing where the diff starts again rather
+than on a header with context under it. From a file's header — where finishing
+the file above leaves the cursor — it takes the change at the top of what that
+file has left, since a key that only worked from inside a hunk would stop the
+pass at every file one press short of the change it was about to make. A file
+whose work is one hunk is staged as the file instead: that is what staging its
+only hunk comes to, and it puts an untracked path, a deletion, a mode change and
+a missing trailing newline through `git add`, which is what all of them need.
+What is left for the patch is refused where it cannot be applied rather than
+half-applied: a binary file has no hunks at all, and a hunk that has moved since
+the screen was drawn is named by an ID that no longer resolves.
 
 Two presses of it inside 300ms, in the same file, mean the file. It is the same
 index the file mode leaves, without the pass having to leave the mode it is in,

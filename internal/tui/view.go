@@ -321,7 +321,7 @@ func (m *Model) helpBindings() []binding {
 	return []binding{
 		{"j / k", "next / previous hunk, file or comment"},
 		{"↓ / ↑", "move the cursor one line (the wheel scrolls the diff)"},
-		{"] / [", "ten lines down / up, stopping short at any heading, note or ▴/▾ row"},
+		{"] / [", "ten lines down / up, stopping short at any heading, note, ▴/▾ row or edge of a change"},
 		{"opt+↓ / opt+↑", "next / previous file"},
 		{"cmd+p", "go to a file by name, in the terminals that report the key"},
 		{"} / {", "scroll the file tree on its own"},

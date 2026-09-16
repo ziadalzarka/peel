@@ -1036,10 +1036,11 @@ func TestJumpingHunkToHunkStepsPastTheOfferToReadMore(t *testing.T) {
 func TestTenLinesStopsAtTheOfferToReadMore(t *testing.T) {
 	_, m := expandModel(t)
 
-	// Down the first hunk's body, which is eight lines with the offer under it.
-	press(t, m, "j", "down", "down")
+	// The last change in the first hunk's body, which has the offer three
+	// unchanged lines under it.
+	m.moveTo(changeAbove(t, m.doc, m.doc.Expands[1].Row))
 	if got := m.doc.Rows[m.cursor].Kind; got != RowLine {
-		t.Fatalf("the cursor is on a %v, want the first line of the hunk body", got)
+		t.Fatalf("the cursor is on a %v, want a line of the hunk body", got)
 	}
 
 	press(t, m, "]")

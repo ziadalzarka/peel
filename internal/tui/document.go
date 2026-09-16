@@ -1020,7 +1020,7 @@ func (d Document) Leap(row, n int) int {
 		}
 		row = next
 		if d.endsLeap(row) {
-			return row
+			break
 		}
 	}
 	if down && row != start {
@@ -1054,7 +1054,7 @@ func (d Document) noteOn(row int) int {
 			if r.Head {
 				return i
 			}
-		case d.notedLine(i):
+		case d.notedLine(i), r.Kind == RowTableEdge:
 		default:
 			return -1
 		}
@@ -1084,6 +1084,9 @@ func (d Document) notedLine(row int) bool {
 // the line it hangs off, so a jump that crossed it read the code and missed what
 // the last pass said about it. Landing on any of them leaves the next press to
 // carry on past it, which is the same jump split where something happened.
+//
+// So is either edge of a run of changed lines: a jump that crossed one read the
+// context either side of a change and not the change itself.
 func (d Document) endsLeap(row int) bool {
 	if row < 0 || row >= len(d.Rows) {
 		return false
@@ -1093,9 +1096,61 @@ func (d Document) endsLeap(row int) bool {
 		return true
 	case RowComment:
 		return d.Rows[row].Head
+	case RowLine:
+		return d.changeBoundary(row)
 	default:
 		return false
 	}
+}
+
+func (d Document) changedRow(row int) bool {
+	if row < 0 || row >= len(d.Rows) {
+		return false
+	}
+	r := d.Rows[row]
+	if r.Kind != RowLine || r.Hunk < 0 || r.Hunk >= len(d.Hunks) {
+		return false
+	}
+	lines := d.Hunks[r.Hunk].Hunk.Lines
+	for _, at := range [...]int{r.Left, r.Right} {
+		if at >= 0 && at < len(lines) && lines[at].IsChange() {
+			return true
+		}
+	}
+	return false
+}
+
+func (d Document) changeBoundary(row int) bool {
+	return d.changedRow(row) && (!d.changedRow(d.lineBeside(row, -1)) || !d.changedRow(d.lineBeside(row, 1)))
+}
+
+func (d Document) lineBeside(row, dir int) int {
+	for i := row + dir; i >= 0 && i < len(d.Rows); i += dir {
+		switch r := d.Rows[i]; r.Kind {
+		case RowLine:
+			if r.Hunk != d.Rows[row].Hunk {
+				return -1
+			}
+			return i
+		case RowTableEdge, RowComment, RowDraft:
+		default:
+			return -1
+		}
+	}
+	return -1
+}
+
+func (d Document) firstChangeRow(hunk int) int {
+	header := -1
+	for i, r := range d.Rows {
+		switch {
+		case r.Kind == RowHunk && r.Hunk == hunk:
+			header = i
+		case r.Kind == RowLine && r.Hunk == hunk && d.changedRow(i):
+			return i
+		}
+	}
+	return header
 }
 
 // StopBetween returns a cursor position within the inclusive row range, or -1

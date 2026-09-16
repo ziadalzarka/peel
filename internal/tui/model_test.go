@@ -226,6 +226,9 @@ func TestArrowKeysMoveTheCursorOneLineAtATime(t *testing.T) {
 func TestBracketsStopAtTheFileTheyReach(t *testing.T) {
 	m := newModel(t, newFakeBackend(newSession(t, threeFileDiff)), WithSize(100, 12))
 
+	// The last change of the first file, so the header of the second is the only
+	// thing between the cursor and where ten presses would put it.
+	m.moveTo(changeAbove(t, m.doc, m.doc.RowOfFile(1)))
 	start := m.cursor
 	press(t, m, "]")
 	leapt := m.cursor
@@ -233,6 +236,7 @@ func TestBracketsStopAtTheFileTheyReach(t *testing.T) {
 	// Ten presses of the arrow from the same row, counted out here rather than
 	// taken from the constant, so what the jump gave up is what is being checked.
 	stepped := newModel(t, newFakeBackend(newSession(t, threeFileDiff)), WithSize(100, 12))
+	stepped.moveTo(start)
 	for range 10 {
 		press(t, stepped, "down")
 	}
@@ -276,7 +280,7 @@ func TestBracketsStopAtTheFileTheyReach(t *testing.T) {
 func TestBracketsStopAtTheEndsOfTheDiff(t *testing.T) {
 	m := newModel(t, newFakeBackend(manyFileSession(t, 20)), WithSize(100, 12))
 
-	for range 50 {
+	for range 200 {
 		press(t, m, "]")
 	}
 	if m.cursor != m.doc.LastStop() {
@@ -286,7 +290,7 @@ func TestBracketsStopAtTheEndsOfTheDiff(t *testing.T) {
 		t.Errorf("the cursor ended in %q, want the last file", got)
 	}
 
-	for range 50 {
+	for range 200 {
 		press(t, m, "[")
 	}
 	if m.cursor != m.doc.FirstStop() {

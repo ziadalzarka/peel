@@ -449,3 +449,39 @@ func TestAHunkOfAReadOnlySessionIsRefused(t *testing.T) {
 		t.Error("nothing said why the hunk could not be staged")
 	}
 }
+
+// It lands on that hunk's first changed line rather than its header. The header
+// and the context under it are read on the way past either way, and what the
+// press is carrying on to is the next change — so the pass starts reading again
+// where the diff starts again, in either layout.
+func TestTheCursorLandsOnTheNextHunksFirstChangedLine(t *testing.T) {
+	for _, layout := range []Layout{LayoutUnified, LayoutSplit} {
+		t.Run(layout.String(), func(t *testing.T) {
+			backend := newFakeBackend(newSession(t, twoHunkFile))
+			m := hunkModel(t, backend, WithLayout(layout))
+
+			atHunk(t, m, 0)
+			m.Update(keyMsg("s"))
+
+			ref, ok := m.doc.HunkTargetAt(m.cursor)
+			if !ok || ref.Staged {
+				t.Fatalf("the cursor is at row %d, want it inside the hunk still out of the index", m.cursor)
+			}
+			if got := m.doc.Rows[m.cursor].Kind; got != RowLine {
+				t.Fatalf("the cursor is on a %v, want a line of that hunk", got)
+			}
+			if !m.doc.changedRow(m.cursor) {
+				t.Errorf("the cursor is on unchanged code at row %d, want the hunk's first changed line", m.cursor)
+			}
+			for _, row := range m.doc.LineRows(m.doc.Rows[m.cursor].Hunk) {
+				if row >= m.cursor {
+					break
+				}
+				if m.doc.changedRow(row) {
+					t.Errorf("the cursor is at row %d with a changed line of the same hunk above it at %d",
+						m.cursor, row)
+				}
+			}
+		})
+	}
+}

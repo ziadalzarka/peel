@@ -116,7 +116,7 @@ repository changes.
 |---|---|
 | `↓` / `↑` | move the cursor one line, diff body included |
 | `j` / `k` | next / previous hunk, file or comment |
-| `]` / `[` | ten lines down / up, stopping short at any heading on the way |
+| `]` / `[` | ten lines down / up, stopping short at any heading, or at either edge of a run of changed lines |
 | `opt+↓` / `opt+↑` | next / previous file |
 | `cmd+p` | go to a file by name, in the terminals that send `cmd` through |
 | `}` / `{` | scroll the file tree on its own |

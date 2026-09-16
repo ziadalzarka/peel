@@ -683,12 +683,54 @@ func TestNavigationAtTheEdgesStaysPut(t *testing.T) {
 	}
 }
 
+// roomyDiff is one change with a long run of unchanged code over it, and no copy
+// of the file to offer any hidden code from — the one shape of diff where ten
+// presses of the arrow cross nothing at all.
+const roomyDiff = `diff --git a/roomy.txt b/roomy.txt
+index 1111111..2222222 100644
+--- a/roomy.txt
++++ b/roomy.txt
+@@ -1,11 +1,11 @@
+ one
+ two
+ three
+ four
+ five
+ six
+ seven
+ eight
+ nine
+ ten
+-eleven
++ELEVEN
+`
+
+func changeAbove(t *testing.T, doc Document, row int) int {
+	t.Helper()
+	for i := row - 1; i >= 0; i-- {
+		if doc.changedRow(i) {
+			return i
+		}
+	}
+	t.Fatalf("no changed line above row %d, so a jump from one cannot reach it", row)
+	return -1
+}
+
+func changeBelow(t *testing.T, doc Document, row int) int {
+	t.Helper()
+	for i := row + 1; i < doc.Len(); i++ {
+		if doc.changedRow(i) {
+			return i
+		}
+	}
+	t.Fatalf("no changed line below row %d, so a jump from one cannot reach it", row)
+	return -1
+}
+
 // With nothing in the way a jump of ten lines is ten presses of the arrow, and
 // the same jump back reaches the row it started on.
 func TestLeapCountsCursorPositions(t *testing.T) {
-	// One file, two hunks, and no copy of it to offer any hidden code from — so
-	// the ten lines run through a hunk header with nothing to stop them.
-	doc := Build(newSession(t, contextDiff), nil, nil, LayoutUnified)
+	doc := Build(newSession(t, roomyDiff), nil, nil, LayoutUnified)
 
 	first := doc.FirstStop()
 	got := doc.Leap(first, 10)
@@ -744,20 +786,21 @@ func TestLeapStopsAtAFileHeader(t *testing.T) {
 func TestLeapStopsWhereTheDiffLeavesCodeOut(t *testing.T) {
 	doc := Build(newSession(t, contextDiff), nil, nil, LayoutUnified, WithExpansion(expansionOf(nil)))
 
-	// The run under the first hunk, and the first line of the body above it — the
-	// row after the run the diff left out over the hunk's head.
+	// The run under the first hunk, and the last changed line of the body above
+	// it, so what the jump crosses to reach the run is unchanged code.
 	below := doc.Expands[1].Row
-	body := doc.NextStop(doc.Expands[0].Row)
-	if doc.Rows[body].Kind != RowLine || below-body <= 1 {
-		t.Fatalf("row %d is a %v with the run at %d — want a hunk body between them", body, doc.Rows[body].Kind, below)
+	body := changeAbove(t, doc, below)
+	if below-body <= 1 {
+		t.Fatalf("row %d is the change right above the run at %d — want a hunk body between them", body, below)
 	}
 	if got := doc.Leap(body, 10); got != below {
-		t.Errorf("] from the first line of the hunk = %d, want the ▾ row under it at %d", got, below)
+		t.Errorf("] from the last change of the hunk = %d, want the ▾ row under it at %d", got, below)
 	}
 
-	// And going up, from inside the second hunk, to the row over its head.
+	// And going up, from the first change under the second hunk's head, to the
+	// row over it.
 	above := doc.Expands[2].Row
-	within := doc.NextStop(doc.NextStop(above))
+	within := changeBelow(t, doc, above)
 	if got := doc.Leap(within, -10); got != above {
 		t.Errorf("[ from row %d = %d, want the ▴ row at %d", within, got, above)
 	}
@@ -777,12 +820,12 @@ func TestLeapStopsAtTheHalfOfAFileItReaches(t *testing.T) {
 		t.Fatalf("row %d is not the unstaged half's heading", heading)
 	}
 
-	last := doc.LastStop()
-	if doc.FileAt(last) != doc.FileAt(heading) || last-heading <= 1 {
-		t.Fatalf("row %d is not inside the part-staged file's body below %d", last, heading)
+	change := changeBelow(t, doc, heading)
+	if doc.FileAt(change) != doc.FileAt(heading) || change-heading <= 1 {
+		t.Fatalf("row %d is not inside the part-staged file's body below %d", change, heading)
 	}
-	if got := doc.Leap(last, -10); got != heading {
-		t.Errorf("[ from the last line of the file = %d, want its half's heading at %d", got, heading)
+	if got := doc.Leap(change, -10); got != heading {
+		t.Errorf("[ from the first change of the half = %d, want its heading at %d", got, heading)
 	}
 	if got := doc.Leap(heading, 10); got <= heading {
 		t.Errorf("] from the heading = %d, want it carried on down into the half's own hunks", got)
@@ -826,13 +869,13 @@ func TestLeapStopsAtAWalkthroughHeading(t *testing.T) {
 // hangs off without what the last pass had to say about them.
 func TestLeapStopsAtAComment(t *testing.T) {
 	comments := []store.Comment{
-		{ID: "c1", File: "wide.go", Line: 3, Side: store.SideNew, Body: "why this line", Author: store.AuthorUser},
+		{ID: "c1", File: "roomy.txt", Line: 6, Side: store.SideNew, Body: "why this line", Author: store.AuthorUser},
 	}
-	doc := Build(newSession(t, contextDiff), comments, nil, LayoutUnified)
+	doc := Build(newSession(t, roomyDiff), comments, nil, LayoutUnified)
 
 	note := doc.RowOfComment("c1")
 	if note < 0 || doc.Rows[note].Kind != RowComment || !doc.Rows[note].Head {
-		t.Fatalf("row %d is not the head of the note on line 3", note)
+		t.Fatalf("row %d is not the head of the note on line 6", note)
 	}
 
 	// The top of the file, far enough above the note that ten presses of the
@@ -850,9 +893,10 @@ func TestLeapStopsAtAComment(t *testing.T) {
 		t.Errorf("] from row %d = %d, want the note at %d", above, got, note)
 	}
 
-	// And up to it from the row those ten presses reached, below the note.
-	if got := doc.Leap(stepped, -10); got != note {
-		t.Errorf("[ from row %d = %d, want the note at %d", stepped, got, note)
+	// And up to it from the first change below it.
+	within := changeBelow(t, doc, note)
+	if got := doc.Leap(within, -10); got != note {
+		t.Errorf("[ from row %d = %d, want the note at %d", within, got, note)
 	}
 }
 
@@ -980,18 +1024,21 @@ func assertLeapNeverOvershoots(t *testing.T, doc Document) {
 				// Walk the same way one stop at a time to see what the jump crossed
 				// on its way there: never more than n of them — except the lines of
 				// a run it crossed to reach the note under them — and never a row
-				// that should have ended it.
+				// that should have ended it, the same run excepted again, since the
+				// note it is reaching for is what those lines are marked for.
+				toNote := doc.Rows[got].Kind == RowComment && doc.Rows[got].Head
+				inRun := func(at int) bool { return dir > 0 && toNote && doc.notedLine(at) }
 				moved := 0
 				for at := start; at != got; moved++ {
 					next := step(at)
 					if next == at {
 						t.Fatalf("Leap(%d, %d) = %d, which stepping that way never reaches", start, dir*n, got)
 					}
-					if moved >= n && !(dir > 0 && doc.notedLine(at)) {
+					if moved >= n && !inRun(at) {
 						t.Fatalf("Leap(%d, %d) = %d, counted past row %d, which is not a line of a run it is on its way through",
 							start, dir*n, got, at)
 					}
-					if at = next; at != got && doc.endsLeap(at) {
+					if at = next; at != got && doc.endsLeap(at) && !inRun(at) {
 						t.Fatalf("Leap(%d, %d) = %d, past row %d, which should have ended it",
 							start, dir*n, got, at)
 					}
@@ -1278,5 +1325,219 @@ func TestBuildLeavesNotesOnFilesTheDiffHolds(t *testing.T) {
 	}
 	if _, staged := codeUnder(t, doc, "here"); staged {
 		t.Error("the note left the line it was written on")
+	}
+}
+
+// runDiff is one file with two runs of changed lines in it, a short one and a
+// run longer than a jump, each with unchanged code above and below — the edges
+// the brackets are meant to stop on, with room either side to leap from.
+const runDiff = `diff --git a/run.txt b/run.txt
+index 1111111..2222222 100644
+--- a/run.txt
++++ b/run.txt
+@@ -1,15 +1,15 @@
+ one
+ two
+-three
++THREE
+ four
+ five
+ six
+-seven
+-eight
+-nine
+-ten
+-eleven
+-twelve
++SEVEN
++EIGHT
++NINE
++TEN
++ELEVEN
++TWELVE
+ thirteen
+ fourteen
+ fifteen
+`
+
+// A jump that would have crossed a run of changed lines lands on its first line
+// instead: the ten lines are worth less than arriving at the top of the next
+// change, which is what the reviewer is reading down the diff for.
+func TestLeapStopsAtTheStartOfARunOfChangedLines(t *testing.T) {
+	doc := Build(newSession(t, runDiff), nil, nil, LayoutUnified)
+
+	for _, name := range []string{"three", "seven"} {
+		start := changeBelow(t, doc, doc.RowOfHunk(0)-1)
+		for textOf(t, doc, start) != name {
+			start = changeBelow(t, doc, start)
+		}
+		above := doc.PrevStop(start)
+		if doc.changedRow(above) {
+			t.Fatalf("row %d above the run at %d is changed too, so the run does not start there", above, start)
+		}
+		if got := doc.Leap(above, 10); got != start {
+			t.Errorf("] from the unchanged line above %q = %d, want the first line of the run at %d",
+				name, got, start)
+		}
+	}
+}
+
+// And a jump out of one lands on its last line, so the run is left behind
+// deliberately rather than walked out of in the middle.
+func TestLeapStopsAtTheEndOfARunOfChangedLines(t *testing.T) {
+	doc := Build(newSession(t, runDiff), nil, nil, LayoutUnified)
+
+	end := -1
+	for i := range doc.Len() {
+		if doc.changedRow(i) && !doc.changedRow(i+1) {
+			end = i
+		}
+	}
+	if end < 0 {
+		t.Fatal("the diff holds no run of changed lines")
+	}
+	below := doc.NextStop(end)
+	if doc.changedRow(below) {
+		t.Fatalf("row %d under the run ending at %d is changed too", below, end)
+	}
+	if got := doc.Leap(below, -10); got != end {
+		t.Errorf("[ from the unchanged line under the last run = %d, want its last line at %d", got, end)
+	}
+	if got := doc.Leap(doc.PrevStop(end), 1); got != end {
+		t.Errorf("] onto the last line of the run = %d, want %d", got, end)
+	}
+}
+
+// Inside a run longer than a jump there is no edge to stop on, so the ten lines
+// are ten lines: the rule shortens a jump at the edges of a change and nowhere
+// else.
+func TestLeapInsideALongRunStillCountsTen(t *testing.T) {
+	doc := Build(newSession(t, runDiff), nil, nil, LayoutUnified)
+
+	start := changeBelow(t, doc, doc.RowOfLine(0, 6))
+	want := start
+	for range 10 {
+		want = doc.NextStop(want)
+	}
+	if !doc.changedRow(want) || doc.changeBoundary(want) {
+		t.Fatalf("ten stops from row %d reach row %d, which is not inside a run — "+
+			"this test is not measuring a jump a run holds", start, want)
+	}
+	if got := doc.Leap(start, 10); got != want {
+		t.Errorf("] from row %d = %d, want the row ten presses of down reaches at %d", start, got, want)
+	}
+}
+
+// The split pairs a hunk's lines up differently, but a row showing a removal, an
+// addition, or the two side by side is a changed line either way.
+func TestLeapStopsAtARunTheSplitPairedUp(t *testing.T) {
+	doc := Build(newSession(t, runDiff), nil, nil, LayoutSplit)
+
+	start := changeBelow(t, doc, doc.RowOfHunk(0))
+	above := doc.PrevStop(start)
+	if doc.changedRow(above) {
+		t.Fatalf("row %d above the run at %d is changed too", above, start)
+	}
+	if got := doc.Leap(above, 10); got != start {
+		t.Errorf("] from row %d = %d, want the first row of the run at %d", above, got, start)
+	}
+}
+
+func textOf(t *testing.T, doc Document, row int) string {
+	t.Helper()
+	r := doc.Rows[row]
+	if r.Kind != RowLine {
+		t.Fatalf("row %d is a %v, not a line", row, r.Kind)
+	}
+	return doc.Hunks[r.Hunk].Hunk.Lines[max(r.Left, r.Right)].Text
+}
+
+// A note written on the last line of a run still wins over the edge it hangs
+// off. The edge gives the count up, and the note under it is what the press
+// arrives on: parking on the code with the note one row further on is the one
+// thing the run is barred to prevent.
+func TestLeapOntoTheNotedEdgeOfARunTakesTheNote(t *testing.T) {
+	comments := []store.Comment{
+		{ID: "c1", File: "run.txt", Line: 12, Side: store.SideNew, Body: "why all this", Author: store.AuthorUser},
+	}
+	doc := Build(newSession(t, runDiff), comments, nil, LayoutUnified)
+
+	note := doc.RowOfComment("c1")
+	edge := doc.PrevStop(note)
+	if !doc.changeBoundary(edge) || !doc.notedLine(edge) {
+		t.Fatalf("row %d under the note at %d is not the noted edge of a run", edge, note)
+	}
+
+	from := edge
+	for range 4 {
+		from = doc.PrevStop(from)
+	}
+	if got := doc.Leap(from, 10); got != note {
+		t.Errorf("] from row %d = %d, want the note at %d rather than the edge it stopped on at %d",
+			from, got, note, edge)
+	}
+}
+
+const tableRunDiff = "diff --git a/notes.md b/notes.md\n" +
+	"index 1111111..2222222 100644\n" +
+	"--- a/notes.md\n" +
+	"+++ b/notes.md\n" +
+	"@@ -1,2 +1,8 @@\n" +
+	" heading\n" +
+	"+intro line\n" +
+	"+| a | b |\n" +
+	"+|---|---|\n" +
+	"+| 1 | 2 |\n" +
+	"+after the table\n" +
+	"+more\n" +
+	" tail\n"
+
+func TestATableDrawnInsideARunDoesNotSplitIt(t *testing.T) {
+	doc := Build(newSession(t, tableRunDiff), nil, nil, LayoutUnified)
+
+	var rules, edges []int
+	for i, r := range doc.Rows {
+		switch {
+		case r.Kind == RowTableEdge:
+			rules = append(rules, i)
+		case doc.changeBoundary(i):
+			edges = append(edges, i)
+		}
+	}
+	if len(rules) != 2 {
+		t.Fatalf("notes.md drew %d table rules, want a top and a bottom", len(rules))
+	}
+	if len(edges) != 2 {
+		t.Fatalf("the added run has edges at rows %v, want its first and last line alone", edges)
+	}
+
+	first, last := edges[0], edges[1]
+	if got := doc.Leap(doc.FirstStop(), leapLines); got != first {
+		t.Errorf("] into the run = %d, want its first line at %d", got, first)
+	}
+	if got := doc.Leap(first, leapLines); got != last {
+		t.Errorf("] from the run's first line = %d, want its last at %d rather than a stop at the table's rule", got, last)
+	}
+}
+
+func TestLeapOverATableRuleTakesTheNoteUnderIt(t *testing.T) {
+	comments := []store.Comment{
+		{ID: "c1", File: "notes.md", Line: 5, Side: store.SideNew, Body: "check this cell", Author: store.AuthorUser},
+	}
+	doc := Build(newSession(t, tableRunDiff), comments, nil, LayoutUnified)
+
+	note := doc.RowOfComment("c1")
+	noted := doc.PrevStop(note)
+	if !doc.notedLine(noted) || doc.Rows[note-1].Kind != RowTableEdge {
+		t.Fatalf("row %d is not the table's last line with its rule between it and the note at %d", noted, note)
+	}
+
+	from := noted
+	for range 3 {
+		from = doc.PrevStop(from)
+	}
+	if got := doc.Leap(from, 3); got != note {
+		t.Errorf("] from row %d = %d, want the note at %d rather than the line above the table's rule at %d",
+			from, got, note, noted)
 	}
 }

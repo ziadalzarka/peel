@@ -1299,7 +1299,7 @@ func (m *Model) carryOnInside(path string) {
 			if m.doc.Hunks[hunk].Staged {
 				continue
 			}
-			row := m.doc.RowOfHunk(hunk)
+			row := m.doc.firstChangeRow(hunk)
 			if row < 0 {
 				continue
 			}
