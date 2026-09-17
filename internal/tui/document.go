@@ -1024,9 +1024,9 @@ func (d Document) PrevStop(from int) int {
 // The ends of the document stop it the same way a heading does: past them there
 // is nothing left to count, and it returns the last position it reached.
 //
-// The one place it goes further than it counted is a run of lines somebody has
-// already written about: a jump down that runs out inside one carries on to the
-// note, since the note is what the run is there for.
+// The one place it goes further than it counted is the last line of a run
+// somebody has already written about: a jump down that runs out there carries on
+// the one row to the note, since the note is what the run is there for.
 func (d Document) Leap(row, n int) int {
 	step, down := d.NextStop, true
 	if n < 0 {
@@ -1052,15 +1052,19 @@ func (d Document) Leap(row, n int) int {
 }
 
 // noteOn returns the note a jump that ran out on row should take instead, or -1
-// when row is not a line a note was written about.
+// when the note is not the next thing under row.
 //
-// A note is drawn under the last line of the run it covers, and every line of
-// that run is barred as one somebody wrote about. So a jump that ends on one has
-// ended on code a note is about with the note itself still ahead — the reviewer
-// left looking at the lines and not at what was said about them, which is the
-// one thing on the screen the diff does not already say. The count is given up
-// there rather than the note: what the rest of the jump crosses to reach it is
-// the rest of the run, and the note it lands on is what covers those lines.
+// A note is drawn under the last line of the run it covers. A jump that ends on
+// that last line has ended on code the note is about with the note itself one row
+// further on — the reviewer left looking at the lines and not at what was said
+// about them, which is the one thing on the screen the diff does not already say.
+// The count is given up for that one row.
+//
+// It goes no further. A run can be dozens of lines long, and a jump that ran out
+// part way down one has the rest of it still to read: taking the note from there
+// would cross every one of those lines unread, which is what the count is there
+// to stop. The bar down the side of the run says a note is coming, the note ends
+// a leap of its own accord, and the next press arrives at it.
 //
 // It reaches for the note ahead only, so a jump up out of a note stays inside
 // the run it is walking rather than being pulled back down to where it started.
@@ -1074,7 +1078,7 @@ func (d Document) noteOn(row int) int {
 			if r.Head {
 				return i
 			}
-		case d.notedLine(i), r.Kind == RowTableEdge:
+		case r.Kind == RowTableEdge:
 		default:
 			return -1
 		}

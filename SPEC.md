@@ -499,13 +499,19 @@ ten are ten, so the rule shortens a jump at the edges of a change and nowhere
 else.
 
 The one place it goes further than where it stopped — the ten it counted, or the
-edge of a change it ran into — is a run of lines a note was already written
-about. Ending on one of them is ending on the code with the note still a row
-ahead — the reviewer looking at the lines and not at what was said about them —
-so the stop is given up rather than the note, and `]` carries on to it. What
-that crosses is the rest of the run, which is what the note it arrives on covers.
-It reaches for the note ahead only: `[` out of a note walks up into the run it
-was written about rather than being pulled back down onto it.
+edge of a change it ran into — is the last line of a run a note was already
+written about. Ending there is ending on the code with the note the very next row
+— the reviewer looking at the lines and not at what was said about them — so the
+stop is given up for that one row and `]` carries on onto the note.
+
+That one row is as far as it goes. A note can cover fifty lines, and a jump that
+stopped part way down a run that long has the rest of it still to read: taking
+the note from there would cross every one of those lines unread, which is the
+thing the count is there to stop. The bar down the side of the run says a note is
+coming, and the note stops a jump of its own accord, so the next presses walk the
+rest of the run and arrive at it. It reaches for the note ahead only: `[` out of
+a note walks up into the run it was written about rather than being pulled back
+down onto it.
 
 `opt`+`↓`/`↑` move a whole file at a time and `cmd`+`↓`/`↑` reach the ends of the
 diff, so the modifier held says how far the arrow goes, the way it does in an

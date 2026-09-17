@@ -936,6 +936,38 @@ func TestLeapEndingOnANotedLineTakesTheNote(t *testing.T) {
 	}
 }
 
+// A note covering a run of lines is no reason to cross them. A jump that runs
+// out part way down the run stays on the line it counted to, and the note is
+// reached by carrying on rather than by giving the rest of the run up.
+func TestLeapStaysPartWayDownTheRunANoteCovers(t *testing.T) {
+	comments := []store.Comment{
+		{ID: "c1", File: "wide.go", Line: 47, EndLine: 49, Side: store.SideNew,
+			Body: "a note on a run of lines rather than one", Author: store.AuthorUser},
+	}
+	doc := Build(newSession(t, contextDiff), comments, nil, LayoutUnified)
+
+	note := doc.RowOfComment("c1")
+	var run []int
+	for at := doc.PrevStop(note); doc.notedLine(at); at = doc.PrevStop(at) {
+		run = append([]int{at}, run...)
+	}
+	if len(run) < 3 {
+		t.Fatalf("the note bars %d lines, too few for a jump to run out inside the run", len(run))
+	}
+
+	above := doc.PrevStop(run[0])
+	for i, want := range run[:len(run)-1] {
+		if got := doc.Leap(above, i+1); got != want {
+			t.Errorf("] of %d from row %d = %d, want the line it counted to at %d, not the note at %d",
+				i+1, above, got, want, note)
+		}
+	}
+
+	if got := doc.Leap(above, len(run)); got != note {
+		t.Errorf("] of %d from row %d = %d, want the note at %d", len(run), above, got, note)
+	}
+}
+
 // Counting stops where the document does. A jump longer than what is left lands
 // on the last row there is rather than off the end of the rows.
 func TestLeapStopsAtTheEndsOfTheDocument(t *testing.T) {
@@ -1022,30 +1054,29 @@ func assertLeapNeverOvershoots(t *testing.T, doc Document) {
 				}
 
 				// Walk the same way one stop at a time to see what the jump crossed
-				// on its way there: never more than n of them — except the lines of
-				// a run it crossed to reach the note under them — and never a row
-				// that should have ended it, the same run excepted again, since the
-				// note it is reaching for is what those lines are marked for.
-				toNote := doc.Rows[got].Kind == RowComment && doc.Rows[got].Head
-				inRun := func(at int) bool { return dir > 0 && toNote && doc.notedLine(at) }
+				// on its way there: never more than n of them — except the last line
+				// of a run, whose note is the row it is reaching for — and never a
+				// row that should have ended it, the same line excepted again.
+				lastOfRun := func(at int) bool { return dir > 0 && doc.noteOn(at) == got }
 				moved := 0
 				for at := start; at != got; moved++ {
 					next := step(at)
 					if next == at {
 						t.Fatalf("Leap(%d, %d) = %d, which stepping that way never reaches", start, dir*n, got)
 					}
-					if moved >= n && !inRun(at) {
-						t.Fatalf("Leap(%d, %d) = %d, counted past row %d, which is not a line of a run it is on its way through",
+					if moved >= n && !lastOfRun(at) {
+						t.Fatalf("Leap(%d, %d) = %d, counted past row %d, which is not the end of a run whose note it is reaching for",
 							start, dir*n, got, at)
 					}
-					if at = next; at != got && doc.endsLeap(at) && !inRun(at) {
+					if at = next; at != got && doc.endsLeap(at) && !lastOfRun(at) {
 						t.Fatalf("Leap(%d, %d) = %d, past row %d, which should have ended it",
 							start, dir*n, got, at)
 					}
 				}
-				// Going further than n is only for arriving at a note.
-				if moved > n && !(doc.Rows[got].Kind == RowComment && doc.Rows[got].Head) {
-					t.Fatalf("Leap(%d, %d) = %d, %d past what it counts, and not on a note",
+				// Going further than n is only for the one row from the end of a run
+				// to the note under it.
+				if moved > n && !(moved == n+1 && doc.Rows[got].Kind == RowComment && doc.Rows[got].Head) {
+					t.Fatalf("Leap(%d, %d) = %d, %d past what it counts, and not the one row onto a note",
 						start, dir*n, got, moved-n)
 				}
 				// Stopping short of n is only allowed where something stopped it.
