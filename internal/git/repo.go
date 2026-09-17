@@ -181,6 +181,96 @@ func (r *Repo) AllChangesText(ctx context.Context) (string, error) {
 	return out, nil
 }
 
+// ConflictedDiffs reads what each conflicted path holds, measured from HEAD
+// rather than from the index.
+//
+// The index has no one version of an unmerged path to measure against — it has
+// all of them — which is why `git diff` prints a combined diff nobody can stage
+// and `git diff --cached` prints nothing at all. What is on disk is the merge
+// git left there, conflict markers included, so HEAD is the tree it is a change
+// from and a plain two-way diff is what comes back.
+//
+// A path whose working copy matches HEAD — ours modified, theirs deleted — has
+// no diff and simply does not appear in the result. It is still conflicted, and
+// the caller still lists it.
+func (r *Repo) ConflictedDiffs(ctx context.Context, paths []string) (map[string]*FileDiff, error) {
+	out := map[string]*FileDiff{}
+	if len(paths) == 0 {
+		return out, nil
+	}
+
+	args := append([]string{"diff"}, diffFlags...)
+	if r.HasHead(ctx) {
+		args = append(args, "HEAD")
+	} else {
+		args = append(args, emptyTree)
+	}
+	args = append(args, "--")
+	args = append(args, paths...)
+
+	text, err := r.git(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("git diff HEAD (conflicted paths): %w", err)
+	}
+	d, err := ParseDiff(text)
+	if err != nil {
+		return nil, err
+	}
+	for i := range d.Files {
+		f := d.Files[i]
+		out[f.Path()] = &f
+	}
+	return out, nil
+}
+
+// UnmergedPaths lists every path a merge left with more than one version in the
+// index, in path order.
+func (r *Repo) UnmergedPaths(ctx context.Context) ([]string, error) {
+	out, err := r.git(ctx, "ls-files", "--unmerged", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("git ls-files --unmerged: %w", err)
+	}
+
+	// Each record is "<mode> <sha> <stage>\t<path>", and a path appears once per
+	// version it was left with, so the same name comes back two or three times.
+	var paths []string
+	seen := map[string]bool{}
+	for _, record := range strings.Split(out, "\x00") {
+		_, path, ok := strings.Cut(record, "\t")
+		if !ok || seen[path] {
+			continue
+		}
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths, nil
+}
+
+// IsConflicted reports whether a merge left path with more than one version in
+// the index. It is asked only where a path turns out to have no diff to stage,
+// to say "resolve the merge" rather than "reload and try again".
+func (r *Repo) IsConflicted(ctx context.Context, path string) bool {
+	out, err := r.git(ctx, "ls-files", "--unmerged", "--", path)
+	return err == nil && strings.TrimSpace(out) != ""
+}
+
+// ConflictMarkers reports the markers still left in path's working copy, as the
+// lines they sit on. A resolved file has none.
+func (r *Repo) ConflictMarkers(path string) []int {
+	lines, err := r.WorkingLines(path)
+	if err != nil {
+		return nil
+	}
+	var at []int
+	for i, line := range lines {
+		if strings.HasPrefix(line, "<<<<<<< ") || strings.HasPrefix(line, ">>>>>>> ") {
+			at = append(at, i+1)
+		}
+	}
+	return at
+}
+
 // Untracked lists files git does not track and .gitignore does not exclude.
 func (r *Repo) Untracked(ctx context.Context) ([]string, error) {
 	out, err := r.git(ctx, "ls-files", "--others", "--exclude-standard", "-z")

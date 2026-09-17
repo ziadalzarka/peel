@@ -192,6 +192,42 @@ single step, and a change committed since the base is neither staged nor
 unstaged. Every file there carries one side, so the tri-state indicator has
 nothing to report — which is consistent, since that session cannot stage anyway.
 
+### The third state: a merge conflict
+
+A merge leaves a path with two or three versions in the index at once, and the
+diagram above stops describing it — there is no single index copy for either
+arrow to point at. Git says so in two different ways, and neither of them used to
+be read: the first ended the review with a parse error, the second dropped the
+file from it without a word.
+
+| Diff | What it prints for an unmerged path |
+|---|---|
+| `git diff --cached` | `* Unmerged path <path>`, interleaved with the files in path order — so it falls inside the hunk body of whichever file sorts before it |
+| `git diff` | A combined diff: `diff --cc <path>`, `@@@` headers, and a body with one origin column per parent |
+| `git diff HEAD` | An ordinary two-way diff of the merge git wrote into the working tree, markers and all |
+
+The parser reads the first two as boundaries rather than content, and hands both
+back as `Diff.Unmerged` instead of a `FileDiff`. A combined body is skipped
+whole: it cannot be applied, and one of its lines can look like a file header
+(`++<<<<<<<` is two origin columns, and `++++ b/x` is a line of code).
+
+What peel then shows is the third row. The working copy *is* the merge, so HEAD
+is the tree it is a change from, the markers read as additions, and everything
+built on a plain diff — the renderer, comments, anchors, context expansion —
+works on it unchanged.
+
+| | Handling |
+|---|---|
+| **Which side** | The working-tree side, always. There is no staged half: whatever `git diff --cached` would have said about the path, it is not a change anything can take back |
+| **The file list** | Marked `conflicted` in the header, with a note over the diff so the markers are not read as code somebody wrote |
+| **`s`** | `git add` is how a merge is marked resolved, so `s` is the right key — but it is refused while `<<<<<<<` or `>>>>>>>` is still in the file, and names the line. Only a path git reports unmerged is checked, so a fixture or a page about merging stages like anything else |
+| **`S`** | Refused. The index holds every version of the path at once, so there is no hunk to move into it |
+| **Ours kept, theirs deleted** | No diff at all — the working copy is HEAD's. The file is still listed, and the note says the conflict is over whether it stays |
+| **`--rev`** | `git diff <base>` measures the working tree against a tree of its own, so it prints the conflict as an ordinary change. It is labelled from `git ls-files --unmerged`, and that session cannot stage anyway |
+| **`u`** | Says there is nothing staged, because there is: an unmerged path has no index side to take back |
+| **`A` and `U`** | Plain git, unguarded. `git add --all` marks every conflict resolved as it stands, markers included; `git restore --staged .` resolves every conflict in the index to HEAD and leaves the markers on disk. Both are what those keys have always meant, and peel now reaches a tree where they mean this |
+| **Taking a press back** | Not offered mid-merge. `git write-tree` refuses an index with any unmerged path in it, and that is what records where a press can be taken back to, so a stage goes through with no undo behind it rather than not going through |
+
 ### Core operation
 
 ```
@@ -249,7 +285,9 @@ reload every change already ends in.
 | **Renames** | Read with `--no-renames`, so a rename is a delete plus an add: two files, staged separately, which reproduces the rename in the index |
 | **Untracked files** | Have no diff. Synthesize one with `git diff --no-index /dev/null <path>` for display only, so the contents are reviewable before the index is touched |
 | **Binary files** | No diff to show. The row says so, and staging works like any other file |
+| **Merge conflicts** | An unmerged path has no one version in the index, so neither of the two diffs can print a change for it — see below |
 | **Partial-stage same file** | The hunk key creates it, and so can git. One file can be simultaneously staged *and* unstaged, so the file list needs a tri-state indicator (`●` partial), not a checkbox — and the file key on it stages the working-tree half without disturbing the index half. In the diff the two halves are drawn under their own headings, the index's folded away, and a note left on either records which one it was numbered against — see §3 |
+| **Paths with a space** | Git ends the `---`/`+++` line with a tab where the name alone would be ambiguous. It is not part of the name and is dropped; a name holding a real tab is quoted instead, with its tab written `\t` inside the quotes |
 | **Re-read after every write** | Hunk IDs, line offsets and stage state are all invalidated by any change to the tree, including peel's own writes |
 
 ### Hunk IDs
@@ -276,6 +314,7 @@ A fixture repo containing:
 3. an untracked file
 4. a file with no trailing newline
 5. a file that is both partially staged *and* partially modified
+6. a merge left mid-conflict, both with a diff and without one
 
 All five still have to behave, and `internal/git/stage_test.go` still covers
 them — they are the shapes a working tree actually contains, whatever the staging

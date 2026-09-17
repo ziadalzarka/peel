@@ -581,6 +581,15 @@ const minCommentWidth = 20
 // where the reviewed half ends and the new one begins is the whole difficulty of
 // reading a part-staged file.
 func (d *Document) addBody(fi int, entry git.FileEntry, idx *commentIndex, folds map[string]bool) {
+	// A conflicted file is not measured from the index like every other one —
+	// the index holds every version of it at once — so what follows is the merge
+	// git left on disk, read against the last commit. Saying so is the only way
+	// to tell its markers from code somebody wrote.
+	if entry.Conflicted {
+		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1,
+			Text: conflictNote(entry)})
+	}
+
 	if entry.IsBinary() {
 		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1,
 			Text: "binary file — no diff to show"})
@@ -607,8 +616,9 @@ func (d *Document) addBody(fi int, entry git.FileEntry, idx *commentIndex, folds
 	}
 
 	// A file with nothing to show says so — unless what it has is only hidden,
-	// where the heading above already says where it went.
-	if len(d.Files[fi].Hunks) == 0 && !folded {
+	// where the heading above already says where it went, or the note above has
+	// already said why there is nothing.
+	if len(d.Files[fi].Hunks) == 0 && !folded && !entry.Conflicted {
 		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1,
 			Text: emptyNote(entry)})
 	}
@@ -794,6 +804,16 @@ func (d *Document) measureHeads() {
 }
 
 // emptyNote explains a file that changed without producing hunks.
+// conflictNote heads a file a merge left unresolved.
+func conflictNote(e git.FileEntry) string {
+	if e.Primary() == nil {
+		// Ours kept, theirs deleted: the working copy is the last commit's, so
+		// there is no change to draw — only a merge waiting to be decided.
+		return "merge conflict — nothing changed here, the conflict is over whether the file stays"
+	}
+	return "merge conflict — shown against the last commit, markers and all"
+}
+
 func emptyNote(e git.FileEntry) string {
 	diff := e.Primary()
 	if diff == nil {

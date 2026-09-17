@@ -3,6 +3,8 @@ package git
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 )
 
 // Stager moves changes between the working tree and the index.
@@ -23,8 +25,51 @@ func NewStager(repo *Repo) *Stager { return &Stager{repo: repo} }
 
 // StageFile stages every change to path, including deletions and untracked
 // files.
+//
+// On a conflicted path `git add` is how a merge is marked resolved, so it is
+// the right call to make — but only once the markers are out of the file. One
+// keypress recording `<<<<<<<` as the resolution is a mistake nobody notices
+// until it is committed, so it is refused in words instead.
 func (s *Stager) StageFile(ctx context.Context, path string) error {
+	if at := s.unresolved(ctx, path); len(at) > 0 {
+		return fmt.Errorf("%s still has merge conflict markers, on %s — resolve them, then stage it",
+			path, lineList(at))
+	}
 	return s.repo.StageFile(ctx, path)
+}
+
+// unresolved returns the lines of path still holding conflict markers, and
+// nothing at all for a path no merge has touched.
+//
+// The file is read before git is asked, because a marker at the start of a line
+// is rare and asking git is a subprocess behind a keypress. A file that has one
+// and is not conflicted wrote it itself — a fixture, or a page about merging —
+// and goes in like any other.
+func (s *Stager) unresolved(ctx context.Context, path string) []int {
+	at := s.repo.ConflictMarkers(path)
+	if len(at) == 0 || !s.repo.IsConflicted(ctx, path) {
+		return nil
+	}
+	return at
+}
+
+// lineList renders line numbers for a message, naming the first few and
+// counting the rest.
+func lineList(at []int) string {
+	const most = 3
+	shown := at
+	if len(shown) > most {
+		shown = shown[:most]
+	}
+	parts := make([]string, 0, len(shown))
+	for _, n := range shown {
+		parts = append(parts, "line "+strconv.Itoa(n))
+	}
+	out := strings.Join(parts, ", ")
+	if len(at) > len(shown) {
+		out += fmt.Sprintf(" and %d more", len(at)-len(shown))
+	}
+	return out
 }
 
 // StageHunk stages one hunk of what a file has out of the index, leaving the
@@ -52,6 +97,10 @@ func (s *Stager) StageHunk(ctx context.Context, id HunkID) error {
 	if !ok {
 		if s.repo.IsUntracked(ctx, id.Path) {
 			return fmt.Errorf("%s is untracked — the index has never heard of it, so it goes in whole", id.Path)
+		}
+		if s.repo.IsConflicted(ctx, id.Path) {
+			return fmt.Errorf("%s is a merge conflict — the index holds every version of it at once, "+
+				"so there is no hunk to move into it. Resolve it, then stage the file", id.Path)
 		}
 		return fmt.Errorf("%s has nothing out of the index — reload and try again", id.Path)
 	}

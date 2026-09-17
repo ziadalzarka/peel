@@ -67,6 +67,10 @@ type hunkJSON struct {
 	// Section is the enclosing context git prints after the @@ marker.
 	Section string `json:"section,omitempty"`
 	Binary  bool   `json:"binary,omitempty"`
+	// Conflicted marks a hunk of a file a merge left unresolved. It is read
+	// against the last commit rather than the index, so it shows the conflict
+	// markers, and it cannot be staged on its own.
+	Conflicted bool `json:"conflicted,omitempty"`
 }
 
 // collectHunks flattens a session into addressable hunks, staged side first so
@@ -84,6 +88,19 @@ func collectHunks(s *app.Session, file string, stagedOnly, unstagedOnly bool) []
 				Staged: entry.Staged != nil,
 				Header: "binary file",
 				Binary: true,
+			})
+			continue
+		}
+
+		// A conflict with nothing to diff still has to be listed: an agent asked
+		// to finish the review needs to know the file is waiting on a decision,
+		// and there is no hunk of it to say so on.
+		if entry.Conflicted && entry.Primary() == nil && !stagedOnly {
+			out = append(out, hunkJSON{
+				ID:         entry.Path,
+				File:       entry.Path,
+				Header:     "merge conflict",
+				Conflicted: true,
 			})
 			continue
 		}
@@ -108,13 +125,14 @@ func collectHunks(s *app.Session, file string, stagedOnly, unstagedOnly bool) []
 			for _, h := range side.diff.Hunks {
 				added, removed := h.Stats()
 				out = append(out, hunkJSON{
-					ID:      side.diff.ID(h).String(),
-					File:    entry.Path,
-					Staged:  side.staged,
-					Header:  h.Header(),
-					Added:   added,
-					Removed: removed,
-					Section: h.Section,
+					ID:         side.diff.ID(h).String(),
+					File:       entry.Path,
+					Staged:     side.staged,
+					Header:     h.Header(),
+					Added:      added,
+					Removed:    removed,
+					Section:    h.Section,
+					Conflicted: entry.Conflicted,
 				})
 			}
 		}
@@ -141,8 +159,15 @@ func writeHunkTable(w io.Writer, hunks []hunkJSON, s *app.Session) error {
 		if h.Staged {
 			state = "staged"
 		}
+		if h.Conflicted {
+			state = "conflict"
+		}
 		if h.Binary {
 			fmt.Fprintf(w, "  %-8s binary file — no diff to show\n", state)
+			continue
+		}
+		if h.Conflicted && h.ID == h.File {
+			fmt.Fprintf(w, "  %-8s merge conflict — resolve it, then stage the file\n", state)
 			continue
 		}
 		fmt.Fprintf(w, "  %-8s %+d/-%d  %s\n", state, h.Added, h.Removed, h.ID)

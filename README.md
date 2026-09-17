@@ -30,6 +30,11 @@ keymap.
   working tree is drawn as two halves under their own headings, the staged one
   folded away, so what you scroll is what you have not reviewed. Change a file
   after staging it and it opens again, on the new work alone.
+- **A merge conflict is a file like any other.** Mid-merge, git has no single
+  change to print for an unresolved path, and peel shows the merge it left on
+  disk instead — read against the last commit, so the markers arrive as
+  additions you can scroll, comment on and expand around. `s` is still how it is
+  marked resolved, and is refused while the markers are still in the file.
 - **Notes an agent can read.** Comments go to a JSON file — `.git/peel/comments.json`
   for the working tree — which Claude Code reads through the bundled skill, so
   "address my review comments" needs no copy-paste. `C` copies the threads you

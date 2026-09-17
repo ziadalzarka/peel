@@ -243,8 +243,10 @@ func restaged(s *app.Session, stage bool, wanted func(path string) bool) *app.Se
 			if entry.Unstaged != nil {
 				entry.Staged, entry.Unstaged = entry.Unstaged, nil
 			}
-			// Staging an untracked file is how it becomes tracked.
+			// Staging an untracked file is how it becomes tracked, and staging
+			// a conflicted one is how the merge is marked resolved.
 			entry.Untracked = false
+			entry.Conflicted = false
 		case entry.Staged != nil:
 			if entry.Unstaged == nil {
 				entry.Unstaged = entry.Staged

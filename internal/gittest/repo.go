@@ -158,3 +158,27 @@ func (r *Repo) StatusLines() []string {
 	}
 	return strings.Split(out, "\n")
 }
+
+// Conflict leaves the repository mid-merge, with at least one path unresolved.
+//
+// It branches from the current commit, writes theirs on the branch and ours on
+// the branch it came from, then merges — which is the only way to get a real
+// unmerged index entry, and the only state worth testing conflict handling
+// against. Writing the two sides is left to the caller so a test can make a
+// modify/delete conflict as easily as a content one.
+func (r *Repo) Conflict(branch string, theirs, ours func(*Repo)) {
+	r.t.Helper()
+	base := r.Git("rev-parse", "--abbrev-ref", "HEAD")
+
+	r.Git("checkout", "--quiet", "-b", branch)
+	theirs(r)
+	r.Commit("theirs")
+
+	r.Git("checkout", "--quiet", base)
+	ours(r)
+	r.Commit("ours")
+
+	if out, err := r.TryGit("merge", "--no-edit", branch); err == nil {
+		r.t.Fatalf("git merge %s: merged cleanly, wanted a conflict\n%s", branch, out)
+	}
+}

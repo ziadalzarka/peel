@@ -60,6 +60,11 @@ type FileEntry struct {
 	// Untracked marks a file git does not track. Its Unstaged diff is
 	// synthesized for display and does not come from the index.
 	Untracked bool
+	// Conflicted marks a file a merge left with more than one version in the
+	// index. Its Unstaged diff is measured from HEAD rather than from the index,
+	// and shows the markers git wrote into the working copy; there is no staged
+	// side, and no hunk of it can be staged on its own.
+	Conflicted bool
 }
 
 // State classifies the entry for display.
@@ -168,10 +173,51 @@ func (r *Repo) LoadStatus(ctx context.Context) (Status, error) {
 		f := staged.Files[i]
 		entries.at(f.Path()).Staged = &f
 	}
+	if err := r.addConflicted(ctx, entries, unstaged.Unmerged, staged.Unmerged); err != nil {
+		return Status{}, err
+	}
 	if err := r.addUntracked(ctx, entries); err != nil {
 		return Status{}, err
 	}
 	return entries.status(), nil
+}
+
+// addConflicted lists the paths a merge left unresolved and gives each one the
+// change it holds against HEAD.
+//
+// Both diffs are asked, because neither one alone names them all: `git diff`
+// leaves out a path whose working copy is gone, and `git diff --cached` leaves
+// out nothing but says only the name.
+func (r *Repo) addConflicted(ctx context.Context, entries entrySet, lists ...[]string) error {
+	var paths []string
+	seen := map[string]bool{}
+	for _, list := range lists {
+		for _, path := range list {
+			if !seen[path] {
+				seen[path] = true
+				paths = append(paths, path)
+			}
+		}
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	sort.Strings(paths)
+
+	diffs, err := r.ConflictedDiffs(ctx, paths)
+	if err != nil {
+		return err
+	}
+	for _, path := range paths {
+		e := entries.at(path)
+		e.Conflicted = true
+		// Whatever the index diff said about this path, it was not a change
+		// anything can stage or take back: the one version of it worth reading
+		// is the merge on disk.
+		e.Staged = nil
+		e.Unstaged = diffs[path]
+	}
+	return nil
 }
 
 // LoadStatusSince reads everything that changed between a commit and the
@@ -191,6 +237,17 @@ func (r *Repo) LoadStatusSince(ctx context.Context, commit string) (Status, erro
 	for i := range diff.Files {
 		f := diff.Files[i]
 		entries.at(f.Path()).Unstaged = &f
+	}
+	// `git diff <commit>` measures the working tree against a tree of its own, so
+	// it prints an ordinary diff for a conflicted path rather than refusing it —
+	// the merge markers are simply part of the change. They are still worth
+	// labelling, so the list is asked for separately.
+	unmerged, err := r.UnmergedPaths(ctx)
+	if err != nil {
+		return Status{}, err
+	}
+	for _, path := range unmerged {
+		entries.at(path).Conflicted = true
 	}
 	if err := r.addUntracked(ctx, entries); err != nil {
 		return Status{}, err

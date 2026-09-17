@@ -9,6 +9,29 @@ import (
 // devNull is the path git uses for the absent side of an add or delete.
 const devNull = "/dev/null"
 
+// A merge leaves a path with more than one version in the index, and git then
+// has no single change between two trees to print for it. Which of these two it
+// prints depends on the diff: `git diff --cached` names the path and stops,
+// while `git diff` prints a combined diff of every version at once, whose body
+// has one origin column per parent and cannot be applied.
+const (
+	unmergedPrefix = "* Unmerged path "
+	combinedPrefix = "diff --cc "
+	// `git diff -c` spells the same thing out in full.
+	combinedLongPrefix = "diff --combined "
+	filePrefix         = "diff --git "
+)
+
+// isFileBoundary reports whether a line ends whatever came before it. Every
+// line of a hunk body starts with a space, a plus, a minus or a backslash, so
+// none of these can be mistaken for one.
+func isFileBoundary(line string) bool {
+	return strings.HasPrefix(line, filePrefix) ||
+		strings.HasPrefix(line, combinedPrefix) ||
+		strings.HasPrefix(line, combinedLongPrefix) ||
+		strings.HasPrefix(line, unmergedPrefix)
+}
+
 // ParseDiff parses the output of `git diff` in default unified format.
 //
 // It tolerates the headers git emits for renames, copies, mode changes and
@@ -45,18 +68,61 @@ func (p *diffParser) advance() string { l := p.lines[p.pos]; p.pos++; return l }
 func (p *diffParser) parse() (Diff, error) {
 	var d Diff
 	for !p.done() {
-		if !strings.HasPrefix(p.peek(), "diff --git ") {
+		line := p.peek()
+		switch {
+		case strings.HasPrefix(line, unmergedPrefix):
+			p.advance()
+			// Git writes this one path raw, where every other header it prints
+			// quotes one that needs it — so a name that arrives with quotes
+			// around it has them in the name.
+			d.Unmerged = append(d.Unmerged, strings.TrimPrefix(line, unmergedPrefix))
+
+		case strings.HasPrefix(line, combinedPrefix) || strings.HasPrefix(line, combinedLongPrefix):
+			d.Unmerged = append(d.Unmerged, p.skipCombined())
+
+		case strings.HasPrefix(line, filePrefix):
+			f, err := p.parseFile()
+			if err != nil {
+				return Diff{}, err
+			}
+			d.Files = append(d.Files, f)
+
+		default:
 			// Skip any preamble (commit headers from `git show`, stray text).
 			p.advance()
-			continue
 		}
-		f, err := p.parseFile()
-		if err != nil {
-			return Diff{}, err
-		}
-		d.Files = append(d.Files, f)
 	}
 	return d, nil
+}
+
+// skipCombined consumes a combined diff and returns the path it was for.
+//
+// A combined body has one origin column per parent, so it is not a change that
+// can be staged or a patch that can be applied — the path goes back as
+// unmerged, and the version of it worth reading is read separately.
+func (p *diffParser) skipCombined() string {
+	header := p.advance()
+	path := strings.TrimPrefix(header, combinedPrefix)
+	if path == header {
+		path = strings.TrimPrefix(header, combinedLongPrefix)
+	}
+	path = unquoteIfQuoted(path)
+
+	for !p.done() && !isFileBoundary(p.peek()) {
+		line := p.advance()
+		// The +++ header names the path unambiguously, but only until the first
+		// hunk: past it a "+++ " is two origin columns and a line of code.
+		if strings.HasPrefix(line, "@@") {
+			break
+		}
+		if after, ok := strings.CutPrefix(line, "+++ "); ok && after != devNull {
+			path = stripPathPrefix(after)
+		}
+	}
+	for !p.done() && !isFileBoundary(p.peek()) {
+		p.advance()
+	}
+	return path
 }
 
 func (p *diffParser) parseFile() (FileDiff, error) {
@@ -87,7 +153,7 @@ func (p *diffParser) parseFileHeaders(f *FileDiff) error {
 	for !p.done() {
 		line := p.peek()
 		switch {
-		case strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "diff --git "):
+		case strings.HasPrefix(line, "@@") || isFileBoundary(line):
 			return nil
 
 		case strings.HasPrefix(line, "new file mode "):
@@ -124,14 +190,14 @@ func (p *diffParser) parseFileHeaders(f *FileDiff) error {
 			f.IsBinary = true
 
 		case strings.HasPrefix(line, "--- "):
-			if path := strings.TrimPrefix(line, "--- "); path != devNull {
+			if path := headerPath(line, "--- "); path != devNull {
 				f.OldPath = stripPathPrefix(path)
 			} else if f.Status == StatusModified {
 				f.Status = StatusAdded
 			}
 
 		case strings.HasPrefix(line, "+++ "):
-			if path := strings.TrimPrefix(line, "+++ "); path != devNull {
+			if path := headerPath(line, "+++ "); path != devNull {
 				f.NewPath = stripPathPrefix(path)
 			} else if f.Status == StatusModified {
 				f.Status = StatusDeleted
@@ -152,7 +218,7 @@ func (p *diffParser) parseHunk() (Hunk, error) {
 	for !p.done() {
 		line := p.peek()
 		// A hunk body ends at the next hunk or the next file.
-		if strings.HasPrefix(line, "@@") || strings.HasPrefix(line, "diff --git ") {
+		if strings.HasPrefix(line, "@@") || isFileBoundary(line) {
 			break
 		}
 
@@ -283,6 +349,16 @@ func unquoteIfQuoted(s string) string {
 		return unquotePath(s)
 	}
 	return s
+}
+
+// headerPath reads the path out of a --- or +++ line.
+//
+// Git ends the line with a tab where the name alone would be ambiguous — one
+// with a space in it — so that a tool reading the header knows where the name
+// stops. A name holding a real tab is quoted instead, and its tab is written
+// \t inside the quotes, so the one at the end is never part of the path.
+func headerPath(line, prefix string) string {
+	return strings.TrimSuffix(strings.TrimPrefix(line, prefix), "\t")
 }
 
 // stripPathPrefix removes the a/ or b/ prefix git adds to diff paths.

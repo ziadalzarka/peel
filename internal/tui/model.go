@@ -2669,7 +2669,7 @@ func fingerprintOf(s *app.Session) string {
 	}
 	var b strings.Builder
 	for _, f := range s.Files {
-		fmt.Fprintf(&b, "%s\t%v\t%t\n", f.Path, f.State(), f.Untracked)
+		fmt.Fprintf(&b, "%s\t%v\t%t\t%t\n", f.Path, f.State(), f.Untracked, f.Conflicted)
 		writeSideFingerprint(&b, "staged", f.Staged)
 		writeSideFingerprint(&b, "unstaged", f.Unstaged)
 	}

@@ -141,6 +141,11 @@ func (f FileDiff) Stats() (added, removed int) {
 // Diff is a parsed set of file changes — the output of one `git diff`.
 type Diff struct {
 	Files []FileDiff
+	// Unmerged lists the paths a merge left with more than one version in the
+	// index. Git prints no change for them, because there is no one pair of
+	// trees to compare, so there is no FileDiff for them here either — what they
+	// hold is read against HEAD instead.
+	Unmerged []string
 }
 
 // File returns the FileDiff for path, matching on either side of a rename.

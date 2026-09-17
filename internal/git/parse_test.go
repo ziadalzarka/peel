@@ -422,3 +422,192 @@ func TestUnquotePath(t *testing.T) {
 		}
 	}
 }
+
+func TestParseDiffUnmergedPathAfterAFilesHunks(t *testing.T) {
+	// What `git diff --cached` prints mid-merge: the unmerged paths are named in
+	// among the files rather than at the end, so one comes directly after the
+	// last line of another file's hunk body.
+	const in = `diff --git a/a.txt b/a.txt
+index 1111111..2222222 100644
+--- a/a.txt
++++ b/a.txt
+@@ -1,2 +1,3 @@
+ one
++two
+ three
+* Unmerged path b.txt
+diff --git a/c.txt b/c.txt
+index 3333333..4444444 100644
+--- a/c.txt
++++ b/c.txt
+@@ -1 +1 @@
+-old
++new
+`
+
+	d, err := ParseDiff(in)
+	if err != nil {
+		t.Fatalf("ParseDiff: %v", err)
+	}
+	if got := paths(d); !equalStrings(got, []string{"a.txt", "c.txt"}) {
+		t.Errorf("files = %v, want [a.txt c.txt]", got)
+	}
+	if !equalStrings(d.Unmerged, []string{"b.txt"}) {
+		t.Errorf("Unmerged = %v, want [b.txt]", d.Unmerged)
+	}
+	if lines := len(d.Files[0].Hunks[0].Lines); lines != 3 {
+		t.Errorf("a.txt hunk has %d lines, want 3 — the marker was read as one", lines)
+	}
+}
+
+func TestParseDiffUnmergedPathAfterAFileWithNoHunks(t *testing.T) {
+	// A mode change has no hunk body to end, so the marker after it is read by
+	// the header loop instead — which has no default case to catch it.
+	const in = `diff --git a/a.txt b/a.txt
+old mode 100644
+new mode 100755
+* Unmerged path b.txt
+`
+
+	d, err := ParseDiff(in)
+	if err != nil {
+		t.Fatalf("ParseDiff: %v", err)
+	}
+	if !equalStrings(d.Unmerged, []string{"b.txt"}) {
+		t.Errorf("Unmerged = %v, want [b.txt]", d.Unmerged)
+	}
+	if len(d.Files) != 1 || d.Files[0].NewMode != "100755" {
+		t.Errorf("files = %+v, want one a.txt with mode 100755", d.Files)
+	}
+}
+
+func TestParseDiffUnmergedPathBeforeAnyFile(t *testing.T) {
+	const in = `* Unmerged path a.txt
+* Unmerged path b.txt
+diff --git a/c.txt b/c.txt
+--- a/c.txt
++++ b/c.txt
+@@ -1 +1 @@
+-old
++new
+`
+
+	d, err := ParseDiff(in)
+	if err != nil {
+		t.Fatalf("ParseDiff: %v", err)
+	}
+	if !equalStrings(d.Unmerged, []string{"a.txt", "b.txt"}) {
+		t.Errorf("Unmerged = %v, want [a.txt b.txt]", d.Unmerged)
+	}
+	if got := paths(d); !equalStrings(got, []string{"c.txt"}) {
+		t.Errorf("files = %v, want [c.txt]", got)
+	}
+}
+
+func TestParseDiffCombinedHunkIsNotAChange(t *testing.T) {
+	// What `git diff` prints for an unmerged path: two origin columns, three
+	// ranges, and a body no patch can be built from. It comes back as an
+	// unmerged path and nothing else — including a body line that reads like a
+	// file header.
+	const in = `diff --cc f.txt
+index 39d6a01,d18224a..0000000
+--- a/f.txt
++++ b/f.txt
+@@@ -1,6 -1,6 +1,10 @@@
+  a
+++<<<<<<< HEAD
+ +MAIN
+++=======
++ SIDE
+++>>>>>>> side
+++++ b/not-a-header
+  d
+diff --git a/plain.txt b/plain.txt
+--- a/plain.txt
++++ b/plain.txt
+@@ -1 +1,2 @@
+ p
++q
+`
+
+	d, err := ParseDiff(in)
+	if err != nil {
+		t.Fatalf("ParseDiff: %v", err)
+	}
+	if !equalStrings(d.Unmerged, []string{"f.txt"}) {
+		t.Errorf("Unmerged = %v, want [f.txt]", d.Unmerged)
+	}
+	if got := paths(d); !equalStrings(got, []string{"plain.txt"}) {
+		t.Errorf("files = %v, want [plain.txt]", got)
+	}
+}
+
+func TestParseDiffCombinedLongFormAndPathsGitHadToQuote(t *testing.T) {
+	// A combined header quotes a path that needs it, as every other header git
+	// prints does. The unmerged line is the exception: git writes the name raw,
+	// so quotes around one there belong to the name.
+	const in = "diff --combined \"sp\\303\\251 cial.txt\"\n@@@ -1,1 -1,1 +1,1 @@@\n- a\n -b\n++c\n* Unmerged path other \303\251.txt\n"
+
+	d, err := ParseDiff(in)
+	if err != nil {
+		t.Fatalf("ParseDiff: %v", err)
+	}
+	if !equalStrings(d.Unmerged, []string{"spé cial.txt", "other é.txt"}) {
+		t.Errorf("Unmerged = %v, want [spé cial.txt other é.txt]", d.Unmerged)
+	}
+}
+
+func paths(d Diff) []string {
+	out := make([]string, 0, len(d.Files))
+	for _, f := range d.Files {
+		out = append(out, f.Path())
+	}
+	return out
+}
+
+func equalStrings(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func TestParseDiffPathWithASpaceDropsGitsDisambiguatingTab(t *testing.T) {
+	// Git ends the ---/+++ line with a tab where the name alone would be
+	// ambiguous, so a reader knows where the name stops. It is not in the name.
+	const in = "diff --git a/with space.txt b/with space.txt\n" +
+		"--- a/with space.txt\t\n" +
+		"+++ b/with space.txt\t\n" +
+		"@@ -1 +1 @@\n-a\n+b\n"
+
+	d, err := ParseDiff(in)
+	if err != nil {
+		t.Fatalf("ParseDiff: %v", err)
+	}
+	if got := d.Files[0].Path(); got != "with space.txt" {
+		t.Errorf("Path() = %q, want %q", got, "with space.txt")
+	}
+	if got := d.Files[0].OldPath; got != "with space.txt" {
+		t.Errorf("OldPath = %q, want %q", got, "with space.txt")
+	}
+}
+
+func TestParseDiffQuotedPathWithASpace(t *testing.T) {
+	const in = "diff --git \"a/sp\\303\\251 cial.txt\" \"b/sp\\303\\251 cial.txt\"\n" +
+		"--- \"a/sp\\303\\251 cial.txt\"\t\n" +
+		"+++ \"b/sp\\303\\251 cial.txt\"\t\n" +
+		"@@ -1 +1 @@\n-a\n+b\n"
+
+	d, err := ParseDiff(in)
+	if err != nil {
+		t.Fatalf("ParseDiff: %v", err)
+	}
+	if got := d.Files[0].Path(); got != "spé cial.txt" {
+		t.Errorf("Path() = %q, want %q", got, "spé cial.txt")
+	}
+}

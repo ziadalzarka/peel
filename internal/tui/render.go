@@ -711,6 +711,9 @@ func (r *Renderer) fit(s string) string { return fit(s, r.width) }
 
 // fileLabel describes how a file changed, for the header summary.
 func fileLabel(e git.FileEntry) string {
+	if e.Conflicted {
+		return "conflicted"
+	}
 	if e.Untracked {
 		return "untracked"
 	}
