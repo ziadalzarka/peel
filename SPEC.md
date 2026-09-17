@@ -220,6 +220,7 @@ works on it unchanged.
 |---|---|
 | **Which side** | The working-tree side, always. There is no staged half: whatever `git diff --cached` would have said about the path, it is not a change anything can take back |
 | **The file list** | Marked `conflicted` in the header, with a note over the diff so the markers are not read as code somebody wrote |
+| **The file pane** | Split in two while a merge is unresolved: `conflicts` at the very top, `the rest` under a second heading, each group its own tree. A conflict needs a decision rather than a read, and a review of two hundred files gives no sign there is one waiting somewhere down the list. With nothing conflicted the pane is one tree, as it always was |
 | **`s`** | `git add` is how a merge is marked resolved, so `s` is the right key — but it is refused while `<<<<<<<` or `>>>>>>>` is still in the file, and names the line. Only a path git reports unmerged is checked, so a fixture or a page about merging stages like anything else |
 | **`S`** | Refused. The index holds every version of the path at once, so there is no hunk to move into it |
 | **Ours kept, theirs deleted** | No diff at all — the working copy is HEAD's. The file is still listed, and the note says the conflict is over whether it stays |

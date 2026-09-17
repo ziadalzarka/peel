@@ -33,8 +33,10 @@ keymap.
 - **A merge conflict is a file like any other.** Mid-merge, git has no single
   change to print for an unresolved path, and peel shows the merge it left on
   disk instead — read against the last commit, so the markers arrive as
-  additions you can scroll, comment on and expand around. `s` is still how it is
-  marked resolved, and is refused while the markers are still in the file.
+  additions you can scroll, comment on and expand around. The file tree splits
+  in two while one is open, `conflicts` at the top and `the rest` below, so what
+  is waiting on a decision is never buried. `s` is still how it is marked
+  resolved, and is refused while the markers are still in the file.
 - **Notes an agent can read.** Comments go to a JSON file — `.git/peel/comments.json`
   for the working tree — which Claude Code reads through the bundled skill, so
   "address my review comments" needs no copy-paste. `C` copies the threads you

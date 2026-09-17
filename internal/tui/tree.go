@@ -6,23 +6,33 @@ import (
 	"github.com/ziadalzarka/peel/internal/git"
 )
 
-// paneRow is one line of the file pane: a changed file, or a directory holding
-// some of them.
+// paneRow is one line of the file pane: a changed file, a directory holding
+// some of them, or a heading over one of the two groups a merge splits them
+// into.
 type paneRow struct {
-	// Name labels the row: a file's base name, or the directory segments the
-	// row stands for.
+	// Name labels the row: a file's base name, the directory segments the row
+	// stands for, or a heading's words.
 	Name string
 	// Path is the file's path, or the path of the directory down to and
-	// including this row.
+	// including this row. A heading has none.
 	Path string
 	// Depth is how many directories the row sits under.
 	Depth int
-	// File indexes into Document.Files, and is -1 on a directory row.
+	// File indexes into Document.Files, and is -1 on a directory or a heading.
 	File int
 	// State is the file's staging state, or how far through a directory's files
 	// staging has got.
 	State git.StageState
+	// Heading marks a row that labels the rows below it rather than naming
+	// anything in the tree. Nothing in the diff answers to it.
+	Heading bool
 }
+
+// Headings over the two groups a merge splits the pane into.
+const (
+	conflictHeading = "conflicts"
+	restHeading     = "the rest"
+)
 
 // fileTree lays the changed files out under the directories they live in, so
 // the pane says where a file is and not only what it is called.
@@ -32,14 +42,36 @@ type paneRow struct {
 // still reads the diff top to bottom. A directory holding nothing but one more
 // directory is joined onto it, `internal/tui` rather than two rows and an
 // indent, since the pane is narrow and a level with one way down says nothing.
+//
+// A merge is the one thing that breaks that order. What a conflict needs is a
+// decision, not a read, and a review of two hundred files gives no sign there is
+// one waiting somewhere down the list — so the unresolved files come out first,
+// under a heading, with everything else under a second one. The tree is built
+// the same way inside each group, and a tree with no conflict in it is the
+// tree it has always been, headings and all left out.
 func fileTree(files []FileRef) []paneRow {
 	parts := make([][]string, len(files))
-	group := make([]int, len(files))
+	var conflicted, rest []int
 	for i, f := range files {
 		parts[i] = strings.Split(f.Entry.Path, "/")
-		group[i] = i
+		if f.Entry.Conflicted {
+			conflicted = append(conflicted, i)
+			continue
+		}
+		rest = append(rest, i)
 	}
-	return branch(files, parts, group, 0, 0)
+
+	if len(conflicted) == 0 {
+		return branch(files, parts, rest, 0, 0)
+	}
+
+	rows := []paneRow{{Name: conflictHeading, File: -1, Heading: true}}
+	rows = append(rows, branch(files, parts, conflicted, 0, 0)...)
+	if len(rest) > 0 {
+		rows = append(rows, paneRow{Name: restHeading, File: -1, Heading: true})
+		rows = append(rows, branch(files, parts, rest, 0, 0)...)
+	}
+	return rows
 }
 
 // node is one entry of a directory while the tree is being built: a file, or a

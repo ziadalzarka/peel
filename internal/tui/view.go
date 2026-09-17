@@ -247,6 +247,16 @@ func (m *Model) paneLine(row paneRow, marked string, width int) string {
 	indent := m.theme.Dim.Render(guides)
 	room := width - filePaneGutter - ansi.StringWidth(guides)
 
+	if row.Heading {
+		// A heading names the rows under it and nothing in the tree, so it keeps
+		// clear of the columns the tree uses: no marker, no state symbol, and no
+		// guides. What is left is the word and a rule out to the edge, which is
+		// what makes it read as a break rather than a file with an odd name.
+		name := shorten(row.Name, max(width-2, 2))
+		rule := max(width-ansi.StringWidth(name)-2, 0)
+		return fit(" "+m.theme.HunkHead.Render(name)+" "+m.theme.Dim.Render(strings.Repeat("─", rule)), width)
+	}
+
 	if row.File < 0 {
 		// A directory carries the state of the files under it, so one already
 		// worked through reads as done at a glance. The directories above the

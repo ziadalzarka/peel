@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/ziadalzarka/peel/internal/app"
 	"github.com/ziadalzarka/peel/internal/git"
 )
@@ -130,4 +131,174 @@ func TestStagingWorksWhileAnotherPathIsConflicted(t *testing.T) {
 	if m.status != "nothing to undo" {
 		t.Errorf("status = %q, want the press to be one there is no undo for", m.status)
 	}
+}
+
+// paneDiff is four files over three directories, for the order the pane puts
+// them in.
+const paneDiff = `diff --git a/internal/tui/model.go b/internal/tui/model.go
+--- a/internal/tui/model.go
++++ b/internal/tui/model.go
+@@ -1 +1,2 @@
+ a
++b
+diff --git a/internal/tui/view.go b/internal/tui/view.go
+--- a/internal/tui/view.go
++++ b/internal/tui/view.go
+@@ -1 +1,2 @@
+ a
++b
+diff --git a/internal/git/parse.go b/internal/git/parse.go
+--- a/internal/git/parse.go
++++ b/internal/git/parse.go
+@@ -1 +1,2 @@
+ a
++b
+diff --git a/README.md b/README.md
+--- a/README.md
++++ b/README.md
+@@ -1 +1,2 @@
+ a
++b
+`
+
+// paneOf builds the file pane for paneDiff with the named paths conflicted.
+func paneOf(t *testing.T, conflicted ...string) []paneRow {
+	t.Helper()
+	entries := parseFiles(t, paneDiff)
+	for i := range entries {
+		for _, path := range conflicted {
+			if entries[i].Path == path {
+				entries[i].Conflicted = true
+			}
+		}
+	}
+	return fileTree(Build(sessionOf(entries), nil, nil, LayoutUnified).Files)
+}
+
+// paneFiles lists the pane's file rows in the order it draws them.
+func paneFiles(rows []paneRow) []string {
+	var out []string
+	for _, row := range rows {
+		if row.File >= 0 {
+			out = append(out, row.Path)
+		}
+	}
+	return out
+}
+
+func TestPaneKeepsOneTreeWithNoConflictInIt(t *testing.T) {
+	rows := paneOf(t)
+	for _, row := range rows {
+		if row.Heading {
+			t.Fatalf("a tree with nothing conflicted has a %q heading over it", row.Name)
+		}
+	}
+	want := []string{"internal/tui/model.go", "internal/tui/view.go", "internal/git/parse.go", "README.md"}
+	if got := paneFiles(rows); !equalPaths(got, want) {
+		t.Errorf("files = %v, want the document's order %v", got, want)
+	}
+}
+
+func TestPaneLiftsConflictsToTheTopUnderTheirOwnHeading(t *testing.T) {
+	rows := paneOf(t, "internal/tui/view.go", "README.md")
+
+	if len(rows) == 0 || !rows[0].Heading || rows[0].Name != conflictHeading {
+		t.Fatalf("first row = %+v, want the %q heading", rows[0], conflictHeading)
+	}
+
+	// The conflicts come first, each still under the directory it lives in, and
+	// everything else follows under the second heading.
+	want := []string{"internal/tui/view.go", "README.md", "internal/tui/model.go", "internal/git/parse.go"}
+	if got := paneFiles(rows); !equalPaths(got, want) {
+		t.Errorf("files = %v, want %v", got, want)
+	}
+
+	var headings []string
+	var restAt int
+	for i, row := range rows {
+		if row.Heading {
+			headings = append(headings, row.Name)
+			if row.Name == restHeading {
+				restAt = i
+			}
+		}
+	}
+	if !equalPaths(headings, []string{conflictHeading, restHeading}) {
+		t.Errorf("headings = %v, want one over each group", headings)
+	}
+	for _, row := range rows[:restAt] {
+		if row.File >= 0 && !strings.HasSuffix(row.Path, "view.go") && !strings.HasSuffix(row.Path, "README.md") {
+			t.Errorf("%s is above the %q heading", row.Path, restHeading)
+		}
+	}
+}
+
+func TestPaneHeadsAReviewThatIsAllConflictOnce(t *testing.T) {
+	rows := paneOf(t, "internal/tui/model.go", "internal/tui/view.go",
+		"internal/git/parse.go", "README.md")
+
+	var headings []string
+	for _, row := range rows {
+		if row.Heading {
+			headings = append(headings, row.Name)
+		}
+	}
+	if !equalPaths(headings, []string{conflictHeading}) {
+		t.Errorf("headings = %v, want just the one — there is no rest to head", headings)
+	}
+}
+
+func TestPaneHeadingAnswersToNoFile(t *testing.T) {
+	// The pane scrolls to the row a file sits on, so a heading must not be
+	// mistaken for one.
+	entries := parseFiles(t, paneDiff)
+	entries[1].Conflicted = true
+	m := newModel(t, newFakeBackend(sessionOf(entries)))
+
+	for i, row := range m.fileRows {
+		if !row.Heading {
+			continue
+		}
+		if row.File >= 0 || row.Path != "" {
+			t.Errorf("heading row %d = %+v, want it to name nothing in the tree", i, row)
+		}
+	}
+	for file := range m.doc.Files {
+		at := m.paneRowOf(file)
+		if at < 0 || m.fileRows[at].Heading {
+			t.Errorf("file %d lands on pane row %d, want a row of its own", file, at)
+		}
+	}
+}
+
+func TestPaneHeadingDrawsAsABreak(t *testing.T) {
+	entries := parseFiles(t, paneDiff)
+	entries[1].Conflicted = true
+	m := newModel(t, newFakeBackend(sessionOf(entries)))
+	width := m.filePaneWidth()
+
+	line := m.paneLine(m.fileRows[0], "", width)
+	if !strings.Contains(line, conflictHeading) {
+		t.Errorf("heading row = %q, want it to say %q", line, conflictHeading)
+	}
+	if !strings.Contains(line, "─") {
+		t.Errorf("heading row = %q, want a rule out to the edge", line)
+	}
+	for _, row := range m.fileRows {
+		if got := ansi.StringWidth(m.paneLine(row, "", width)); got != width {
+			t.Errorf("pane row %q is %d wide, want %d", row.Name, got, width)
+		}
+	}
+}
+
+func equalPaths(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
