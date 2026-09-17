@@ -99,6 +99,7 @@ const prJSON = `{
   "author": {"login": "ziadalzarka"},
   "baseRefName": "main",
   "headRefName": "feature/drop-key",
+  "headRefOid": "9f2c1ab0d4e5f60718293a4b5c6d7e8f90123456",
   "url": "https://github.com/cli/cli/pull/412",
   "state": "OPEN",
   "isDraft": true
@@ -123,6 +124,9 @@ func TestFetch(t *testing.T) {
 	}
 	if got.BaseRef != "main" || got.HeadRef != "feature/drop-key" {
 		t.Errorf("refs = %q..%q", got.BaseRef, got.HeadRef)
+	}
+	if got.HeadSHA != "9f2c1ab0d4e5f60718293a4b5c6d7e8f90123456" {
+		t.Errorf("HeadSHA = %q", got.HeadSHA)
 	}
 	if !got.Draft {
 		t.Error("Draft = false, want true")
@@ -160,6 +164,65 @@ func TestFetchRejectsMalformedJSON(t *testing.T) {
 
 	if _, err := newGitHub(runner).Fetch(context.Background(), Ref{"o", "r", 1}); err == nil {
 		t.Fatal("Fetch accepted malformed JSON")
+	}
+}
+
+func TestFileContentReadsTheHostAtTheHeadCommit(t *testing.T) {
+	const file = "package main\n\nfunc main() {}\n"
+	runner := exec.NewFakeRunner().Respond("gh api", file)
+
+	got, err := newGitHub(runner).FileContent(context.Background(), Ref{"cli", "cli", 412}, "deadbeef", "cmd/gh/main.go")
+	if err != nil {
+		t.Fatalf("FileContent: %v", err)
+	}
+	if got != file {
+		t.Errorf("FileContent = %q, want %q", got, file)
+	}
+
+	args := strings.Join(runner.Calls()[0].Cmd.Args, " ")
+	if want := "repos/cli/cli/contents/cmd/gh/main.go?ref=deadbeef"; !strings.Contains(args, want) {
+		t.Errorf("gh args = %q, want the endpoint %q", args, want)
+	}
+	if !strings.Contains(args, "Accept: application/vnd.github.raw") {
+		t.Errorf("gh args = %q, want the raw media type", args)
+	}
+}
+
+func TestFileContentEscapesThePath(t *testing.T) {
+	runner := exec.NewFakeRunner().Respond("gh api", "")
+
+	if _, err := newGitHub(runner).FileContent(context.Background(), Ref{"o", "r", 1}, "abc123", "docs/a b#c.md"); err != nil {
+		t.Fatalf("FileContent: %v", err)
+	}
+
+	args := strings.Join(runner.Calls()[0].Cmd.Args, " ")
+	if want := "repos/o/r/contents/docs/a%20b%23c.md?ref=abc123"; !strings.Contains(args, want) {
+		t.Errorf("gh args = %q, want the endpoint %q", args, want)
+	}
+}
+
+func TestFileContentRejectsWhatItCannotRead(t *testing.T) {
+	p := newGitHub(exec.NewFakeRunner())
+	if _, err := p.FileContent(context.Background(), Ref{Owner: "o"}, "abc", "main.go"); err == nil {
+		t.Error("FileContent accepted an incomplete reference")
+	}
+	if _, err := p.FileContent(context.Background(), Ref{"o", "r", 1}, "", "main.go"); err == nil {
+		t.Error("FileContent accepted an empty revision")
+	}
+	if _, err := p.FileContent(context.Background(), Ref{"o", "r", 1}, "abc", ""); err == nil {
+		t.Error("FileContent accepted an empty path")
+	}
+}
+
+func TestFileContentSurfacesGHError(t *testing.T) {
+	runner := exec.NewFakeRunner().RespondErr("gh api", "gh: Not Found (HTTP 404)", 1)
+
+	_, err := newGitHub(runner).FileContent(context.Background(), Ref{"o", "r", 1}, "abc", "gone.go")
+	if err == nil {
+		t.Fatal("FileContent succeeded despite a gh failure")
+	}
+	if !strings.Contains(err.Error(), "Not Found") {
+		t.Errorf("error = %v, want gh's stderr surfaced", err)
 	}
 }
 

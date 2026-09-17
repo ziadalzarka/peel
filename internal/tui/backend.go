@@ -263,10 +263,7 @@ func (b *appBackend) Context(ctx context.Context, s *app.Session) (Copies, error
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	// A pull request is not in this working tree. The paths in it name local
-	// files that have nothing to do with the review, and reading context out of
-	// those would put code on screen the changeset never touched.
-	if s == nil || s.PR != nil {
+	if s == nil {
 		fresh := len(b.handed) > 0
 		b.copies, b.handed = nil, nil
 		return Copies{Fresh: fresh}, nil
@@ -287,7 +284,7 @@ func (b *appBackend) Context(ctx context.Context, s *app.Session) (Copies, error
 		files[r.side] = lines
 		sides[r.side] = r.id
 	}
-	for r, lines := range b.readCopies(ctx, missing) {
+	for r, lines := range b.readCopies(ctx, s, missing) {
 		held[r.id] = lines
 		files[r.side] = lines
 		sides[r.side] = r.id
@@ -303,12 +300,12 @@ func (b *appBackend) Context(ctx context.Context, s *app.Session) (Copies, error
 
 // readCopies reads the copies not already held, several at a time.
 //
-// A changeset of any size is a file read per side and a git call per part-staged
-// one, and doing them in a row is where a reload that has to read them spends
-// all of its time. They are independent — different files, different processes —
-// so they go out together, bounded so a large changeset does not fork a hundred
-// gits at once.
-func (b *appBackend) readCopies(ctx context.Context, missing []copyRead) map[copyRead][]string {
+// A changeset of any size is a file read per side, a git call per part-staged
+// one and a request to the host per file of a pull request, and doing them in a
+// row is where a reload that has to read them spends all of its time. They are
+// independent — different files, different processes — so they go out together,
+// bounded so a large changeset does not fork a hundred of them at once.
+func (b *appBackend) readCopies(ctx context.Context, s *app.Session, missing []copyRead) map[copyRead][]string {
 	if len(missing) == 0 {
 		return nil
 	}
@@ -323,7 +320,7 @@ func (b *appBackend) readCopies(ctx context.Context, missing []copyRead) map[cop
 			defer wg.Done()
 			slots <- struct{}{}
 			defer func() { <-slots }()
-			got, err := b.readCopy(ctx, r)
+			got, err := b.readCopy(ctx, s, r)
 			if err != nil {
 				return
 			}
@@ -341,8 +338,11 @@ func (b *appBackend) readCopies(ctx context.Context, missing []copyRead) map[cop
 	return out
 }
 
-func (b *appBackend) readCopy(ctx context.Context, r copyRead) ([]string, error) {
-	if r.index {
+func (b *appBackend) readCopy(ctx context.Context, s *app.Session, r copyRead) ([]string, error) {
+	switch {
+	case s.PR != nil:
+		return b.app.PullRequestLines(ctx, s, r.side.Path)
+	case r.index:
 		return b.app.Repo.IndexLines(ctx, r.side.Path)
 	}
 	return b.app.Repo.WorkingLines(r.side.Path)
@@ -396,6 +396,12 @@ func copiesWanted(s *app.Session) []copyRead {
 		if f.IsBinary() {
 			continue
 		}
+		if s.PR != nil {
+			if read, ok := headCopyWanted(s.PR, f); ok {
+				out = append(out, read)
+			}
+			continue
+		}
 		if f.Unstaged != nil {
 			out = append(out, copyRead{
 				side: FileSide{Path: f.Path},
@@ -411,6 +417,16 @@ func copiesWanted(s *app.Session) []copyRead {
 		}
 	}
 	return out
+}
+
+func headCopyWanted(pr *forge.PullRequest, f git.FileEntry) (copyRead, bool) {
+	if pr.HeadSHA == "" || f.Unstaged == nil || f.Unstaged.Status == git.StatusDeleted {
+		return copyRead{}, false
+	}
+	return copyRead{
+		side: FileSide{Path: f.Path},
+		id:   copyID{Path: f.Path, Changes: pr.HeadSHA},
+	}, true
 }
 
 // changesOf fingerprints the diffs that stand between HEAD and one copy of a

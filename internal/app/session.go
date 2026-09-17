@@ -192,6 +192,25 @@ func (a *App) LoadPullRequest(ctx context.Context, providerName, ref string) (*S
 	return session, nil
 }
 
+func (a *App) PullRequestLines(ctx context.Context, s *Session, path string) ([]string, error) {
+	if s == nil || s.PR == nil {
+		return nil, fmt.Errorf("no pull request to read %s from", path)
+	}
+	if s.PR.HeadSHA == "" {
+		return nil, fmt.Errorf("%s does not say which commit it ends on, so %s cannot be read", s.PR.Ref, path)
+	}
+	name, _, _ := forge.ParseTarget(s.Target)
+	provider, err := a.Forges.Resolve(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	content, err := provider.FileContent(ctx, s.PR.Ref, s.PR.HeadSHA, path)
+	if err != nil {
+		return nil, err
+	}
+	return git.SplitLines(content), nil
+}
+
 // needRepo reports the session that cannot be loaded because peel is not in a
 // repository. A pull request is reviewable from anywhere; a working tree is the
 // repository, so there is nothing to fall back to.

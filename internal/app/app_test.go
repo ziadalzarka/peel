@@ -47,6 +47,8 @@ type fakeForge struct {
 	submitted   []forge.Review
 	comments    []forge.RemoteComment
 	commentsErr error
+	files       map[string]string
+	fileErr     error
 }
 
 func (f *fakeForge) Name() string        { return f.name }
@@ -66,6 +68,13 @@ func (f *fakeForge) Fetch(context.Context, forge.Ref) (*forge.PullRequest, error
 		return nil, f.fetchErr
 	}
 	return f.pr, nil
+}
+
+func (f *fakeForge) FileContent(_ context.Context, _ forge.Ref, rev, path string) (string, error) {
+	if f.fileErr != nil {
+		return "", f.fileErr
+	}
+	return f.files[path], nil
 }
 
 func (f *fakeForge) SubmitReview(_ context.Context, _ forge.Ref, r forge.Review) error {

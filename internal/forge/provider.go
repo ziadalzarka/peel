@@ -68,6 +68,7 @@ type PullRequest struct {
 	Author  string
 	BaseRef string
 	HeadRef string
+	HeadSHA string
 	URL     string
 	State   string
 	Draft   bool
@@ -161,6 +162,7 @@ type Provider interface {
 	Parse(ctx context.Context, dir, ref string) (Ref, error)
 	// Fetch returns the pull request and its diff.
 	Fetch(ctx context.Context, ref Ref) (*PullRequest, error)
+	FileContent(ctx context.Context, ref Ref, rev, path string) (string, error)
 	// SubmitReview posts a review. This is the one outward-facing operation in
 	// peel, so callers must confirm with the user before invoking it.
 	SubmitReview(ctx context.Context, ref Ref, review Review) error

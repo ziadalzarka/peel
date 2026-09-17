@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -126,6 +127,7 @@ type ghPullRequest struct {
 	} `json:"author"`
 	BaseRefName string `json:"baseRefName"`
 	HeadRefName string `json:"headRefName"`
+	HeadRefOid  string `json:"headRefOid"`
 	URL         string `json:"url"`
 	State       string `json:"state"`
 	IsDraft     bool   `json:"isDraft"`
@@ -134,7 +136,7 @@ type ghPullRequest struct {
 // prFields are the fields requested from `gh pr view`.
 var prFields = strings.Join([]string{
 	"number", "title", "body", "author",
-	"baseRefName", "headRefName", "url", "state", "isDraft",
+	"baseRefName", "headRefName", "headRefOid", "url", "state", "isDraft",
 }, ",")
 
 // Fetch implements Provider.
@@ -172,11 +174,40 @@ func (p *GitHubProvider) Fetch(ctx context.Context, ref Ref) (*PullRequest, erro
 		Author:  meta.Author.Login,
 		BaseRef: meta.BaseRefName,
 		HeadRef: meta.HeadRefName,
+		HeadSHA: meta.HeadRefOid,
 		URL:     meta.URL,
 		State:   meta.State,
 		Draft:   meta.IsDraft,
 		Diff:    string(diffRes.Stdout),
 	}, nil
+}
+
+func (p *GitHubProvider) FileContent(ctx context.Context, ref Ref, rev, path string) (string, error) {
+	if !ref.Valid() {
+		return "", fmt.Errorf("incomplete pull request reference %+v", ref)
+	}
+	if rev == "" || path == "" {
+		return "", fmt.Errorf("read a file of %s: a revision and a path are required", ref)
+	}
+
+	endpoint := fmt.Sprintf("repos/%s/%s/contents/%s?ref=%s",
+		ref.Owner, ref.Repo, escapePath(path), url.QueryEscape(rev))
+	res, err := p.runner.Run(ctx, exec.Command{
+		Name: p.binary,
+		Args: []string{"api", "-H", "Accept: application/vnd.github.raw", endpoint},
+	})
+	if err != nil {
+		return "", fmt.Errorf("read %s at %s in %s: %w", path, rev, ref, err)
+	}
+	return string(res.Stdout), nil
+}
+
+func escapePath(path string) string {
+	parts := strings.Split(path, "/")
+	for i, part := range parts {
+		parts[i] = url.PathEscape(part)
+	}
+	return strings.Join(parts, "/")
 }
 
 // reviewPayload is the request body for the create-review API.

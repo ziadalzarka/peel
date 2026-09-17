@@ -62,9 +62,10 @@ func (r Reveal) clamp(n int) Reveal {
 // Expansion is the unchanged code a review has read in around its hunks, and
 // the copies of the files it is read out of.
 type Expansion struct {
-	// Files holds each side's own copy of the file, line by line. A side with no
-	// entry cannot be expanded at all, which is what leaves a pull request — code
-	// that is not in this working tree — with no rows offering to.
+	// Files holds each side's own copy of the file, line by line: read off the
+	// disk for a working tree, and from the code host at the head commit for a
+	// pull request. A side with no entry cannot be expanded at all, which is
+	// what leaves a file nothing could be read for with no rows offering to.
 	Files map[FileSide][]string
 	// Revealed is how many lines have been read in from each hunk, each way.
 	Revealed map[ExpandKey]int

@@ -64,6 +64,10 @@ func (f *fakeForge) Fetch(context.Context, forge.Ref) (*forge.PullRequest, error
 	}, nil
 }
 
+func (f *fakeForge) FileContent(context.Context, forge.Ref, string, string) (string, error) {
+	return "", errors.New("no file content in this fake")
+}
+
 func (f *fakeForge) SubmitReview(_ context.Context, _ forge.Ref, r forge.Review) error {
 	if f.submitErr != nil {
 		return f.submitErr

@@ -16,7 +16,7 @@ const devNull = "/dev/null"
 // "\n" only, so a CRLF file keeps its "\r" as part of the line text and round
 // trips byte-for-byte through Patch.
 func ParseDiff(out string) (Diff, error) {
-	p := &diffParser{lines: splitLines(out)}
+	p := &diffParser{lines: SplitLines(out)}
 	return p.parse()
 }
 
@@ -25,9 +25,9 @@ type diffParser struct {
 	pos   int
 }
 
-// splitLines splits on "\n" and drops the trailing empty element produced by a
+// SplitLines splits on "\n" and drops the trailing empty element produced by a
 // final newline, so that "a\n" yields ["a"] rather than ["a", ""].
-func splitLines(s string) []string {
+func SplitLines(s string) []string {
 	if s == "" {
 		return nil
 	}

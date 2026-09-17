@@ -235,7 +235,7 @@ func (r *Repo) WorkingLines(path string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	return splitLines(string(content)), nil
+	return SplitLines(string(content)), nil
 }
 
 // IndexLines returns the copy git holds staged for path, line by line — what
@@ -250,7 +250,7 @@ func (r *Repo) IndexLines(ctx context.Context, path string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read staged %s: %w", path, err)
 	}
-	return splitLines(string(res.Stdout)), nil
+	return SplitLines(string(res.Stdout)), nil
 }
 
 // UnstagedFile returns one path's working-tree changes — `git diff` narrowed to

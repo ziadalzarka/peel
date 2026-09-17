@@ -3,6 +3,7 @@ package tui_test
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -556,22 +557,174 @@ func sameLines(a, b []string) bool {
 	return &a[0] == &b[0]
 }
 
-// A pull request's files are not in this working tree. A local file at the same
-// path is a different file, and reading it would put unrelated code in the diff.
-func TestBackendReadsNothingBehindAPullRequest(t *testing.T) {
-	a, _, _ := openBackend(t)
+const prDiff = `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -19,7 +19,7 @@ func main() {
+ line 19
+ line 20
+ line 21
+-line 22
++line 22 changed
+ line 23
+ line 24
+ line 25
+`
 
-	session := &app.Session{
-		Target:    "github:cli/cli#412",
-		Title:     "cli/cli#412 fix the thing",
-		Stageable: false,
-		PR:        &forge.PullRequest{Ref: forge.Ref{Owner: "cli", Repo: "cli", Number: 412}},
-		Files:     []git.FileEntry{{Path: "main.go"}},
+const prHead = "9f2c1ab0d4e5f60718293a4b5c6d7e8f90123456"
+
+type fakePRForge struct {
+	pr    *forge.PullRequest
+	files map[string]string
+
+	mu    sync.Mutex
+	reads []string
+}
+
+func (f *fakePRForge) Name() string                   { return "github" }
+func (f *fakePRForge) Description() string            { return "fake forge" }
+func (f *fakePRForge) Available(context.Context) bool { return true }
+
+func (f *fakePRForge) Parse(context.Context, string, string) (forge.Ref, error) {
+	return f.pr.Ref, nil
+}
+
+func (f *fakePRForge) Fetch(context.Context, forge.Ref) (*forge.PullRequest, error) {
+	return f.pr, nil
+}
+
+func (f *fakePRForge) Comments(context.Context, forge.Ref) ([]forge.RemoteComment, error) {
+	return nil, nil
+}
+
+func (f *fakePRForge) SubmitReview(context.Context, forge.Ref, forge.Review) error { return nil }
+
+func (f *fakePRForge) FileContent(_ context.Context, _ forge.Ref, rev, path string) (string, error) {
+	f.mu.Lock()
+	f.reads = append(f.reads, rev+":"+path)
+	f.mu.Unlock()
+	content, ok := f.files[path]
+	if !ok {
+		return "", fmt.Errorf("no %s in this pull request", path)
 	}
-	backend := tui.NewBackend(a, session)
+	return content, nil
+}
+
+func (f *fakePRForge) reading() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.reads...)
+}
+
+func pullRequestBackend(t *testing.T, pr *forge.PullRequest, files map[string]string) (*fakePRForge, *app.Session, tui.Backend) {
+	t.Helper()
+	repo := gittest.New(t)
+	repo.Write("main.go", "package main\n")
+	repo.Commit("initial")
+
+	host := &fakePRForge{pr: pr, files: files}
+	a, err := app.Open(context.Background(), repo.Dir,
+		app.WithAIRegistry(ai.NewRegistry()),
+		app.WithForgeRegistry(forge.NewRegistry(host)),
+	)
+	if err != nil {
+		t.Fatalf("app.Open: %v", err)
+	}
+	session, err := a.LoadPullRequest(context.Background(), "github", "412")
+	if err != nil {
+		t.Fatalf("LoadPullRequest: %v", err)
+	}
+	return host, session, tui.NewBackend(a, session)
+}
+
+func fakePR(diff string) *forge.PullRequest {
+	return &forge.PullRequest{
+		Ref:     forge.Ref{Owner: "cli", Repo: "cli", Number: 412},
+		Title:   "fix the thing",
+		HeadRef: "feature/fix",
+		HeadSHA: prHead,
+		Diff:    diff,
+	}
+}
+
+func TestBackendReadsAPullRequestFromItsHead(t *testing.T) {
+	lines := make([]string, 40)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line %d", i+1)
+	}
+	lines[21] = "line 22 changed"
+	content := strings.Join(lines, "\n") + "\n"
+
+	host, session, backend := pullRequestBackend(t, fakePR(prDiff), map[string]string{"main.go": content})
+
+	files := contextOf(t, backend, session)
+	got, ok := files[tui.FileSide{Path: "main.go"}]
+	if !ok {
+		t.Fatalf("nothing was read for main.go, got %v", files)
+	}
+	if len(got) != 40 || got[0] != "line 1" || got[39] != "line 40" {
+		t.Errorf("lines = %q, want the whole file the host holds", got)
+	}
+	if want := []string{prHead + ":main.go"}; !slices.Equal(host.reading(), want) {
+		t.Errorf("the host was asked for %q, want %q", host.reading(), want)
+	}
+}
+
+func TestBackendReadsAPullRequestOnce(t *testing.T) {
+	host, session, backend := pullRequestBackend(t, fakePR(prDiff), map[string]string{"main.go": "one\ntwo\n"})
+
+	first, err := backend.Context(context.Background(), session)
+	if err != nil {
+		t.Fatalf("Context: %v", err)
+	}
+	second, err := backend.Context(context.Background(), session)
+	if err != nil {
+		t.Fatalf("Context: %v", err)
+	}
+
+	if !first.Fresh {
+		t.Error("the first read of a pull request came back stale")
+	}
+	if second.Fresh {
+		t.Error("a second read of the same pull request came back fresh")
+	}
+	if n := len(host.reading()); n != 1 {
+		t.Errorf("the host was asked %d times, want once", n)
+	}
+	if !sameLines(first.Files[tui.FileSide{Path: "main.go"}], second.Files[tui.FileSide{Path: "main.go"}]) {
+		t.Error("the second read handed back a different copy")
+	}
+}
+
+func TestBackendReadsPastAFileAPullRequestDeletes(t *testing.T) {
+	const diff = `diff --git a/gone.go b/gone.go
+deleted file mode 100644
+--- a/gone.go
++++ /dev/null
+@@ -1,2 +0,0 @@
+-package main
+-
+`
+	host, session, backend := pullRequestBackend(t, fakePR(diff), map[string]string{})
 
 	if files := contextOf(t, backend, session); len(files) != 0 {
-		t.Errorf("a pull request read %v, want nothing", files)
+		t.Errorf("a deleted file read %v, want nothing", files)
+	}
+	if reads := host.reading(); len(reads) != 0 {
+		t.Errorf("the host was asked for %q, want nothing", reads)
+	}
+}
+
+func TestBackendReadsNothingBehindAPullRequestWithNoHead(t *testing.T) {
+	pr := fakePR(prDiff)
+	pr.HeadSHA = ""
+	host, session, backend := pullRequestBackend(t, pr, map[string]string{"main.go": "one\ntwo\n"})
+
+	if files := contextOf(t, backend, session); len(files) != 0 {
+		t.Errorf("a pull request with no head commit read %v, want nothing", files)
+	}
+	if reads := host.reading(); len(reads) != 0 {
+		t.Errorf("the host was asked for %q, want nothing", reads)
 	}
 }
 
