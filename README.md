@@ -23,9 +23,9 @@ keymap.
   editor inline, in the diff, at the spot the note will sit.
 - **Notes keep up with the code.** Each note freezes the file it was written
   against as a git object, so when an agent edits above it the note moves with
-  its line instead of staying on a number. Code that has been rewritten out from
-  under a note is not guessed at: the note says `outdated` and shows where it
-  was.
+  its line instead of staying on a number. When the code under a note is
+  rewritten or deleted, the note stays on the nearest line to where that code
+  was, says `outdated`, and shows the line it was written on.
 - **Half staged reads as half staged.** A file git holds in the index *and* the
   working tree is drawn as two halves under their own headings, the staged one
   folded away, so what you scroll is what you have not reviewed. Change a file
@@ -212,10 +212,10 @@ notes are theirs: they can be resolved, answered or deleted, not rewritten.
 
 `D` leaves the cursor on the code the note was about, so deleting one does not
 cost you your place. A note with no code left to go back to — one on the file as
-a whole, or one whose lines have been rewritten away — is drawn under its file
+a whole, or one whose line is no longer in the diff — is drawn under its file
 with the others in the same position, and there the cursor lands on the next note
-down the stack instead. Working through a file's outdated notes is one key
-pressed over and over, rather than a scroll back up the file between each one.
+down the stack instead. Working through a stack of them is one key pressed over
+and over, rather than a scroll back up the file between each one.
 
 `x` resolves a note and folds it to its first line, struck through, with `…`
 where there was more — done with, but still on the line it was about, and still

@@ -13,6 +13,7 @@ type listed struct {
 	Line      int    `json:"line"`
 	MovedFrom int    `json:"movedFrom"`
 	Outdated  bool   `json:"outdated"`
+	Nearest   int    `json:"nearestLine"`
 	Body      string `json:"body"`
 }
 
@@ -76,10 +77,13 @@ func TestCommentListSaysWhenTheCodeIsGone(t *testing.T) {
 	if got[0].MovedFrom != 0 {
 		t.Errorf("movedFrom = %d, want none — it did not move, it went", got[0].MovedFrom)
 	}
+	if got[0].Nearest != 4 {
+		t.Errorf("nearestLine = %d, want 4 — the REPLACED line that took its place", got[0].Nearest)
+	}
 
 	// The human-readable table has to say it too, or the same mistake is one
 	// `comment list` without --json away.
-	if out := h.mustRun("comment", "list"); !strings.Contains(out, "(outdated)") {
+	if out := h.mustRun("comment", "list"); !strings.Contains(out, "(outdated, nearest line now 4)") {
 		t.Errorf("comment list did not mark the note outdated:\n%s", out)
 	}
 }
@@ -95,7 +99,7 @@ func TestCommentListLeavesAnUnmovedNoteUnadorned(t *testing.T) {
 	// movedFrom and outdated are omitempty, so a note that has not moved carries
 	// neither — an agent should not have to reason about fields that mean "no".
 	out := h.mustRun("comment", "list", "--json")
-	for _, field := range []string{"movedFrom", "outdated"} {
+	for _, field := range []string{"movedFrom", "outdated", "nearestLine"} {
 		if strings.Contains(out, field) {
 			t.Errorf("unmoved note carries %q:\n%s", field, out)
 		}

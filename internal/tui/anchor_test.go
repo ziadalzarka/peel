@@ -97,7 +97,7 @@ func TestACommentStaysOnItsCodeWhenTheLinesShift(t *testing.T) {
 	}
 }
 
-func TestACommentWhoseCodeIsGoneLandsUnderItsFile(t *testing.T) {
+func TestACommentWhoseCodeIsGoneStaysOnTheNearestLine(t *testing.T) {
 	ctx := context.Background()
 	repo, backend := openReview(t)
 
@@ -108,8 +108,6 @@ func TestACommentWhoseCodeIsGoneLandsUnderItsFile(t *testing.T) {
 		t.Fatalf("AddComment: %v", err)
 	}
 
-	// The commented line is rewritten. There is no longer any code for the note
-	// to be about, and line 4 now holds something the reviewer never read.
 	repo.Write("svc.go", "package svc\n\nfunc Run() {\n\tdoNothing()\n}\n")
 	session, err := backend.Reload(ctx)
 	if err != nil {
@@ -124,8 +122,64 @@ func TestACommentWhoseCodeIsGoneLandsUnderItsFile(t *testing.T) {
 	}
 
 	doc := tui.Build(session, comments, nil, tui.LayoutUnified)
+	if got := codeUnderComment(t, doc); !strings.Contains(got, "doNothing()") {
+		t.Errorf("the note is drawn against %q, want the doNothing() that replaced its line", got)
+	}
+}
+
+func TestAnOutdatedNoteWhoseNearestLineLeftTheDiffIsDrawnUnderItsFile(t *testing.T) {
+	ctx := context.Background()
+	lines := func(changed map[int]string) string {
+		var b strings.Builder
+		for i := 1; i <= 30; i++ {
+			if text, ok := changed[i]; ok {
+				b.WriteString(text + "\n")
+				continue
+			}
+			b.WriteString("line\n")
+		}
+		return b.String()
+	}
+	repo := gittest.New(t)
+	repo.Write("svc.go", lines(nil))
+	repo.Commit("initial")
+	repo.Write("svc.go", lines(map[int]string{5: "FIRST", 25: "SECOND"}))
+
+	a, err := app.Open(ctx, repo.Dir,
+		app.WithAIRegistry(ai.NewRegistry()),
+		app.WithForgeRegistry(forge.NewRegistry()),
+	)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	session, err := a.LoadWorkingTree(ctx)
+	if err != nil {
+		t.Fatalf("LoadWorkingTree: %v", err)
+	}
+	backend := tui.NewBackend(a, session)
+	if _, err := backend.AddComment(ctx, store.Comment{
+		File: "svc.go", Line: 5, Side: store.SideNew, Origin: store.OriginWorktree,
+		Body: "about FIRST", Author: store.AuthorUser,
+	}); err != nil {
+		t.Fatalf("AddComment: %v", err)
+	}
+
+	repo.Write("svc.go", lines(map[int]string{25: "SECOND"}))
+	session, err = backend.Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	comments, err := backend.Comments(ctx)
+	if err != nil {
+		t.Fatalf("Comments: %v", err)
+	}
+	if !comments[0].Outdated || comments[0].NearestLine != 5 {
+		t.Fatalf("outdated %v, nearest %d; want outdated with line 5 nearest", comments[0].Outdated, comments[0].NearestLine)
+	}
+
+	doc := tui.Build(session, comments, nil, tui.LayoutUnified)
 	if got := codeUnderComment(t, doc); got != "<under the file header>" {
-		t.Errorf("the note is drawn against %q, want it parked under its file rather than on code it is not about", got)
+		t.Errorf("the note is drawn against %q, want it under its file — line 5 is no longer in the diff", got)
 	}
 }
 

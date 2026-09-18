@@ -1621,14 +1621,16 @@ func (x *commentIndex) takeFile(path string) []int {
 
 // takeLine returns the comments that hang off either line of a displayed pair.
 //
-// A note whose code is gone claims no line at all. Its number still names a line
-// — some line, whatever moved into the gap — and hanging the note there would be
-// the failure the anchor exists to prevent, dressed up as a placement. It falls
-// through to rest and is drawn under its file instead, saying so.
+// A note whose code is gone hangs off the nearest line to where that code was,
+// and says it is outdated. Only one with no nearest line falls through to rest
+// and is drawn under its file.
 func (x *commentIndex) takeLine(ref HunkRef, pair linePair) []int {
 	return x.take(ref.Path, func(c store.Comment) bool {
-		if c.Line <= 0 || c.Outdated || !sameOrigin(c.Origin, ref) {
+		if c.Line <= 0 || !sameOrigin(c.Origin, ref) {
 			return false
+		}
+		if c.Outdated {
+			return c.NearestLine > 0 && pairHolds(ref, pair, c.Side, c.NearestLine)
 		}
 		return pairHolds(ref, pair, c.Side, hangsOn(c.Line, c.EndLine))
 	})

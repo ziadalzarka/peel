@@ -148,7 +148,8 @@ type anchorKey struct {
 // that and the file as it is — git's own answer rather than a search for
 // something that looks similar. A line the diff has nowhere to map is one that
 // was rewritten or deleted out from under the note, and it comes back marked
-// outdated instead of placed on whatever moved into its number.
+// outdated, keeping the line it was written on, with the nearest line in the
+// file as it is now to be drawn on.
 //
 // Which copy of the file that diff runs against is the note's half of it, which
 // is not always the half it was written on: staging carries a change across the
@@ -232,6 +233,7 @@ func (a *App) Relocate(ctx context.Context, s *Session, comments []store.Comment
 		line, end, ok := relocateRun(m, c.Line, c.EndLine)
 		if !ok {
 			c.Outdated = true
+			c.NearestLine = m.Nearest(max(c.Line, c.EndLine))
 			continue
 		}
 		if line != c.Line {

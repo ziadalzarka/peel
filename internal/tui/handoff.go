@@ -186,7 +186,11 @@ const goneNote = "this file is not part of the change under review any more; " +
 // and an agent sent to it would edit whatever took its place.
 func lineNumberNote(c store.Comment) string {
 	if c.Outdated {
-		return "the code this was written on has since changed; the line number is where it was"
+		note := "the code this was written on has since changed; the line number is where it was"
+		if c.NearestLine > 0 {
+			note += fmt.Sprintf(", and line %d is the nearest line now", c.NearestLine)
+		}
+		return note
 	}
 	old, staged := c.Side == store.SideOld, c.Origin == store.OriginIndex
 	switch {

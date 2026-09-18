@@ -64,6 +64,63 @@ func TestTheHandoffWarnsAboutAnOutdatedLine(t *testing.T) {
 	}
 }
 
+func TestTheHandoffNamesTheNearestLineOfAnOutdatedNote(t *testing.T) {
+	c := outdatedNote()
+	c.NearestLine = 45
+	got := handoffOf([]store.Comment{c})
+	if !strings.Contains(got, "svc.go:42") || !strings.Contains(got, "line 45 is the nearest line now") {
+		t.Errorf("the handoff does not say where the note's code was and where to look now:\n%s", got)
+	}
+}
+
+func TestAnOutdatedNoteHangsOffItsNearestLine(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 40, Side: store.SideNew, Body: "rename this",
+			Author: store.AuthorUser, Outdated: true, NearestLine: 4},
+	}
+	m := newModel(t, backend)
+
+	row := m.doc.RowOfComment("c1")
+	if row < 1 {
+		t.Fatal("the note was not drawn")
+	}
+	if m.doc.Rows[row].Hunk < 0 {
+		t.Fatal("the note was drawn under its file, want it on its nearest line")
+	}
+	above := m.doc.Rows[row-1]
+	if above.Kind != RowLine {
+		t.Fatalf("the row above the note is a %v, want the line it hangs off", above.Kind)
+	}
+	if got := m.doc.Hunks[above.Hunk].Hunk.Lines[above.Left].NewLine; got != 4 {
+		t.Errorf("the note hangs off line %d, want its nearest line 4", got)
+	}
+	if got := m.renderer.Row(m.doc, row, RowState{}); !strings.Contains(got, "outdated · was :40") {
+		t.Errorf("the note reads %q, want it still marked outdated with the line it was written on", got)
+	}
+}
+
+func TestANoteWrittenOnAnOutdatedNoteGoesOnItsNearestLine(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 40, EndLine: 42, Side: store.SideNew, Body: "rename this",
+			Author: store.AuthorUser, Outdated: true, NearestLine: 4},
+	}
+	m := newModel(t, backend)
+
+	m.moveTo(m.doc.RowOfComment("c1"))
+	press(t, m, "c")
+	typeText(t, m, "done")
+	press(t, m, "enter")
+
+	if len(backend.added) != 1 {
+		t.Fatalf("AddComment called %d times, want 1", len(backend.added))
+	}
+	if got := backend.added[0]; got.Line != 4 || got.EndLine != 0 {
+		t.Errorf("the new note is on %d-%d, want line 4, where the outdated note is drawn", got.Line, got.EndLine)
+	}
+}
+
 // TestTheHandoffLeavesACurrentLinePlain keeps the warning meaningful.
 func TestTheHandoffLeavesACurrentLinePlain(t *testing.T) {
 	c := outdatedNote()

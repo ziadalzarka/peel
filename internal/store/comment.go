@@ -110,7 +110,8 @@ type Comment struct {
 	// Outdated reports that the code the note was written on is not in the file
 	// any more — rewritten or deleted out from under it. Worked out on read and
 	// never stored: a note is current again the moment its code comes back.
-	Outdated bool `json:"-"`
+	Outdated    bool `json:"-"`
+	NearestLine int  `json:"-"`
 	// Target scopes the comment to what was being reviewed: empty for the
 	// working tree, or a pull request reference such as "github:cli/cli#123".
 	Target string `json:"target,omitempty"`

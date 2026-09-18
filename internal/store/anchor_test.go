@@ -43,7 +43,7 @@ func TestOutdatedAndMovedAreNeverWrittenDown(t *testing.T) {
 	s := newTestStore(t)
 	if _, err := s.Add(Comment{
 		File: "svc.go", Line: 4, Body: "note", Author: AuthorUser,
-		Blob: "6a9da011b757f7800890c7b4afeceb8e79976d6b", Outdated: true, MovedFrom: 2,
+		Blob: "6a9da011b757f7800890c7b4afeceb8e79976d6b", Outdated: true, MovedFrom: 2, NearestLine: 3,
 	}); err != nil {
 		t.Fatalf("Add: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestOutdatedAndMovedAreNeverWrittenDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read store: %v", err)
 	}
-	for _, field := range []string{"outdated", "movedFrom", "Outdated", "MovedFrom"} {
+	for _, field := range []string{"outdated", "movedFrom", "Outdated", "MovedFrom", "nearestLine", "NearestLine"} {
 		if strings.Contains(string(raw), field) {
 			t.Errorf("the store holds %q; it is worked out on read, not recorded\n%s", field, raw)
 		}
@@ -62,9 +62,9 @@ func TestOutdatedAndMovedAreNeverWrittenDown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if got[0].Outdated || got[0].MovedFrom != 0 {
-		t.Errorf("read back outdated %v moved %d, want both clear until worked out",
-			got[0].Outdated, got[0].MovedFrom)
+	if got[0].Outdated || got[0].MovedFrom != 0 || got[0].NearestLine != 0 {
+		t.Errorf("read back outdated %v moved %d nearest %d, want all clear until worked out",
+			got[0].Outdated, got[0].MovedFrom, got[0].NearestLine)
 	}
 }
 

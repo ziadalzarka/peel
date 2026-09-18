@@ -289,7 +289,8 @@ type commentJSON struct {
 	// Outdated says the code this note was written on has been rewritten or
 	// deleted since. Line is then where it was written, not where anything is
 	// now, and there is nothing at that number to go and fix.
-	Outdated bool `json:"outdated,omitempty"`
+	Outdated    bool `json:"outdated,omitempty"`
+	NearestLine int  `json:"nearestLine,omitempty"`
 	// Moved is where the note was written, when Line has been carried on to
 	// where that code sits now. Absent when it has not moved.
 	Moved    int    `json:"movedFrom,omitempty"`
@@ -302,21 +303,22 @@ type commentJSON struct {
 
 func commentToJSON(c store.Comment) commentJSON {
 	return commentJSON{
-		ID:       c.ID,
-		File:     c.File,
-		Line:     c.Line,
-		EndLine:  c.EndLine,
-		Side:     string(c.Side),
-		Origin:   string(c.Origin),
-		Body:     c.Body,
-		Hunk:     c.Hunk,
-		Outdated: c.Outdated,
-		Moved:    c.MovedFrom,
-		Author:   string(c.Author),
-		Resolved: c.Resolved,
-		Created:  c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
-		Target:   c.Target,
-		Remote:   c.Remote,
+		ID:          c.ID,
+		File:        c.File,
+		Line:        c.Line,
+		EndLine:     c.EndLine,
+		Side:        string(c.Side),
+		Origin:      string(c.Origin),
+		Body:        c.Body,
+		Hunk:        c.Hunk,
+		Outdated:    c.Outdated,
+		NearestLine: c.NearestLine,
+		Moved:       c.MovedFrom,
+		Author:      string(c.Author),
+		Resolved:    c.Resolved,
+		Created:     c.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		Target:      c.Target,
+		Remote:      c.Remote,
 	}
 }
 
@@ -351,6 +353,9 @@ func writeCommentTable(w io.Writer, comments []store.Comment) error {
 // A reader sent to a line that has been rewritten will edit whatever is there
 // now, so the one thing the anchor must never do is stay quiet about it.
 func location(c store.Comment) string {
+	if c.Outdated && c.NearestLine > 0 {
+		return fmt.Sprintf("%s (outdated, nearest line now %d)", c.Location(), c.NearestLine)
+	}
 	if c.Outdated {
 		return c.Location() + " (outdated)"
 	}

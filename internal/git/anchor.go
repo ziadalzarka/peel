@@ -33,7 +33,8 @@ var anchorDiffFlags = []string{"--no-color", "--no-ext-diff", "--no-textconv", "
 // It is git's own diff, read as arithmetic: the ranges it reports are the only
 // places numbering shifts, so a line before the first of them keeps its number,
 // a line after one moves by however much that range grew or shrank, and a line
-// *inside* one is a line that was rewritten and has nowhere to land.
+// *inside* one was rewritten or deleted, so it only has a nearest line in the
+// new version.
 type LineMap struct{ edits []edit }
 
 // edit is one changed range: oldCount lines starting at oldStart became
@@ -47,6 +48,22 @@ func (m LineMap) Lookup(line int) (int, bool) {
 	if line <= 0 {
 		return line, false
 	}
+	at, exact := m.place(line)
+	if !exact {
+		return 0, false
+	}
+	return at, true
+}
+
+func (m LineMap) Nearest(line int) int {
+	if line <= 0 {
+		return line
+	}
+	at, _ := m.place(line)
+	return at
+}
+
+func (m LineMap) place(line int) (int, bool) {
 	shift := 0
 	for _, e := range m.edits {
 		if e.oldCount == 0 {
@@ -60,7 +77,10 @@ func (m LineMap) Lookup(line int) (int, bool) {
 				return line + shift, true
 			}
 			if line < e.oldStart+e.oldCount {
-				return 0, false
+				if e.newCount == 0 {
+					return max(e.oldStart+shift-1, 1), false
+				}
+				return e.oldStart + shift + min(line-e.oldStart, e.newCount-1), false
 			}
 		}
 		shift += e.newCount - e.oldCount

@@ -68,7 +68,7 @@ peel providers
 
 `comment list --json` returns `id`, `file`, `line`, `side`, `origin`, `body`,
 `hunk`, `author`, `resolved`, `createdAt`, `target`, and — when they apply —
-`endLine`, `movedFrom`, `outdated` and `remote`.
+`endLine`, `movedFrom`, `outdated`, `nearestLine` and `remote`.
 
 `endLine` is on a note written about a run of lines: the note covers `line`
 through `endLine` inclusive, on `side`, and every line between them is what it is
@@ -104,6 +104,10 @@ run — the ones you read before the edit are stale.
   file, work out whether the note still applies, and say so rather than guessing
   — often it has already been addressed, in which case `peel comment resolve
   <id>` is the honest answer.
+- `"nearestLine": 537` comes with `outdated`: the line in the file now closest to
+  where the note's code was, and the line the user sees the note on. Start
+  reading there, and put a note answering it on `nearestLine` — not on `line` —
+  so the answer sits next to the note it answers.
 - A note with neither field is on exactly the line it says.
 
 By default both commands are scoped to what is being reviewed: the working tree,

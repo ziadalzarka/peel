@@ -992,9 +992,9 @@ func (m *Model) spot() spot {
 	row := m.cursor
 	if c, ok := m.doc.CommentAt(row); ok {
 		at.comment = c.ID
-		// A note on the file as a whole, and one whose code has been rewritten
-		// out from under it, are both drawn under their file rather than on a
-		// line — stacked one on the next, with the end of the diff above them.
+		// A note on the file as a whole, and one whose line is not in the diff,
+		// are both drawn under their file rather than on a line — stacked one on
+		// the next, with the end of the diff above them.
 		// Losing one of those puts the cursor on its neighbour in the stack, not
 		// on code the note was never about.
 		if m.doc.Rows[row].Hunk < 0 {
@@ -1814,7 +1814,11 @@ func (m *Model) anchorAt() (anchor, bool) {
 		return got, true
 	}
 	if c, ok := m.doc.CommentAt(m.cursor); ok {
-		return anchor{path: c.File, line: c.Line, end: c.EndLine, side: sideOr(c.Side),
+		line, end := c.Line, c.EndLine
+		if c.Outdated && c.NearestLine > 0 {
+			line, end = c.NearestLine, 0
+		}
+		return anchor{path: c.File, line: line, end: end, side: sideOr(c.Side),
 			origin: c.Origin, hunk: c.Hunk}, true
 	}
 

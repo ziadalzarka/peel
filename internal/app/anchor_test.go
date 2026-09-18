@@ -428,6 +428,51 @@ func TestRelocateMarksARewrittenLineOutdatedRatherThanMovingIt(t *testing.T) {
 	if got[0].Line != 4 {
 		t.Errorf("line = %d, want the 4 it was written on kept", got[0].Line)
 	}
+	if got[0].NearestLine != 4 {
+		t.Errorf("nearest line = %d, want 4 — the doNothing() that replaced it", got[0].NearestLine)
+	}
+}
+
+func TestAnOutdatedNoteOnDeletedCodeIsNearestTheLineBeforeTheGap(t *testing.T) {
+	ctx := context.Background()
+	a, repo := anchorRepo(t, "a\nb\nc\nd\ne\n", "a\nb\nc\nd\ne\n")
+	s, _ := a.LoadWorkingTree(ctx)
+	note(t, a, s, 3, "inline this")
+
+	repo.Write("svc.go", "a\nb\ne\n")
+	s, _ = a.LoadWorkingTree(ctx)
+
+	all, _ := a.Local.Comments.List(store.Filter{})
+	got := a.Relocate(ctx, s, all)
+	if !got[0].Outdated {
+		t.Fatal("outdated = false, want the note to admit its code is gone")
+	}
+	if got[0].Line != 3 || got[0].NearestLine != 2 {
+		t.Errorf("line %d, nearest %d; want written on 3 and nearest 2, where c used to be",
+			got[0].Line, got[0].NearestLine)
+	}
+}
+
+func TestAnOutdatedRunIsNearestWhereItsLastLineIsNow(t *testing.T) {
+	ctx := context.Background()
+	a, repo := anchorRepo(t, "a\nb\nc\nd\ne\nf\n", "a\nb\nc\nd\ne\nf\n")
+	s, _ := a.LoadWorkingTree(ctx)
+	runNote(t, a, s, 2, 4, "shorter please")
+
+	repo.Write("svc.go", "a\nSHORT\nd\ne\nf\n")
+	s, _ = a.LoadWorkingTree(ctx)
+
+	all, _ := a.Local.Comments.List(store.Filter{})
+	got := a.Relocate(ctx, s, all)
+	if !got[0].Outdated {
+		t.Fatal("outdated = false, want the note to admit part of its run is gone")
+	}
+	if got[0].Line != 2 || got[0].EndLine != 4 {
+		t.Errorf("note covers %d-%d, want the 2-4 it was written on", got[0].Line, got[0].EndLine)
+	}
+	if got[0].NearestLine != 3 {
+		t.Errorf("nearest line = %d, want 3 — where d, the end of the run, is now", got[0].NearestLine)
+	}
 }
 
 func TestRelocateLeavesAnUnchangedFileAlone(t *testing.T) {
