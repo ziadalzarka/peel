@@ -452,6 +452,27 @@ func TestCommentAddReadsStdin(t *testing.T) {
 	}
 }
 
+func TestCommentAddReadsStdinForADashBody(t *testing.T) {
+	for _, flag := range []string{"--body", "--summary"} {
+		t.Run(flag, func(t *testing.T) {
+			h := newHarness(t)
+			h.dirty()
+			h.stdin.WriteString("body from stdin\n")
+
+			h.mustRun("comment", "add", "--file", "a.txt", "--line", "1", flag, "-")
+
+			out := h.mustRun("comment", "list", "--json")
+			var got []map[string]any
+			if err := json.Unmarshal([]byte(out), &got); err != nil {
+				t.Fatalf("list --json: %v\n%s", err, out)
+			}
+			if got[0]["body"] != "body from stdin" {
+				t.Errorf("body = %v", got[0]["body"])
+			}
+		})
+	}
+}
+
 func TestCommentAddWithoutAnAuthorIsSignedUnknown(t *testing.T) {
 	h := newHarness(t)
 	h.dirty()
@@ -657,6 +678,7 @@ func TestCommentAddValidation(t *testing.T) {
 	}{
 		{"no file", []string{"comment", "add", "--body", "x"}},
 		{"no body or stdin", []string{"comment", "add", "--file", "a.txt"}},
+		{"dash body with nothing on stdin", []string{"comment", "add", "--file", "a.txt", "--body", "-"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -167,12 +167,12 @@ peel comment clear [--file <path>] [--resolved] [--author <name>] [--all]
   that version so the note follows its code afterwards. Add the note *before*
   editing the file, or re-read the file and use its current line numbers — a
   number from before an edit anchors the note to the wrong code.
-- The body can come from stdin instead of `--body`, which is easier for anything
-  multi-line or containing quotes:
+- The body can come from stdin instead, which is easier for anything multi-line
+  or containing quotes. Leave `--body` off or pass `--body -`; both read stdin:
 
 ```bash
 printf 'This drops the error.\n\nWorth returning it instead.\n' \
-  | peel comment add --author claude --file internal/git/status.go --line 42
+  | peel comment add --author claude --file internal/git/status.go --line 42 --body -
 ```
 
 ## The user's comments are not yours to delete

@@ -78,7 +78,7 @@ func commentAdd(ctx context.Context, c *CLI, args []string) error {
 	file := fs.String("file", "", "path the comment applies to (required)")
 	line := fs.Int("line", 0, "line number; omit for a file-level comment")
 	endLine := fs.Int("end-line", 0, "last line of a run; omit for a note on one line")
-	body := fs.String("body", "", "comment text; omit to read from stdin")
+	body := fs.String("body", "", "comment text; omit or pass - to read from stdin")
 	summary := fs.String("summary", "", "alias for --body")
 	side := fs.String("side", string(store.SideNew), "which side the line is on: new or old")
 	origin := fs.String("origin", "", "which diff the line number is from: index or worktree")
@@ -93,7 +93,7 @@ func commentAdd(ctx context.Context, c *CLI, args []string) error {
 	if text == "" {
 		text = *summary
 	}
-	if text == "" {
+	if text == "" || text == "-" {
 		read, err := io.ReadAll(c.Stdin)
 		if err != nil {
 			return fmt.Errorf("read comment body from stdin: %w", err)
