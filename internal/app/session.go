@@ -25,8 +25,10 @@ type Session struct {
 	Files []git.FileEntry
 	// DiffText is the raw unified diff, used to generate a walkthrough.
 	DiffText string
-	// Stageable reports whether staging applies. A pull request is read-only:
-	// its changes are not in this working tree, so there is nothing to stage.
+	// Stageable reports whether `s` has somewhere to put what the reviewer is
+	// done with: git's index for the working tree, and the list of what has been
+	// marked viewed for a pull request. A review measured from an older commit
+	// has neither.
 	Stageable bool
 	// PR is set when reviewing a pull request.
 	PR          *forge.PullRequest
@@ -196,7 +198,7 @@ func (a *App) LoadPullRequest(ctx context.Context, providerName, ref string) (*S
 		Title:     pr.Describe(),
 		Files:     files,
 		DiffText:  pr.Diff,
-		Stageable: false,
+		Stageable: true,
 		PR:        pr,
 	}
 	session.CommentsErr = a.importComments(ctx, provider, parsed, target)
@@ -236,7 +238,8 @@ func (a *App) needRepo() error {
 // filesFromDiff converts a raw diff into file entries for display.
 //
 // The changes land on the working-tree side because that is the side the UI
-// renders; Session.Stageable is what stops anything trying to stage them.
+// renders; the review UI moves the hunks already marked viewed to the other side
+// through the pull request's Viewer.
 func filesFromDiff(diff string) ([]git.FileEntry, error) {
 	parsed, err := git.ParseDiff(diff)
 	if err != nil {

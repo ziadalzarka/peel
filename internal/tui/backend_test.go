@@ -123,17 +123,17 @@ func TestBackendStageAllThenUnstageAll(t *testing.T) {
 	}
 }
 
-// A pull request is not checked out here, so every staging operation must refuse
-// rather than write to an unrelated index.
+// A review measured from an older commit has no index staging can mean
+// anything against, so every staging operation must refuse rather than write to
+// the one HEAD is measured from.
 func TestBackendRefusesToStageAReadOnlySession(t *testing.T) {
 	ctx := context.Background()
 	a, _, _ := openBackend(t)
 
 	session := &app.Session{
-		Target:    "github:cli/cli#412",
-		Title:     "cli/cli#412 fix the thing",
+		Title:     "HEAD~1..working tree",
+		Base:      "0000000000000000000000000000000000000000",
 		Stageable: false,
-		PR:        &forge.PullRequest{Ref: forge.Ref{Owner: "cli", Repo: "cli", Number: 412}},
 	}
 	backend := tui.NewBackend(a, session)
 
@@ -192,25 +192,125 @@ func TestBackendRemembersHiddenAgentComments(t *testing.T) {
 	}
 }
 
-// Reloading a pull request would refetch a diff that cannot have changed, and
-// would lose the target the comments are scoped to.
-func TestBackendReloadOfAPullRequestIsAPassthrough(t *testing.T) {
-	a, _, _ := openBackend(t)
+const viewedPRDiff = `diff --git a/pr.go b/pr.go
+--- a/pr.go
++++ b/pr.go
+@@ -1,2 +1,2 @@
+ package pr
+-var a = 1
++var a = 2
+@@ -9,2 +9,2 @@ func B() {
+ 	x := 1
+-	return x
++	return x + 1
+`
 
+func prBackend(t *testing.T) (*app.App, *app.Session, tui.Backend) {
+	t.Helper()
+	repo := gittest.New(t)
+	a, err := app.Open(context.Background(), repo.Dir,
+		app.WithAIRegistry(ai.NewRegistry()),
+		app.WithForgeRegistry(forge.NewRegistry()),
+		app.WithGlobalDir(t.TempDir()),
+	)
+	if err != nil {
+		t.Fatalf("app.Open: %v", err)
+	}
+	parsed, err := git.ParseDiff(viewedPRDiff)
+	if err != nil {
+		t.Fatalf("ParseDiff: %v", err)
+	}
+	f := parsed.Files[0]
 	session := &app.Session{
 		Target:    "github:cli/cli#412",
 		Title:     "pr",
-		Stageable: false,
-		PR:        &forge.PullRequest{Ref: forge.Ref{Owner: "cli", Repo: "cli", Number: 412}},
+		Stageable: true,
+		Files:     []git.FileEntry{{Path: f.Path(), Unstaged: &f}},
+		PR:        &forge.PullRequest{Ref: forge.Ref{Owner: "cli", Repo: "cli", Number: 412}, Diff: viewedPRDiff},
 	}
-	backend := tui.NewBackend(a, session)
+	return a, session, tui.NewBackend(a, session)
+}
 
-	got, err := backend.Reload(context.Background())
+// Reloading a pull request would refetch a diff that cannot have changed, so
+// what it reads again is which of its hunks have been marked viewed.
+func TestBackendReloadOfAPullRequestReadsWhatIsViewed(t *testing.T) {
+	ctx := context.Background()
+	a, session, backend := prBackend(t)
+
+	got, err := backend.Reload(ctx)
 	if err != nil {
 		t.Fatalf("Reload: %v", err)
 	}
-	if got != session {
-		t.Error("reloading a pull request returned a different session")
+	if got.Target != session.Target || got.PR != session.PR || got.Files[0].State() != git.StateUnstaged {
+		t.Fatalf("reload = %+v, want the same pull request with nothing viewed", got)
+	}
+
+	if err := backend.StageFile(ctx, "pr.go"); err != nil {
+		t.Fatalf("StageFile: %v", err)
+	}
+	got, err = backend.Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if got.Files[0].State() != git.StateStaged {
+		t.Errorf("pr.go = %v after marking it viewed, want viewed", got.Files[0].State())
+	}
+
+	again, err := tui.NewBackend(a, session).Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if again.Files[0].State() != git.StateStaged {
+		t.Error("opening the pull request again lost what was viewed")
+	}
+}
+
+func TestBackendMarksOneHunkOfAPullRequestViewed(t *testing.T) {
+	ctx := context.Background()
+	_, session, backend := prBackend(t)
+
+	d := session.Files[0].Unstaged
+	if err := backend.StageHunk(ctx, d.ID(d.Hunks[0])); err != nil {
+		t.Fatalf("StageHunk: %v", err)
+	}
+	got, err := backend.Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	entry := got.Files[0]
+	if entry.State() != git.StatePartial || entry.Staged.Hunks[0].NewStart != 1 {
+		t.Fatalf("pr.go = %v, want the first hunk viewed and the second left", entry.State())
+	}
+
+	before, err := backend.IndexTree(ctx)
+	if err != nil {
+		t.Fatalf("IndexTree: %v", err)
+	}
+	if err := backend.UnstageAll(ctx); err != nil {
+		t.Fatalf("UnstageAll: %v", err)
+	}
+	after, _ := backend.IndexTree(ctx)
+	if err := backend.RestoreIndex(ctx, after, before); err != nil {
+		t.Fatalf("RestoreIndex: %v", err)
+	}
+	got, _ = backend.Reload(ctx)
+	if got.Files[0].State() != git.StatePartial {
+		t.Errorf("pr.go = %v after taking the unmark back, want part viewed again", got.Files[0].State())
+	}
+}
+
+func TestBackendRemembersAFoldedDescription(t *testing.T) {
+	a, session, backend := prBackend(t)
+
+	if err := backend.SetDescriptionFolded(true); err != nil {
+		t.Fatalf("SetDescriptionFolded: %v", err)
+	}
+	folded, err := tui.NewBackend(a, session).DescriptionFolded()
+	if err != nil {
+		t.Fatalf("DescriptionFolded: %v", err)
+	}
+	if !folded {
+		t.Error("the description opened again after it was folded")
 	}
 }
 
@@ -759,5 +859,40 @@ func TestBackendReadsPastAFileThatIsGone(t *testing.T) {
 	}
 	if _, ok := files[tui.FileSide{Path: "kept.go"}]; !ok {
 		t.Errorf("the file still there was not read, got %v", files)
+	}
+}
+
+func TestBackendReadsAPartViewedPullRequestFileOnceForBothHalves(t *testing.T) {
+	const diff = `diff --git a/main.go b/main.go
+--- a/main.go
++++ b/main.go
+@@ -2,3 +2,3 @@
+ line 2
+-line 3
++line 3 changed
+ line 4
+@@ -19,3 +19,3 @@ func main() {
+ line 19
+-line 20
++line 20 changed
+ line 21
+`
+	host, session, backend := pullRequestBackend(t, fakePR(diff), map[string]string{"main.go": "one\ntwo\n"})
+	part, ok := app.HunkViewed(session.Files[0], session.Files[0].Unstaged.ID(session.Files[0].Unstaged.Hunks[0]))
+	if !ok {
+		t.Fatal("HunkViewed found no hunk")
+	}
+	viewed := *session
+	viewed.Files = []git.FileEntry{part}
+
+	files := contextOf(t, backend, &viewed)
+	if _, ok := files[tui.FileSide{Path: "main.go", Staged: true}]; !ok {
+		t.Errorf("the viewed half has no copy to read more code out of: %v", files)
+	}
+	if _, ok := files[tui.FileSide{Path: "main.go"}]; !ok {
+		t.Errorf("the half left to view has no copy: %v", files)
+	}
+	if n := len(host.reading()); n != 1 {
+		t.Errorf("the host was asked %d times, want once", n)
 	}
 }

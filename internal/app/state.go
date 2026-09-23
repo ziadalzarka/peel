@@ -22,6 +22,7 @@ import (
 type State struct {
 	Comments     store.CommentStore
 	Folds        store.FoldStore
+	Viewed       store.ViewedStore
 	Views        store.ViewStore
 	Walkthroughs store.WalkthroughCache
 }
@@ -51,6 +52,7 @@ func (a *App) reviewState(target string) State {
 	return State{
 		Comments:     review.Comments(),
 		Folds:        review.Folds(),
+		Viewed:       review.Viewed(),
 		Views:        review.Views(),
 		Walkthroughs: review.Walkthroughs(),
 	}

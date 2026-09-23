@@ -17,6 +17,13 @@ func Run(ctx context.Context, a *app.App, s *app.Session, opts ...Option) error 
 		opt(&cfg)
 	}
 	backend := NewBackend(a, s, cfg.provider)
+	if s.PR != nil {
+		viewed, err := backend.Reload(ctx)
+		if err != nil {
+			return fmt.Errorf("read what is marked viewed: %w", err)
+		}
+		s = viewed
+	}
 	comments, err := backend.Comments(ctx)
 	if err != nil {
 		return fmt.Errorf("load comments: %w", err)

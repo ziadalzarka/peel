@@ -238,6 +238,10 @@ func restaged(s *app.Session, stage bool, wanted func(path string) bool) *app.Se
 		if !wanted(entry.Path) {
 			continue
 		}
+		if s.PR != nil {
+			out.Files[i] = app.FileViewed(entry, stage)
+			continue
+		}
 		switch {
 		case stage:
 			if entry.Unstaged != nil {
@@ -272,6 +276,9 @@ func restagedHunk(s *app.Session, id git.HunkID) (*app.Session, git.FileEntry, b
 			continue
 		}
 		moved, ok := entry.WithHunkStaged(id)
+		if s.PR != nil {
+			moved, ok = app.HunkViewed(entry, id)
+		}
 		if !ok {
 			return s, git.FileEntry{}, false
 		}

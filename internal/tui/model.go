@@ -133,6 +133,7 @@ type Model struct {
 	// walkFolded hides a step's explanation, by step index.
 	walkFolded   map[int]bool
 	commentFolds map[string]bool
+	descFolded   bool
 	// hist is what has been pressed and what has been taken back.
 	hist history
 	// walkCode identifies the code the narrative was written about: git diff
@@ -300,6 +301,7 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 	m.fingerprint = fingerprintOf(session)
 	m.restoreFolds()
 	m.restoreOthersHidden()
+	m.restoreDescriptionFold()
 	m.resize(cfg.width, cfg.height)
 	m.rebuild()
 	m.cursor = m.doc.FirstStop()
@@ -315,6 +317,15 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 // that is the only way a file ends up in both of those states. So a change
 // landing in it tomorrow still opens it, the way it would have today.
 func (m *Model) restoreFolds() {
+	viewing := m.session.PR != nil
+	if viewing {
+		for _, f := range m.session.Files {
+			if f.State() == git.StateStaged {
+				m.collapsed[f.Path] = true
+				m.stagedFolds[f.Path] = true
+			}
+		}
+	}
 	folded, err := m.backend.Folded()
 	if err != nil {
 		m.err = err
@@ -322,7 +333,7 @@ func (m *Model) restoreFolds() {
 	}
 	for _, path := range folded {
 		entry, ok := m.session.Entry(path)
-		if !ok {
+		if !ok || (viewing && entry.State() == git.StatePartial) {
 			continue
 		}
 		m.collapsed[path] = true
@@ -347,6 +358,15 @@ func (m *Model) restoreOthersHidden() {
 		return
 	}
 	m.othersHidden = hidden && len(m.others(m.comments)) > 0
+}
+
+func (m *Model) restoreDescriptionFold() {
+	folded, err := m.backend.DescriptionFolded()
+	if err != nil {
+		m.err = err
+		return
+	}
+	m.descFolded = folded
 }
 
 // draftMinHeight and draftMaxHeight bound the inline editor. It opens small, so
@@ -976,7 +996,8 @@ type spot struct {
 	line int
 	// side names the half of the file the cursor is heading, when it is on one
 	// of the two headings rather than in the diff under them.
-	side store.Origin
+	side        store.Origin
+	description bool
 }
 
 // spot records where the cursor is, so a rebuild can put it back.
@@ -1006,6 +1027,10 @@ func (m *Model) spot() spot {
 		at.side = m.doc.Sides[side].Origin()
 		return at
 	}
+	if m.doc.inDescription(row) {
+		at.description, at.line = true, m.doc.Rows[row].Left
+		return at
+	}
 	switch target := m.doc.TargetAt(row); target.Kind {
 	case TargetHunk:
 		at.hunk = m.doc.Hunks[target.Hunk].ID
@@ -1029,6 +1054,12 @@ func (m *Model) moveToSpot(at spot) {
 	if at.side != "" {
 		if row := m.doc.RowOfSide(at.path, at.side); row >= 0 {
 			m.moveTo(row)
+			return
+		}
+	}
+	if at.description {
+		if row := m.doc.RowOfDescription(at.line); row >= 0 {
+			m.moveTo(m.doc.Nearest(row))
 			return
 		}
 	}
@@ -1144,10 +1175,10 @@ func (m *Model) switchStageMode() {
 	// double press does not carry across it.
 	m.staged = lastStage{}
 	if m.stageMode == app.StageModeHunk {
-		m.status = "s stages the hunk the cursor is in — twice over takes the whole file"
+		m.status = m.terms().hunkMode
 		return
 	}
-	m.status = "s stages the whole file the cursor is in"
+	m.status = m.terms().fileMode
 }
 
 // stageAt stages the file the cursor is in.
@@ -1159,14 +1190,15 @@ func (m *Model) switchStageMode() {
 // has been dealt with — `space` opens it again. Where the cursor goes is
 // `peel.afterStage`, for the passes that read the diff in another order.
 func (m *Model) stageAt() tea.Cmd {
+	t := m.terms()
 	file, ok := m.doc.FileTargetAt(m.cursor)
 	if !ok {
-		m.status = "nothing to stage here"
+		m.status = "nothing to " + t.stage + " here"
 		return nil
 	}
 	path := file.Entry.Path
 	if file.Orphan {
-		m.status = path + " has no changes to stage — its notes outlived them"
+		m.status = path + " has no changes to " + t.stage + " — its notes outlived them"
 		return nil
 	}
 	if file.Entry.State() == git.StateStaged {
@@ -1175,7 +1207,7 @@ func (m *Model) stageAt() tea.Cmd {
 		// call.
 		view := m.viewport()
 		was, wasStaged := m.collapsed[path], m.stagedFolds[path]
-		m.status = path + " is already staged"
+		m.status = path + " is already " + t.staged
 		m.foldStaged(path)
 		m.hist.add(drawn("folding "+path,
 			fileFold(path, was, wasStaged, view),
@@ -1189,7 +1221,7 @@ func (m *Model) stageAt() tea.Cmd {
 	folded := m.collapsed[path]
 	show := func() {
 		m.session = restaged(m.session, true, only(path))
-		m.status = "staged " + path
+		m.status = t.staged + " " + path
 		m.foldStaged(path)
 	}
 	staged := m.stagedFolds[path]
@@ -1198,7 +1230,7 @@ func (m *Model) stageAt() tea.Cmd {
 		fileFold(path, folded, staged, view)(m)
 	}
 	backend := m.backend
-	return m.record(written("staged "+path, back, func(*Model) { show() }), show,
+	return m.record(written(t.staged+" "+path, back, func(*Model) { show() }), show,
 		indexWrite(backend, func(ctx context.Context) error {
 			return backend.StageFile(ctx, path)
 		}))
@@ -1232,18 +1264,19 @@ func (m *Model) stageAt() tea.Cmd {
 // and a file with no newline at its end all need, and none of which the reviewer
 // pressing `s` was making a claim about.
 func (m *Model) stageHunkAt() tea.Cmd {
+	t := m.terms()
 	file, ok := m.doc.FileTargetAt(m.cursor)
 	if !ok {
-		m.status = "nothing to stage here"
+		m.status = "nothing to " + t.stage + " here"
 		return nil
 	}
 	path := file.Entry.Path
 	if ref, inside := m.doc.HunkTargetAt(m.cursor); inside && ref.Staged {
-		m.status = "that hunk is in the index already"
+		m.status = "that hunk is " + t.in + " already"
 		return nil
 	}
 	if file.Orphan {
-		m.status = path + " has no changes to stage — its notes outlived them"
+		m.status = path + " has no changes to " + t.stage + " — its notes outlived them"
 		return nil
 	}
 	if m.doubledOn(path) {
@@ -1260,7 +1293,7 @@ func (m *Model) stageHunkAt() tea.Cmd {
 	}
 	id, ok := m.hunkToStage(file)
 	if !ok {
-		m.status = path + " has nothing out of the index"
+		m.status = path + " has nothing " + t.out
 		return nil
 	}
 
@@ -1274,7 +1307,7 @@ func (m *Model) stageHunkAt() tea.Cmd {
 			m.session = session
 			m.carryOnInside(path)
 		}
-		m.status = "staged one hunk of " + path
+		m.status = t.staged + " one hunk of " + path
 	}
 	back := func(m *Model) {
 		m.session = withEntry(m.session, before)
@@ -1282,7 +1315,7 @@ func (m *Model) stageHunkAt() tea.Cmd {
 		m.putViewport(view)
 	}
 	backend := m.backend
-	return m.record(written("staged one hunk of "+path, back, func(*Model) { show() }), show,
+	return m.record(written(t.staged+" one hunk of "+path, back, func(*Model) { show() }), show,
 		indexWrite(backend, func(ctx context.Context) error {
 			return backend.StageHunk(ctx, id)
 		}))
@@ -1370,14 +1403,15 @@ func (m *Model) carryOnInside(path string) {
 // unstageAt takes the file the cursor is in back out of the index, and opens it
 // again — it is back to being something to review.
 func (m *Model) unstageAt() tea.Cmd {
+	t := m.terms()
 	file, ok := m.doc.FileTargetAt(m.cursor)
 	if !ok {
-		m.status = "nothing to unstage here"
+		m.status = "nothing to " + t.unstage + " here"
 		return nil
 	}
 	path := file.Entry.Path
 	if file.Entry.Staged == nil {
-		m.status = path + " has nothing staged"
+		m.status = path + " has nothing " + t.staged
 		return nil
 	}
 	if !m.canStage() {
@@ -1388,7 +1422,7 @@ func (m *Model) unstageAt() tea.Cmd {
 	show := func() {
 		m.session = restaged(m.session, false, only(path))
 		m.setCollapsed(unfold(path))
-		m.status = "unstaged " + path
+		m.status = t.unstaged + " " + path
 		m.relayout()
 	}
 	staged := m.stagedFolds[path]
@@ -1397,7 +1431,7 @@ func (m *Model) unstageAt() tea.Cmd {
 		fileFold(path, folded, staged, view)(m)
 	}
 	backend := m.backend
-	return m.record(written("unstaged "+path, back, func(*Model) { show() }), show,
+	return m.record(written(t.unstaged+" "+path, back, func(*Model) { show() }), show,
 		indexWrite(backend, func(ctx context.Context) error {
 			return backend.UnstageFile(ctx, path)
 		}))
@@ -1417,7 +1451,7 @@ func (m *Model) stageEverything() tea.Cmd {
 		for path := range folds {
 			m.stagedFolds[path] = true
 		}
-		m.status = "staged everything"
+		m.status = m.terms().stagedAll
 		m.relayout()
 	}
 	back := func(m *Model) {
@@ -1427,7 +1461,7 @@ func (m *Model) stageEverything() tea.Cmd {
 		m.putViewport(view)
 	}
 	backend := m.backend
-	return m.record(written("staged everything", back, func(*Model) { show() }), show,
+	return m.record(written(m.terms().stagedAll, back, func(*Model) { show() }), show,
 		indexWrite(backend, backend.StageAll))
 }
 
@@ -1439,7 +1473,7 @@ func (m *Model) unstageEverything() tea.Cmd {
 	show := func() {
 		m.session = restaged(m.session, false, every)
 		m.setCollapsed(m.foldEvery(false))
-		m.status = "unstaged everything"
+		m.status = m.terms().unstagedAll
 		m.relayout()
 	}
 	back := func(m *Model) {
@@ -1449,7 +1483,7 @@ func (m *Model) unstageEverything() tea.Cmd {
 		m.putViewport(view)
 	}
 	backend := m.backend
-	return m.record(written("unstaged everything", back, func(*Model) { show() }), show,
+	return m.record(written(m.terms().unstagedAll, back, func(*Model) { show() }), show,
 		indexWrite(backend, backend.UnstageAll))
 }
 
@@ -2580,7 +2614,7 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 	// A file that had been dealt with is open again, which is a change to the
 	// screen nobody asked for: it is worth saying which file, and why.
 	if len(reopened) > 0 {
-		m.status = "reopened " + strings.Join(reopened, ", ") + " — changed since it was staged"
+		m.status = "reopened " + strings.Join(reopened, ", ") + " — changed since it was " + m.terms().staged
 	}
 	return m.contextCmd()
 }
@@ -2749,7 +2783,8 @@ func (m *Model) currentPath() string {
 func (m *Model) rebuild() {
 	m.doc = Build(m.session, m.visibleComments(), m.collapsed, m.layout,
 		WithGroups(m.groups()), WithDraft(m.draft()), WithSideFolds(m.sideFolds),
-		WithPaneWidth(m.diffWidth()), WithExpansion(m.expansion()), WithCommentFolds(m.commentFolds))
+		WithPaneWidth(m.diffWidth()), WithExpansion(m.expansion()), WithCommentFolds(m.commentFolds),
+		WithDescriptionFolded(m.descFolded))
 	m.fileRows = fileTree(m.doc.Files)
 	if m.cursor >= m.doc.Len() {
 		m.cursor = m.doc.LastStop()
@@ -2819,6 +2854,17 @@ func (m *Model) toggleCollapse() {
 
 func (m *Model) foldAt() (what string, back, forth func(*Model), ok bool) {
 	view := m.viewport()
+	if m.doc.inDescription(m.cursor) {
+		was := m.descFolded
+		m.setDescriptionFolded(!was)
+		m.moveTo(m.doc.RowOfDescription(-1))
+		what = "opening the description"
+		if m.descFolded {
+			what = "folding the description"
+		}
+		m.status = what
+		return what, descriptionFold(was, view), descriptionFold(m.descFolded, m.viewport()), true
+	}
 	if c, ok := m.doc.CommentAt(m.cursor); ok {
 		was, had := m.commentFolds[c.ID]
 		what := m.foldComment(c)
@@ -2865,6 +2911,14 @@ func (m *Model) foldAt() (what string, back, forth func(*Model), ok bool) {
 		true
 }
 
+func (m *Model) setDescriptionFolded(folded bool) {
+	m.descFolded = folded
+	if err := m.backend.SetDescriptionFolded(folded); err != nil {
+		m.err = err
+	}
+	m.rebuild()
+}
+
 // foldSide hides or shows one half of a part-staged file, leaving the cursor on
 // the heading it was pressed on.
 //
@@ -2874,7 +2928,7 @@ func (m *Model) foldAt() (what string, back, forth func(*Model), ok bool) {
 func (m *Model) foldSide(side int) (string, bool) {
 	ref := m.doc.Sides[side]
 	if !ref.Staged {
-		m.status = "only the staged half folds — this is what is left to review"
+		m.status = "only the " + m.terms().staged + " half folds — this is what is left to review"
 		return "", false
 	}
 	m.sideFolds[ref.Path] = !ref.Folded
@@ -2883,10 +2937,10 @@ func (m *Model) foldSide(side int) (string, bool) {
 		m.moveTo(row)
 	}
 	if ref.Folded {
-		m.status = "showing what is already staged in " + ref.Path
+		m.status = "showing what is already " + m.terms().staged + " in " + ref.Path
 		return m.status, true
 	}
-	m.status = "hiding what is already staged in " + ref.Path
+	m.status = "hiding what is already " + m.terms().staged + " in " + ref.Path
 	return m.status, true
 }
 

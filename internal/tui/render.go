@@ -139,6 +139,12 @@ func (r *Renderer) Row(d Document, i int, st RowState) string {
 		return r.step(d, row, st)
 	case RowStepText:
 		return r.stepText(row)
+	case RowDescription:
+		return r.description(d, row, st)
+	case RowDescriptionText:
+		return r.descriptionText(d, row, st)
+	case RowDescriptionEdge:
+		return r.descriptionEdge(d, row)
 	default:
 		// A separator still has to fill its width, or the pane beside it shows
 		// through.
@@ -162,7 +168,7 @@ func (r *Renderer) file(d Document, row Row, st RowState) string {
 		name = r.theme.FileHead.Render(name)
 	}
 
-	summary := r.fileSummary(entry, added, removed)
+	summary := r.fileSummary(d.terms(), entry, added, removed)
 	if f.Orphan {
 		// `+0 -0` under a file with no diff reads as a change that came to
 		// nothing, rather than as a file this review is not about any more.
@@ -170,7 +176,7 @@ func (r *Renderer) file(d Document, row Row, st RowState) string {
 	}
 
 	head := "  " + r.stateSymbol(entry.State()) + " " + r.theme.Dim.Render(arrow) + " "
-	return r.fit(head + shift(name+" "+summary, r.headOffset(f)))
+	return r.fit(head + shift(name+" "+summary, r.headOffset(d.terms(), f)))
 }
 
 // headOffset is how far a file header slides for the offset the diff is at.
@@ -179,8 +185,8 @@ func (r *Renderer) file(d Document, row Row, st RowState) string {
 // of code does not carry the path off the screen with it: a name that fits sits
 // still through the whole scroll, and a name too long for the pane slides only
 // as far as it takes to read the rest of it.
-func (r *Renderer) headOffset(f FileRef) int {
-	return min(max(r.xoff, 0), max(fileHeadWidth(f)-r.FileColumns(), 0))
+func (r *Renderer) headOffset(t terms, f FileRef) int {
+	return min(max(r.xoff, 0), max(fileHeadWidth(t, f)-r.FileColumns(), 0))
 }
 
 // fileSummary counts what changed, split in two when the file is in both places
@@ -190,8 +196,8 @@ func (r *Renderer) headOffset(f FileRef) int {
 // split has to be said: `+51 -0` on a file that is 47 lines staged and 4 lines
 // new reads as one change of 51 lines, and the reviewer has no way to tell that
 // only four of them are theirs to look at.
-func (r *Renderer) fileSummary(e git.FileEntry, added, removed int) string {
-	parts := fileSummaryParts(e, added, removed)
+func (r *Renderer) fileSummary(t terms, e git.FileEntry, added, removed int) string {
+	parts := fileSummaryParts(t, e, added, removed)
 	if len(parts) == 1 {
 		return r.theme.Dim.Render(parts[0])
 	}
@@ -202,7 +208,7 @@ func (r *Renderer) fileSummary(e git.FileEntry, added, removed int) string {
 
 // fileSummaryParts is the summary as plain text, so the width of a header can be
 // measured without a theme to render it through.
-func fileSummaryParts(e git.FileEntry, added, removed int) []string {
+func fileSummaryParts(t terms, e git.FileEntry, added, removed int) []string {
 	label := fileLabel(e)
 	if e.State() != git.StatePartial {
 		return []string{fmt.Sprintf("%s +%d -%d", label, added, removed)}
@@ -211,18 +217,18 @@ func fileSummaryParts(e git.FileEntry, added, removed int) []string {
 	work, workGone := e.Unstaged.Stats()
 	return []string{
 		label,
-		fmt.Sprintf("index +%d -%d", staged, stagedGone),
-		fmt.Sprintf("worktree +%d -%d", work, workGone),
+		fmt.Sprintf("%s +%d -%d", t.half, staged, stagedGone),
+		fmt.Sprintf("%s +%d -%d", t.otherHalf, work, workGone),
 	}
 }
 
 // fileHeadWidth is how wide a file header is past the columns pinned in front of
 // it, in screen columns.
-func fileHeadWidth(f FileRef) int {
+func fileHeadWidth(t terms, f FileRef) int {
 	summary := orphanLabel
 	if !f.Orphan {
 		added, removed := f.Entry.Stats()
-		summary = strings.Join(fileSummaryParts(f.Entry, added, removed), "  ")
+		summary = strings.Join(fileSummaryParts(t, f.Entry, added, removed), "  ")
 	}
 	return ansi.StringWidth(f.Entry.Path) + 1 + ansi.StringWidth(summary)
 }
@@ -235,10 +241,10 @@ func fileHeadWidth(f FileRef) int {
 // stops and the other starts.
 func (r *Renderer) side(d Document, row Row, st RowState) string {
 	ref := d.Sides[row.Side]
-	style, label := r.theme.Partial, "unstaged · not in the index yet"
+	style, label := r.theme.Partial, d.terms().workSide
 	arrow := "  "
 	if ref.Staged {
-		style, label = r.theme.Staged, "staged · already in the index"
+		style, label = r.theme.Staged, d.terms().stagedSide
 		arrow = "▾ "
 		if ref.Folded {
 			arrow = "▸ "
@@ -294,9 +300,9 @@ func (r *Renderer) hunkOrigin(d Document, ref HunkRef) string {
 		return ""
 	}
 	if ref.Staged {
-		return r.theme.Staged.Render("index")
+		return r.theme.Staged.Render(d.terms().half)
 	}
-	return r.theme.Partial.Render("worktree")
+	return r.theme.Partial.Render(d.terms().otherHalf)
 }
 
 // expand draws a row standing where the diff leaves unchanged code out.

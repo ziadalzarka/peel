@@ -409,9 +409,10 @@ func TestLoadPullRequest(t *testing.T) {
 		t.Fatalf("LoadPullRequest: %v", err)
 	}
 
-	// A pull request is not in this working tree, so nothing can be staged.
-	if s.Stageable {
-		t.Error("Stageable = true for a pull request")
+	// A pull request is not in this working tree, so `s` marks it viewed
+	// instead of staging it.
+	if !s.Stageable {
+		t.Error("Stageable = false for a pull request")
 	}
 	if s.Target != "fake-forge:o/r#412" {
 		t.Errorf("Target = %q", s.Target)

@@ -74,6 +74,9 @@ type Backend interface {
 	// SetOthersHidden records whether they are out of it now.
 	SetOthersHidden(hidden bool) error
 
+	DescriptionFolded() (bool, error)
+	SetDescriptionFolded(folded bool) error
+
 	// Walkthrough returns the AI narrative of the session.
 	Walkthrough(ctx context.Context, regenerate bool) (string, error)
 
@@ -95,6 +98,7 @@ type appBackend struct {
 	// working tree, the file named after the pull request for one of those.
 	state    app.State
 	provider string
+	viewer   *app.Viewer
 
 	// mu guards copies, which is read and written on whichever goroutine the UI
 	// puts a read on.
@@ -113,16 +117,20 @@ func NewBackend(a *app.App, s *app.Session, provider ...string) Backend {
 	if len(provider) > 0 {
 		name = provider[0]
 	}
-	return &appBackend{app: a, session: s, state: a.StateFor(s), provider: name}
+	return &appBackend{app: a, session: s, state: a.StateFor(s), provider: name, viewer: a.Viewer(s)}
 }
 
 // Reload re-reads what is being reviewed. A pull request is not in this working
-// tree, so reloading one would only re-fetch a diff that cannot have changed.
+// tree, so reloading one would only re-fetch a diff that cannot have changed:
+// what is read again is which of its hunks have been marked viewed.
 // A revision session is re-read like the working tree is: its far side is the
 // working tree, so it goes on changing as the repository does.
 func (b *appBackend) Reload(ctx context.Context) (*app.Session, error) {
 	if b.session.PR != nil {
-		return b.session, nil
+		if b.viewer == nil {
+			return b.session, nil
+		}
+		return b.viewer.Session(b.session)
 	}
 	s, err := b.app.LoadRevision(ctx, b.session.Base)
 	if err != nil {
@@ -196,53 +204,80 @@ func (b *appBackend) StoredComments() ([]store.Comment, error) {
 	return b.state.Comments.List(b.session.CommentFilter())
 }
 
+type index interface {
+	IndexTree(ctx context.Context) (string, error)
+	RestoreIndex(ctx context.Context, from, to string) error
+	StageFile(ctx context.Context, path string) error
+	StageHunk(ctx context.Context, id git.HunkID) error
+	UnstageFile(ctx context.Context, path string) error
+	StageAll(ctx context.Context) error
+	UnstageAll(ctx context.Context) error
+}
+
+func (b *appBackend) index() (index, error) {
+	if b.viewer != nil {
+		return b.viewer, nil
+	}
+	if err := b.session.NotStageable(); err != nil {
+		return nil, err
+	}
+	return b.app.Stager, nil
+}
+
 func (b *appBackend) IndexTree(ctx context.Context) (string, error) {
-	if err := b.stageable(); err != nil {
+	idx, err := b.index()
+	if err != nil {
 		return "", err
 	}
-	return b.app.Stager.IndexTree(ctx)
+	return idx.IndexTree(ctx)
 }
 
 func (b *appBackend) RestoreIndex(ctx context.Context, from, to string) error {
-	if err := b.stageable(); err != nil {
+	idx, err := b.index()
+	if err != nil {
 		return err
 	}
-	return b.app.Stager.RestoreIndex(ctx, from, to)
+	return idx.RestoreIndex(ctx, from, to)
 }
 
 func (b *appBackend) StageFile(ctx context.Context, path string) error {
-	if err := b.stageable(); err != nil {
+	idx, err := b.index()
+	if err != nil {
 		return err
 	}
-	return b.app.Stager.StageFile(ctx, path)
+	return idx.StageFile(ctx, path)
 }
 
 func (b *appBackend) StageHunk(ctx context.Context, id git.HunkID) error {
-	if err := b.stageable(); err != nil {
+	idx, err := b.index()
+	if err != nil {
 		return err
 	}
-	return b.app.Stager.StageHunk(ctx, id)
+	return idx.StageHunk(ctx, id)
 }
 
 func (b *appBackend) UnstageFile(ctx context.Context, path string) error {
-	if err := b.stageable(); err != nil {
+	idx, err := b.index()
+	if err != nil {
 		return err
 	}
-	return b.app.Stager.UnstageFile(ctx, path)
+	return idx.UnstageFile(ctx, path)
 }
 
 func (b *appBackend) StageAll(ctx context.Context) error {
-	if err := b.stageable(); err != nil {
+	idx, err := b.index()
+	if err != nil {
 		return err
 	}
-	return b.app.Stager.StageAll(ctx)
+	return idx.StageAll(ctx)
 }
 
 func (b *appBackend) UnstageAll(ctx context.Context) error {
-	if err := b.stageable(); err != nil {
+	idx, err := b.index()
+	if err != nil {
 		return err
 	}
-	return b.app.Stager.UnstageAll(ctx)
+	return idx.UnstageAll(ctx)
 }
 
 // Context reads the copy of each file its side's hunks are numbered against.
@@ -274,20 +309,25 @@ func (b *appBackend) Context(ctx context.Context, s *app.Session) (Copies, error
 	files := make(map[FileSide][]string, len(want))
 	sides := make(map[FileSide]copyID, len(want))
 	var missing []copyRead
+	queued := make(map[copyID]bool, len(want))
 	for _, r := range want {
-		lines, ok := b.copies[r.id]
-		if !ok {
-			missing = append(missing, r)
+		if lines, ok := b.copies[r.id]; ok {
+			held[r.id] = lines
 			continue
 		}
-		held[r.id] = lines
-		files[r.side] = lines
-		sides[r.side] = r.id
+		if !queued[r.id] {
+			queued[r.id] = true
+			missing = append(missing, r)
+		}
 	}
 	for r, lines := range b.readCopies(ctx, s, missing) {
 		held[r.id] = lines
-		files[r.side] = lines
-		sides[r.side] = r.id
+	}
+	for _, r := range want {
+		if lines, ok := held[r.id]; ok {
+			files[r.side] = lines
+			sides[r.side] = r.id
+		}
 	}
 
 	// What was handed back is named by what produced it, so the same sides
@@ -397,9 +437,7 @@ func copiesWanted(s *app.Session) []copyRead {
 			continue
 		}
 		if s.PR != nil {
-			if read, ok := headCopyWanted(s.PR, f); ok {
-				out = append(out, read)
-			}
+			out = append(out, headCopiesWanted(s.PR, f)...)
 			continue
 		}
 		if f.Unstaged != nil {
@@ -419,14 +457,20 @@ func copiesWanted(s *app.Session) []copyRead {
 	return out
 }
 
-func headCopyWanted(pr *forge.PullRequest, f git.FileEntry) (copyRead, bool) {
-	if pr.HeadSHA == "" || f.Unstaged == nil || f.Unstaged.Status == git.StatusDeleted {
-		return copyRead{}, false
+func headCopiesWanted(pr *forge.PullRequest, f git.FileEntry) []copyRead {
+	d := f.Primary()
+	if pr.HeadSHA == "" || d == nil || d.Status == git.StatusDeleted {
+		return nil
 	}
-	return copyRead{
-		side: FileSide{Path: f.Path},
-		id:   copyID{Path: f.Path, Changes: pr.HeadSHA},
-	}, true
+	id := copyID{Path: f.Path, Changes: pr.HeadSHA}
+	var out []copyRead
+	if f.Unstaged != nil {
+		out = append(out, copyRead{side: FileSide{Path: f.Path}, id: id})
+	}
+	if f.Staged != nil {
+		out = append(out, copyRead{side: FileSide{Path: f.Path, Staged: true}, id: id})
+	}
+	return out
 }
 
 // changesOf fingerprints the diffs that stand between HEAD and one copy of a
@@ -473,6 +517,20 @@ func (b *appBackend) SetOthersHidden(hidden bool) error {
 	return b.state.Views.Save(b.session.Target, view)
 }
 
+func (b *appBackend) DescriptionFolded() (bool, error) {
+	view, err := b.state.Views.Load(b.session.Target)
+	return view.DescriptionFolded, err
+}
+
+func (b *appBackend) SetDescriptionFolded(folded bool) error {
+	view, err := b.state.Views.Load(b.session.Target)
+	if err != nil {
+		return err
+	}
+	view.DescriptionFolded = folded
+	return b.state.Views.Save(b.session.Target, view)
+}
+
 // ReviewPayload is what P would post: the summary being written and the notes
 // that can go with it, built exactly as `peel pr submit` builds one.
 func (b *appBackend) ReviewPayload(body string, event forge.ReviewEvent) (forge.Review, error) {
@@ -502,5 +560,3 @@ func (b *appBackend) Walkthrough(ctx context.Context, regenerate bool) (string, 
 	}
 	return got.Body, nil
 }
-
-func (b *appBackend) stageable() error { return b.session.NotStageable() }

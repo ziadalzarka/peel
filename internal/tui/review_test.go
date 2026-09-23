@@ -11,13 +11,12 @@ import (
 )
 
 // prSession is a pull request being reviewed: the same diff the other tests
-// use, read-only, with a pull request behind it.
+// use, with a pull request behind it.
 func prSession(t *testing.T) *app.Session {
 	t.Helper()
 	s := newSession(t, twoFileDiff)
 	s.Title = "#412 Drop the document key"
 	s.Target = "github:cli/cli#412"
-	s.Stageable = false
 	s.PR = &forge.PullRequest{
 		Ref:   forge.Ref{Owner: "cli", Repo: "cli", Number: 412},
 		Title: "Drop the document key",
@@ -36,9 +35,9 @@ func prModel(t *testing.T) (*fakeBackend, *Model) {
 	return backend, newModel(t, backend)
 }
 
-// The whole flow: a summary, what the review does, the question, and only then
-// does anything leave the machine.
-func TestPostingAReviewAsksBeforeItSends(t *testing.T) {
+// The whole flow: a summary, then what the review does, and choosing that is
+// what sends it.
+func TestPostingAReviewSendsOnceItsVerdictIsChosen(t *testing.T) {
 	backend, m := prModel(t)
 
 	press(t, m, "P")
@@ -56,17 +55,9 @@ func TestPostingAReviewAsksBeforeItSends(t *testing.T) {
 	}
 
 	press(t, m, "r")
-	if m.mode != modeConfirm {
-		t.Fatalf("mode = %v, want the question", m.mode)
+	if m.mode != modeBrowse || m.ask != nil {
+		t.Fatalf("mode = %v, ask = %v, want no further question", m.mode, m.ask)
 	}
-	if len(backend.posted) != 0 {
-		t.Fatal("the review went out before the question was answered")
-	}
-	if want := "post 1 comment to cli/cli#412 as request changes?"; m.ask.question != want {
-		t.Errorf("question = %q, want %q", m.ask.question, want)
-	}
-
-	press(t, m, "y")
 	if len(backend.posted) != 1 {
 		t.Fatalf("posted %d reviews, want 1", len(backend.posted))
 	}
@@ -103,10 +94,6 @@ func TestPostingChoosesApproveOrComment(t *testing.T) {
 			backend, m := prModel(t)
 
 			press(t, m, "P", "enter", tc.key)
-			if !strings.Contains(m.ask.question, "as "+tc.named+"?") {
-				t.Errorf("question = %q, want it to name %s", m.ask.question, tc.named)
-			}
-			press(t, m, "y")
 
 			if len(backend.posted) != 1 || backend.posted[0].Event != tc.event {
 				t.Fatalf("posted = %v, want one %s", backend.posted, tc.event)
@@ -126,7 +113,6 @@ func TestPostingCanBeAbandonedAtEveryStep(t *testing.T) {
 	}{
 		{"in the summary", []string{"P", "esc"}},
 		{"at the choice", []string{"P", "enter", "esc"}},
-		{"at the question", []string{"P", "enter", "a", "n"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			backend, m := prModel(t)
@@ -164,16 +150,15 @@ func TestPostingNeedsAPullRequest(t *testing.T) {
 	}
 }
 
-// A review with nothing in it is refused while it can still be added to, rather
-// than after the reviewer has said yes to sending it.
-func TestPostingRefusesAnEmptyReviewBeforeTheQuestion(t *testing.T) {
+// A review with nothing in it is refused rather than sent.
+func TestPostingRefusesAnEmptyReview(t *testing.T) {
 	backend := newFakeBackend(prSession(t))
 	m := newModel(t, backend)
 
 	press(t, m, "P", "enter", "c")
 
-	if m.mode == modeConfirm {
-		t.Fatal("an empty review reached the question")
+	if m.mode != modeBrowse {
+		t.Fatalf("mode = %v, want browse", m.mode)
 	}
 	if m.err == nil {
 		t.Fatal("an empty review was accepted silently")
@@ -189,7 +174,7 @@ func TestPostingReportsAFailure(t *testing.T) {
 	backend, m := prModel(t)
 	backend.postErr = errors.New("HTTP 422")
 
-	press(t, m, "P", "enter", "c", "y")
+	press(t, m, "P", "enter", "c")
 
 	if m.err == nil || !strings.Contains(m.err.Error(), "422") {
 		t.Errorf("err = %v, want the failure", m.err)

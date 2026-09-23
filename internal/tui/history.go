@@ -218,6 +218,13 @@ func fileFold(path string, collapsed, staged bool, v viewport) func(*Model) {
 	}
 }
 
+func descriptionFold(folded bool, v viewport) func(*Model) {
+	return func(m *Model) {
+		m.setDescriptionFolded(folded)
+		m.putViewport(v)
+	}
+}
+
 func sideFold(path string, folded, had bool, v viewport) func(*Model) {
 	return func(m *Model) {
 		setFlag(m.sideFolds, path, folded, had)

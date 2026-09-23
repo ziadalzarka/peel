@@ -23,6 +23,7 @@ type Theme struct {
 	Footer      lipgloss.Style
 	Key         lipgloss.Style
 	Status      lipgloss.Style
+	Question    lipgloss.Style
 	Error       lipgloss.Style
 	Staged      lipgloss.Style
 	Partial     lipgloss.Style
@@ -39,6 +40,7 @@ func DefaultTheme() Theme {
 		blue   = lipgloss.AdaptiveColor{Light: "#0969da", Dark: "#58a6ff"}
 		yellow = lipgloss.AdaptiveColor{Light: "#9a6700", Dark: "#d29922"}
 		purple = lipgloss.AdaptiveColor{Light: "#8250df", Dark: "#bc8cff"}
+		velvet = lipgloss.AdaptiveColor{Light: "#9e2a5e", Dark: "#e0719f"}
 		grey   = lipgloss.AdaptiveColor{Light: "#6e7781", Dark: "#8b949e"}
 		faint  = lipgloss.AdaptiveColor{Light: "#8c959f", Dark: "#6e7681"}
 		text   = lipgloss.AdaptiveColor{Light: "#1f2328", Dark: "#e6edf3"}
@@ -66,6 +68,7 @@ func DefaultTheme() Theme {
 		Footer:      lipgloss.NewStyle().Foreground(grey),
 		Key:         lipgloss.NewStyle().Foreground(blue),
 		Status:      lipgloss.NewStyle().Foreground(green),
+		Question:    lipgloss.NewStyle().Foreground(velvet),
 		Error:       lipgloss.NewStyle().Foreground(red).Bold(true),
 		Staged:      lipgloss.NewStyle().Foreground(green),
 		Partial:     lipgloss.NewStyle().Foreground(yellow),

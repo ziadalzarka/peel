@@ -72,6 +72,9 @@ const (
 	// RowTableEdge is the rule along the top or the bottom of a drawn Markdown
 	// table. It is the one row that stands for no line of the file.
 	RowTableEdge
+	RowDescription
+	RowDescriptionText
+	RowDescriptionEdge
 )
 
 // Row is one rendered line of the document.
@@ -122,12 +125,18 @@ type HunkRef struct {
 	// to add by repeating it.
 	SectionShown bool
 	markdown     *markdownHunk
+	shared       bool
 }
 
 // Origin names the diff this hunk was read from, which is what a note left on
 // one of its lines has to record: the same line number means a different line in
 // the other diff.
-func (h HunkRef) Origin() store.Origin { return originOf(h.Staged) }
+func (h HunkRef) Origin() store.Origin {
+	if h.shared {
+		return ""
+	}
+	return originOf(h.Staged)
+}
 
 // originOf names the diff a staged or unstaged side was read from.
 func originOf(staged bool) store.Origin {
@@ -184,6 +193,14 @@ type StepRef struct {
 	Folded bool
 }
 
+type DescriptionRef struct {
+	Lines      []git.Line
+	Base, Head string
+	Row        int
+	Folded     bool
+	markdown   *markdownHunk
+}
+
 // Draft is the comment being written, laid out where the comment itself will
 // appear once it is saved — so writing one neither takes the diff off screen nor
 // moves the code it is about.
@@ -214,6 +231,7 @@ type buildConfig struct {
 	// peel has no copy of the files for exactly as git printed it.
 	expand       Expansion
 	commentFolds map[string]bool
+	description  bool
 }
 
 // BuildOption customises how a document is laid out.
@@ -245,6 +263,10 @@ func WithCommentFolds(folds map[string]bool) BuildOption {
 	return func(c *buildConfig) { c.commentFolds = folds }
 }
 
+func WithDescriptionFolded(folded bool) BuildOption {
+	return func(c *buildConfig) { c.description = folded }
+}
+
 // Document is a session flattened into navigable rows.
 type Document struct {
 	Files []FileRef
@@ -259,9 +281,10 @@ type Document struct {
 	Rows    []Row
 	// Steps are the walkthrough groups the files are laid out under, in reading
 	// order. It is empty when there is no walkthrough on screen.
-	Steps    []StepRef
-	Comments []store.Comment
-	Layout   Layout
+	Steps       []StepRef
+	Description *DescriptionRef
+	Comments    []store.Comment
+	Layout      Layout
 	// CodeWidth is the widest line of code the document holds, in screen
 	// columns and with tabs already expanded. It bounds how far the diff can be
 	// scrolled sideways, so scrolling right cannot empty the pane.
@@ -283,6 +306,7 @@ type Document struct {
 	// worked out one side at a time.
 	expand       Expansion
 	commentFolds map[string]bool
+	viewing      bool
 }
 
 func (d Document) CommentFolded(c store.Comment) bool {
@@ -302,6 +326,10 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 		pane: cfg.pane, expand: cfg.expand, commentFolds: cfg.commentFolds}
 	if s == nil {
 		return doc
+	}
+	doc.viewing = s.PR != nil
+	if s.PR != nil {
+		doc.addDescription(*s.PR, cfg.description)
 	}
 	idx := indexComments(comments)
 
@@ -694,6 +722,7 @@ func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *co
 			Hunk:         shown,
 			SectionShown: said[h.Section] || sectionShown(h.Section, above, gaps.bottom(i)),
 			markdown:     md,
+			shared:       d.viewing,
 		})
 		if h.Section != "" {
 			said[h.Section] = true
@@ -799,7 +828,7 @@ func (d *Document) measure(lines []git.Line, md *markdownHunk) {
 // measureHeads widens HeadWidth to hold the longest file header.
 func (d *Document) measureHeads() {
 	for _, f := range d.Files {
-		d.HeadWidth = max(d.HeadWidth, fileHeadWidth(f))
+		d.HeadWidth = max(d.HeadWidth, fileHeadWidth(d.terms(), f))
 	}
 }
 
@@ -933,7 +962,7 @@ func (d Document) IsStop(i int) bool {
 	switch d.Rows[i].Kind {
 	case RowComment:
 		return d.Rows[i].Head
-	case RowBlank, RowStepText, RowDraft, RowTableEdge:
+	case RowBlank, RowStepText, RowDraft, RowTableEdge, RowDescriptionEdge:
 		return false
 	default:
 		return true
@@ -952,7 +981,7 @@ func (d Document) IsMark(i int) bool {
 		return false
 	}
 	switch d.Rows[i].Kind {
-	case RowFile, RowHunk, RowStep, RowSide:
+	case RowFile, RowHunk, RowStep, RowSide, RowDescription:
 		return true
 	case RowComment:
 		return d.Rows[i].Head
@@ -1440,7 +1469,7 @@ func (d Document) TargetAt(row int) Target {
 		return Target{}
 	}
 	r := d.Rows[row]
-	if r.Kind == RowStep || r.Kind == RowStepText {
+	if r.Kind == RowStep || r.Kind == RowStepText || d.inDescription(row) {
 		return Target{}
 	}
 	if r.Kind == RowHunk && r.Hunk >= 0 && r.Hunk < len(d.Hunks) {
@@ -1469,7 +1498,7 @@ func (d Document) FileTargetAt(row int) (FileRef, bool) {
 		return FileRef{}, false
 	}
 	r := d.Rows[row]
-	if r.Kind == RowStep || r.Kind == RowStepText {
+	if r.Kind == RowStep || r.Kind == RowStepText || d.inDescription(row) {
 		return FileRef{}, false
 	}
 	if r.File < 0 || r.File >= len(d.Files) {
@@ -1681,7 +1710,7 @@ func pairWithin(ref HunkRef, pair linePair, c store.Comment) bool {
 // than the distinction, or came from a caller that did not draw it, and goes
 // where it always went: the first line that matches its number.
 func sameOrigin(o store.Origin, ref HunkRef) bool {
-	return o == "" || o == ref.Origin()
+	return o == "" || ref.Origin() == "" || o == ref.Origin()
 }
 
 // rest returns the comments for a path that nothing claimed, so a comment whose

@@ -10,8 +10,8 @@ import (
 )
 
 // ReviewStore is one review kept in one file: the notes written on it, the
-// files folded away, how it was last being looked at, and the narrative
-// generated for it.
+// files folded away, the hunks marked viewed, how it was last being looked at,
+// and the narrative generated for it.
 //
 // A pull request does not belong to any one checkout, so its review is not kept
 // inside one. The file is named after the pull request and lives under the
@@ -42,11 +42,12 @@ func (s *ReviewStore) Path() string { return s.path }
 // Target returns the review the file holds.
 func (s *ReviewStore) Target() string { return s.target }
 
-// Comments, Folds, Views and Walkthroughs are the four faces of the same file,
-// one per thing the rest of peel asks a store for.
+// Comments, Folds, Viewed, Views and Walkthroughs are the five faces of the
+// same file, one per thing the rest of peel asks a store for.
 
 func (s *ReviewStore) Comments() CommentStore         { return reviewComments{s} }
 func (s *ReviewStore) Folds() FoldStore               { return reviewFolds{s} }
+func (s *ReviewStore) Viewed() ViewedStore            { return reviewViewed{s} }
 func (s *ReviewStore) Views() ViewStore               { return reviewViews{s} }
 func (s *ReviewStore) Walkthroughs() WalkthroughCache { return reviewWalkthroughs{s} }
 
@@ -57,6 +58,7 @@ type reviewFile struct {
 	Target      string          `json:"target,omitempty"`
 	Comments    []Comment       `json:"comments,omitempty"`
 	Folded      []string        `json:"folded,omitempty"`
+	Viewed      []string        `json:"viewed,omitempty"`
 	View        View            `json:"view"`
 	Walkthrough *Walkthrough    `json:"walkthrough,omitempty"`
 	Imported    map[string]bool `json:"imported,omitempty"`
@@ -204,6 +206,36 @@ func (r reviewFolds) Load(string) ([]string, error) {
 func (r reviewFolds) Save(_ string, files []string) error {
 	return r.s.mutate(func(f *reviewFile) error {
 		f.Folded = sortedCopy(files)
+		return nil
+	})
+}
+
+type reviewViewed struct{ s *ReviewStore }
+
+func (r reviewViewed) Load() ([]string, error) {
+	f, err := r.s.read()
+	if err != nil {
+		return nil, err
+	}
+	return f.Viewed, nil
+}
+
+func (r reviewViewed) Update(apply func(viewed map[string]bool) error) error {
+	return r.s.mutate(func(f *reviewFile) error {
+		viewed := make(map[string]bool, len(f.Viewed))
+		for _, key := range f.Viewed {
+			viewed[key] = true
+		}
+		if err := apply(viewed); err != nil {
+			return err
+		}
+		f.Viewed = f.Viewed[:0]
+		for key, on := range viewed {
+			if on {
+				f.Viewed = append(f.Viewed, key)
+			}
+		}
+		f.Viewed = sortedCopy(f.Viewed)
 		return nil
 	})
 }

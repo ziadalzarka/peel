@@ -225,6 +225,9 @@ type fakeBackend struct {
 	othersHiddenSaves int
 	othersHiddenErr   error
 
+	descriptionFolded      bool
+	descriptionFoldedSaves int
+
 	added    []store.Comment
 	edited   []edit
 	removed  []string
@@ -449,6 +452,16 @@ func (f *fakeBackend) OthersHidden() (bool, error) {
 func (f *fakeBackend) SetOthersHidden(hidden bool) error {
 	f.othersHidden = hidden
 	f.othersHiddenSaves++
+	return nil
+}
+
+func (f *fakeBackend) DescriptionFolded() (bool, error) {
+	return f.descriptionFolded, nil
+}
+
+func (f *fakeBackend) SetDescriptionFolded(folded bool) error {
+	f.descriptionFolded = folded
+	f.descriptionFoldedSaves++
 	return nil
 }
 

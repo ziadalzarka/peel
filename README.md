@@ -46,12 +46,14 @@ keymap.
 - **It keeps up.** Follow mode re-reads the repository and the review's notes as
   they change, so a note an agent leaves shows up without a reload, and the
   screen moves on the keypress rather than waiting for git.
-- **Read-only bases.** `--rev` reviews further back than HEAD, `--pr` reviews a
-  GitHub pull request — from any checkout, or none at all.
-- **A pull request's review follows the pull request.** Its notes, folds and
-  narrative are filed under `#412` rather than inside one clone, so you can pick
-  the pass back up anywhere. `P` posts it: a summary, approve or request changes
-  or comment, and one last question before anything leaves the machine.
+- **Other bases.** `--rev` reviews further back than HEAD, read-only. `--pr`
+  reviews a GitHub pull request — from any checkout, or none at all — with its
+  description at the top, drawn as Markdown, and `s` marking a file viewed
+  instead of staging it.
+- **A pull request's review follows the pull request.** Its notes, folds, what
+  you have marked viewed and its narrative are filed under `#412` rather than
+  inside one clone, so you can pick the pass back up anywhere. `P` posts it: a
+  summary, then approve, request changes or comment — choosing one sends it.
 
 ## Install
 
@@ -99,7 +101,7 @@ made from a checkout. `PEEL_NO_UPDATE_CHECK=1` turns it off.
 ```sh
 peel                      # review the working tree
 peel --rev HEAD~2         # review everything since a commit (read-only)
-peel --pr 412             # review a GitHub PR (read-only)
+peel --pr 412             # review a GitHub PR, marking files viewed as you go
 peel --no-watch           # don't re-read the repository while open
 peel --provider codex     # use Codex for the walkthrough instead of Claude
 ```
@@ -130,7 +132,7 @@ repository changes.
 | `h` / `l` | scroll the code sideways, for a line too long for the pane |
 | `0` / `$` | back to the first column / out to the longest line's end |
 | `b` | hide or show the file tree, giving the diff the whole width |
-| `space` | fold away the file, the half already staged, a walkthrough note or a comment — or open it again |
+| `space` | fold away the file, the half already staged, a walkthrough note, a comment or a pull request's description — or open it again |
 | `space` on a `▴`/`▾` row | read in twenty more lines of the code the diff left out |
 | `s` | stage the file the cursor is in, folding it away and moving to the next |
 | `S` | switch `s` between the whole file and the hunk the cursor is in |
@@ -153,6 +155,9 @@ repository changes.
 | `z` / `Z` | undo / redo the last staging, comment or fold — `cmd+z` / `cmd+shift+z` in the terminals that send `cmd` through |
 | `r` | reload from git |
 | `?` / `q` | help / quit |
+
+In a pull request, `s`, `u`, `a` and `U` mark and unmark what you have viewed
+instead of touching the index — see [Pull requests](#pull-requests).
 
 There is one cursor and it rests anywhere — file headers, hunk headers, comments,
 and every line of a diff body, changed or not. Nothing to enter first: `s`
@@ -371,7 +376,7 @@ if the write fails, the change comes back off and the footer says why. `q`
 straight after `s` waits for that stage to land.
 
 `space` does the same thing without the index. Not every file you read is a file
-to stage — a `--rev` or pull request session cannot stage at all, and a working
+to stage — a `--rev` session cannot stage at all, and a working
 tree has files you look at and leave alone — so folding one away moves you on
 exactly as staging does. Where there is no index to read that against, the fold
 is what the pass goes by instead: a folded file has been read and an open one has
@@ -426,8 +431,8 @@ That form needs no repository at all, so a pull request can be read from any
 directory.
 
 A pull request is the same pull request from every clone, so its review is not
-kept inside one. The notes, the folds, the `A` filter and the cached walkthrough
-all live in a file named after the pull request itself:
+kept inside one. The notes, the folds, what is marked viewed, the `A` filter and
+the cached walkthrough all live in a file named after the pull request itself:
 
 ```
 ~/.local/state/peel/reviews/github/cli/cli/412.json
@@ -441,6 +446,26 @@ else. Notes written on a pull request before this — the ones stranded in some
 checkout's `.git/peel` — are moved into the pull request's file the next time you
 open it from that checkout.
 
+The pull request's description opens the review, above the first file, drawn
+the way a Markdown file is: headings bold, tables ruled, code blocks coloured,
+and prose wrapped to the pane. The template's `<!-- -->` comments are left out,
+and a description that is nothing else is not drawn at all. `space` on its
+heading folds it away, and it stays folded the next time you open the pull
+request. It is there to be read, not reviewed: `s` and `c` do nothing on it.
+
+A pull request has no index to stage into, so `s` marks what you have viewed
+instead. It works the way staging does — the file folds away, the cursor moves
+on to the next file you have not viewed, the file tree puts a `✓` beside it, and
+the header counts `3/12 viewed`. `S` switches it to one hunk at a time, and a
+file viewed in part is drawn as two halves, `viewed` and `not viewed yet`, with a
+`●` in the tree. `u` unmarks a file, `a` and `U` mark and unmark everything, and
+`z` takes a mark back. `space` only folds: a file folded away is not viewed.
+
+What is viewed is kept in the pull request's review file, one entry per hunk,
+named by what the hunk says rather than where it sits. So when the author pushes
+again, a hunk they did not touch stays viewed even if it has moved down the file,
+and a hunk they rewrote comes back to read. A file you viewed opens folded.
+
 What other people have already said on the pull request comes in when you open
 it: each review comment is drawn on its line, signed with the reviewer's GitHub
 login. A thread resolved on GitHub comes in resolved and folded, and an outdated
@@ -452,14 +477,8 @@ in resolved, and one that has gone from the pull request is taken out. If the
 comments cannot be read, the review opens anyway and says so.
 
 `P` posts the review. It asks for a summary, then what the review does — `a`
-approve, `r` request changes, `c` comment — and then the last question, which
-says how many notes are about to go where:
-
-```
-post 6 comments to cli/cli#412 as request changes?
-```
-
-Only `y` sends it. What goes is every unresolved note written here, and posting
+approve, `r` request changes, `c` comment — and that choice sends it; `esc` backs
+out instead. What goes is every unresolved note written here, and posting
 resolves them: they are the other side's to answer now. A note left on a file
 rather than a line has nowhere inline to attach, so the panel says it is staying
 behind. `peel pr submit` does the same thing from the command line, and prints
@@ -487,7 +506,8 @@ Two things it deliberately will not do:
   reach the index unreviewed.
 - **Post anything.** `peel pr submit` is the only command that leaves the machine.
   It prints the exact payload, then waits for an explicit `y`. `P` in the UI is
-  the same operation with the same last question, pressed by a person.
+  the same operation, sent by a person choosing approve, request changes or
+  comment.
 
 Comments are written straight through to their review's own file — the working
 tree's in `.git/peel/comments.json`, a pull request's under the state directory
@@ -511,7 +531,7 @@ or `clip.exe`.
 
 ```
 internal/git       diff parsing, status, staging, and the one patch builder
-internal/store     comments, folds, views, and the walkthrough cache — in .git/peel/
+internal/store     comments, folds, views, viewed hunks and the walkthrough cache — in .git/peel/
                    for the working tree, one file per pull request outside it
 internal/ai        walkthrough providers (claude-code, codex)
 internal/forge     pull request providers (github, via gh)

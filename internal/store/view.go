@@ -14,7 +14,8 @@ import (
 type View struct {
 	// OthersHidden reports whether everyone else's notes were taken out of
 	// the diff, which `A` does and no write of the store's undoes.
-	OthersHidden bool `json:"agentCommentsHidden"`
+	OthersHidden      bool `json:"agentCommentsHidden"`
+	DescriptionFolded bool `json:"descriptionFolded,omitempty"`
 }
 
 // ViewStore remembers how each review was left.

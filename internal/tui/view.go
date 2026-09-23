@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/x/ansi"
 	"github.com/ziadalzarka/peel/internal/app"
+	"github.com/ziadalzarka/peel/internal/git"
 )
 
 const (
@@ -115,6 +116,9 @@ func (m *Model) headerView() string {
 	if !m.session.Stageable {
 		right = append([]string{m.theme.Partial.Render("read-only")}, right...)
 	}
+	if m.session.PR != nil {
+		right = append([]string{m.theme.Staged.Render(m.viewedCount())}, right...)
+	}
 	if m.busy != "" {
 		right = append([]string{m.theme.Status.Render(m.busy + "…")}, right...)
 	}
@@ -125,7 +129,7 @@ func (m *Model) footerView() string {
 	var status string
 	switch {
 	case m.ask != nil:
-		status = m.theme.Status.Render(m.ask.question)
+		status = m.theme.Question.Render(m.ask.question)
 	case m.err != nil:
 		status = m.theme.Error.Render(m.err.Error())
 	case m.status != "":
@@ -153,12 +157,13 @@ func (m *Model) hints() string {
 	case modeReviewEvent:
 		return "a approve · r request changes · c comment · esc cancel"
 	default:
-		stage := "s stage file · S stage by hunk"
+		t := m.terms()
+		stage := t.fileHint
 		if m.stageMode == app.StageModeHunk {
-			stage = "s stage hunk · S stage by file"
+			stage = t.hunkHint
 		}
 		hints := `j/k hunk · ↓/↑ line · [/] ten lines · opt+↓/↑ file · cmd+p go to file · shift+↓/↑ mark · ` +
-			stage + ` · u unstage · space fold · c comment · z undo · b files · \ layout · w walkthrough`
+			stage + ` · ` + t.unstageHint + ` · space fold · c comment · z undo · b files · \ layout · w walkthrough`
 		// The key that posts is only worth a place in the footer where there is
 		// something to post to.
 		if m.session != nil && m.session.PR != nil {
@@ -211,8 +216,18 @@ func (m *Model) diffLines(height int) []string {
 	return padLines(out, height, width)
 }
 
+func (m *Model) viewedCount() string {
+	viewed := 0
+	for _, f := range m.session.Files {
+		if f.State() == git.StateStaged {
+			viewed++
+		}
+	}
+	return fmt.Sprintf("%d/%d viewed", viewed, len(m.session.Files))
+}
+
 func (m *Model) emptyMessage() string {
-	if m.session.Stageable {
+	if m.session.Stageable && m.session.PR == nil {
 		return "nothing to review — the working tree is clean"
 	}
 	return "nothing to review"
@@ -324,9 +339,10 @@ type binding struct{ keys, action string }
 // a help screen naming the size the reviewer is not staging in would be worse
 // than no help at all.
 func (m *Model) helpBindings() []binding {
-	stage := binding{"s", "stage the file the cursor is in — it folds away and the next one opens"}
+	t := m.terms()
+	stage := binding{"s", t.fileHelp}
 	if m.stageMode == app.StageModeHunk {
-		stage = binding{"s", "stage the hunk the cursor is in — twice over takes the whole file"}
+		stage = binding{"s", t.hunkHelp}
 	}
 	return []binding{
 		{"j / k", "next / previous hunk, file or comment"},
@@ -340,11 +356,11 @@ func (m *Model) helpBindings() []binding {
 		{"b", "hide or show the file tree, giving the diff the whole width"},
 		{"g / G", "first / last row — cmd+↑ / cmd+↓ too, where the terminal sends them"},
 		{"ctrl+d / ctrl+u", "half a page down / up"},
-		{"space", "fold a file, a staged half, a walkthrough note or a comment away — or, on a ▴/▾ row, read in more code"},
+		{"space", "fold a file, a " + t.staged + " half, a walkthrough note, a comment or the description away — or, on a ▴/▾ row, read in more code"},
 		stage,
-		{"S", "switch what s stages: the whole file, or the hunk the cursor is in"},
-		{"u", "unstage that file, opening it again"},
-		{"a / U", "stage everything / unstage everything"},
+		{"S", t.switchHelp},
+		{"u", t.unstageHelp},
+		{"a / U", t.allHelp},
 		{"o", "open the file the cursor is in, outside peel"},
 		{"shift+↓ / shift+↑", "mark a run of lines to write one note about — any other key lets it go"},
 		{"c", "comment at the cursor, or on the run of lines marked"},

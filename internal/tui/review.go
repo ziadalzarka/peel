@@ -8,19 +8,17 @@ import (
 )
 
 // Posting a review is the one thing peel does that anyone else can see, and the
-// one thing it cannot take back. So `P` is three deliberate steps rather than a
-// key that sends: the summary is written, what the review does to the pull
-// request is chosen, and the question in the footer says how many notes are
-// about to go where before anything leaves the machine.
+// one thing it cannot take back. So `P` is two deliberate steps rather than a
+// key that sends: the summary is written, then what the review does to the pull
+// request is chosen, and choosing it is what sends it. The panel says how many
+// notes are about to go where while that choice is being made.
 //
 // The notes themselves are already on screen — they are what the reviewer has
-// been reading — so the payload is not shown a second time. What the question
-// adds is the part that is not on screen: the count, the destination, and the
-// verdict.
+// been reading — so the payload is not shown a second time.
 
 // posting is a review on its way out: the summary written for it and what it
-// does to the pull request. It is held from the editor until the question is
-// answered, since the editor has been put away by then.
+// does to the pull request. It is held from the editor until what it does is
+// chosen, since the editor has been put away by then.
 type posting struct {
 	body  string
 	event forge.ReviewEvent
@@ -91,8 +89,7 @@ func (m *Model) reviewKey(msg tea.KeyMsg) tea.Cmd {
 	return cmd
 }
 
-// reviewEventKey chooses what posting does to the pull request, and puts the
-// question that sends it.
+// reviewEventKey chooses what posting does to the pull request, and posts it.
 func (m *Model) reviewEventKey(msg tea.KeyMsg) tea.Cmd {
 	switch msg.String() {
 	case "ctrl+c":
@@ -102,42 +99,24 @@ func (m *Model) reviewEventKey(msg tea.KeyMsg) tea.Cmd {
 		m.status = "review cancelled — nothing was posted"
 		return nil
 	case "a":
-		return m.askPost(forge.EventApprove)
+		return m.postAs(forge.EventApprove)
 	case "r":
-		return m.askPost(forge.EventRequestChanges)
+		return m.postAs(forge.EventRequestChanges)
 	case "c":
-		return m.askPost(forge.EventComment)
+		return m.postAs(forge.EventComment)
 	}
 	return nil
 }
 
-// askPost puts the last question before the review leaves the machine: what is
-// about to go, where, and as what.
-//
-// The payload is built here rather than at the keypress that sends it, so a
-// review with nothing postable in it is refused while it can still be added to
-// rather than after the reviewer has said yes.
-func (m *Model) askPost(event forge.ReviewEvent) tea.Cmd {
+func (m *Model) postAs(event forge.ReviewEvent) tea.Cmd {
 	want := posting{body: m.posting.body, event: event}
-	review, err := m.backend.ReviewPayload(want.body, want.event)
+	_, err := m.backend.ReviewPayload(want.body, want.event)
+	m.closeReview()
 	if err != nil {
-		m.closeReview()
 		m.err = err
 		return nil
 	}
-
-	m.closeReview()
-	m.mode = modeConfirm
-	m.ask = &confirm{
-		question: postQuestion(review, m.prRef()),
-		yes:      func() tea.Cmd { return m.postReview(want) },
-	}
-	return nil
-}
-
-// postQuestion is what the footer asks before anything is sent.
-func postQuestion(review forge.Review, ref string) string {
-	return "post " + carried(review) + " to " + ref + " as " + eventName(review.Event) + "?"
+	return m.postReview(want)
 }
 
 // prRef names the pull request being reviewed, for the sentences about it.
@@ -274,7 +253,7 @@ func (m *Model) reviewSummaryLines(width int) []string {
 	}
 	return []string{
 		fit(" "+body, width),
-		fit(" "+m.theme.Dim.Render("post as")+"  "+strings.Join(choices, m.theme.Dim.Render(" · ")), width),
+		fit(" "+m.theme.Question.Render("post as")+"  "+strings.Join(choices, m.theme.Dim.Render(" · ")), width),
 	}
 }
 
