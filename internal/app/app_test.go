@@ -208,6 +208,9 @@ func TestLoadWorkingTree(t *testing.T) {
 	if s.Target != "" {
 		t.Errorf("Target = %q, want empty for the working tree", s.Target)
 	}
+	if s.Branch != "main" {
+		t.Errorf("Branch = %q, want main", s.Branch)
+	}
 	if got := s.Paths(); len(got) != 2 {
 		t.Errorf("Paths() = %v, want two files", got)
 	}
@@ -230,6 +233,21 @@ func TestLoadWorkingTreeClean(t *testing.T) {
 	}
 	if !s.IsEmpty() {
 		t.Errorf("IsEmpty() = false on a clean tree, got %v", s.Paths())
+	}
+}
+
+func TestLoadWorkingTreeOnADetachedHeadHasNoBranch(t *testing.T) {
+	f := newFixture(t)
+	f.repo.Write("a.txt", "one\n")
+	f.repo.Commit("base")
+	f.repo.Git("checkout", "--quiet", "--detach")
+
+	s, err := f.app.LoadWorkingTree(f.ctx)
+	if err != nil {
+		t.Fatalf("LoadWorkingTree: %v", err)
+	}
+	if s.Branch != "" {
+		t.Errorf("Branch = %q, want empty on a detached HEAD", s.Branch)
 	}
 }
 
@@ -288,6 +306,9 @@ func TestLoadRevisionReachesPastTheLastCommit(t *testing.T) {
 	}
 	if s.Title != "HEAD~1..working tree" {
 		t.Errorf("Title = %q", s.Title)
+	}
+	if s.Branch != "main" {
+		t.Errorf("Branch = %q, want main", s.Branch)
 	}
 }
 

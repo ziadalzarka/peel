@@ -72,6 +72,14 @@ func (r *Repo) GitDir(ctx context.Context) (string, error) {
 	return strings.TrimSpace(out), nil
 }
 
+func (r *Repo) Branch(ctx context.Context) (string, error) {
+	out, err := r.git(ctx, "branch", "--show-current")
+	if err != nil {
+		return "", fmt.Errorf("git branch --show-current: %w", err)
+	}
+	return strings.TrimSpace(out), nil
+}
+
 // ConfigSection returns every git config setting in one section, keyed by its
 // full key. The usual files are read in the usual order — system, then global,
 // then this repository — so a setting made once covers every repository and a

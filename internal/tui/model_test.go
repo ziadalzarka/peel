@@ -2218,6 +2218,32 @@ func TestViewMarksAReadOnlySession(t *testing.T) {
 	}
 }
 
+func TestViewNamesTheBranchAfterTheTitle(t *testing.T) {
+	session := newSession(t, twoFileDiff)
+	session.Title = "working tree"
+	session.Branch = "feature/header"
+	m := newModel(t, newFakeBackend(session))
+
+	header := strings.SplitN(m.View(), "\n", 2)[0]
+	title := strings.Index(header, "working tree")
+	branch := strings.Index(header, "feature/header")
+	files := strings.Index(header, "2 files")
+	if title < 0 || branch < title || files < branch {
+		t.Errorf("header = %q, want the title, then the branch, then the file count", header)
+	}
+}
+
+func TestViewWithoutABranchLeavesNoGap(t *testing.T) {
+	session := newSession(t, twoFileDiff)
+	session.Title = "working tree"
+	m := newModel(t, newFakeBackend(session))
+
+	header := strings.SplitN(m.View(), "\n", 2)[0]
+	if !strings.Contains(header, "working tree  2 files") {
+		t.Errorf("header = %q, want the file count straight after the title", header)
+	}
+}
+
 func TestWindowSizeResizesTheDiffPane(t *testing.T) {
 	m := newModel(t, newFakeBackend(newSession(t, twoFileDiff)))
 

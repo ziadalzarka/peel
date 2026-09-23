@@ -19,7 +19,8 @@ type Session struct {
 	Title string
 	// Base is the commit the changes are measured from, as a resolved hash.
 	// Empty means HEAD, which is the working tree session.
-	Base string
+	Base   string
+	Branch string
 	// Files is what changed, in path order.
 	Files []git.FileEntry
 	// DiffText is the raw unified diff, used to generate a walkthrough.
@@ -92,10 +93,15 @@ func (a *App) LoadWorkingTree(ctx context.Context) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	branch, err := a.Repo.Branch(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Session{
 		Target:    "",
 		Title:     "working tree",
+		Branch:    branch,
 		Files:     status.Files,
 		DiffText:  diffText,
 		Stageable: true,
@@ -138,11 +144,16 @@ func (a *App) LoadRevision(ctx context.Context, ref string) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	branch, err := a.Repo.Branch(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Session{
 		Target:    "",
 		Title:     ref + "..working tree",
 		Base:      base,
+		Branch:    branch,
 		Files:     status.Files,
 		DiffText:  diffText,
 		Stageable: false,

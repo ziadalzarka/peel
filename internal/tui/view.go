@@ -82,11 +82,11 @@ func (m *Model) diffWidth() int {
 
 func (m *Model) headerView() string {
 	added, removed := m.session.Stats()
-	left := strings.Join([]string{
-		m.theme.Title.Render("peel"),
-		m.theme.Header.Render(m.session.Title),
-		m.theme.Dim.Render(fmt.Sprintf("%s  +%d -%d", plural(len(m.session.Files), "file"), added, removed)),
-	}, "  ")
+	left := []string{m.theme.Title.Render("peel"), m.theme.Header.Render(m.session.Title)}
+	if m.session.Branch != "" {
+		left = append(left, m.theme.Key.Render(m.session.Branch))
+	}
+	left = append(left, m.theme.Dim.Render(fmt.Sprintf("%s  +%d -%d", plural(len(m.session.Files), "file"), added, removed)))
 
 	right := []string{m.theme.Dim.Render(m.layout.String())}
 	// Scrolled sideways, a run of short lines looks like a diff that has lost
@@ -118,7 +118,7 @@ func (m *Model) headerView() string {
 	if m.busy != "" {
 		right = append([]string{m.theme.Status.Render(m.busy + "…")}, right...)
 	}
-	return spread(left, strings.Join(right, "  "), m.width)
+	return spread(strings.Join(left, "  "), strings.Join(right, "  "), m.width)
 }
 
 func (m *Model) footerView() string {
