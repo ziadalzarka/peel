@@ -199,6 +199,27 @@ func TestPaneKeepsOneTreeWithNoConflictInIt(t *testing.T) {
 	}
 }
 
+func TestDiffPutsConflictsFirstInThePanesOrder(t *testing.T) {
+	entries := parseFiles(t, paneDiff)
+	entries[1].Conflicted = true
+	entries[3].Conflicted = true
+	doc := Build(sessionOf(entries), nil, nil, LayoutUnified)
+
+	var diff []string
+	for _, row := range doc.Rows {
+		if row.Kind == RowFile {
+			diff = append(diff, doc.Files[row.File].Entry.Path)
+		}
+	}
+	want := []string{"internal/tui/view.go", "README.md", "internal/tui/model.go", "internal/git/parse.go"}
+	if !equalPaths(diff, want) {
+		t.Errorf("diff files = %v, want %v", diff, want)
+	}
+	if pane := paneFiles(fileTree(doc.Files)); !equalPaths(pane, diff) {
+		t.Errorf("pane files = %v, want the diff's order %v", pane, diff)
+	}
+}
+
 func TestPaneLiftsConflictsToTheTopUnderTheirOwnHeading(t *testing.T) {
 	rows := paneOf(t, "internal/tui/view.go", "README.md")
 

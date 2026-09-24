@@ -55,11 +55,7 @@ type fileGroup struct {
 // nothing — so every file is shown exactly once.
 func groupFiles(files []git.FileEntry, steps []store.Step) []fileGroup {
 	if len(steps) == 0 {
-		all := make([]int, len(files))
-		for i := range all {
-			all[i] = i
-		}
-		return []fileGroup{{files: all}}
+		return []fileGroup{{files: conflictsFirst(files)}}
 	}
 
 	placed := make([]bool, len(files))
@@ -90,6 +86,18 @@ func groupFiles(files []git.FileEntry, steps []store.Step) []fileGroup {
 		})
 	}
 	return out
+}
+
+func conflictsFirst(files []git.FileEntry) []int {
+	var conflicted, rest []int
+	for i, f := range files {
+		if f.Conflicted {
+			conflicted = append(conflicted, i)
+			continue
+		}
+		rest = append(rest, i)
+	}
+	return append(conflicted, rest...)
 }
 
 // fileIndex looks a walkthrough's path up in the changed files.

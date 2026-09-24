@@ -43,12 +43,14 @@ const (
 // directory is joined onto it, `internal/tui` rather than two rows and an
 // indent, since the pane is narrow and a level with one way down says nothing.
 //
-// A merge is the one thing that breaks that order. What a conflict needs is a
-// decision, not a read, and a review of two hundred files gives no sign there is
-// one waiting somewhere down the list — so the unresolved files come out first,
-// under a heading, with everything else under a second one. The tree is built
-// the same way inside each group, and a tree with no conflict in it is the
-// tree it has always been, headings and all left out.
+// A merge splits the pane in two. What a conflict needs is a decision, not a
+// read, and a review of two hundred files gives no sign there is one waiting
+// somewhere down the list — so the unresolved files come out first, under a
+// heading, with everything else under a second one. The document puts them
+// first too, so the pane still reads the diff top to bottom; only a walkthrough,
+// which sets the diff's order itself, leaves the two apart. The tree is built
+// the same way inside each group, and a tree with no conflict in it is the tree
+// it has always been, headings and all left out.
 func fileTree(files []FileRef) []paneRow {
 	parts := make([][]string, len(files))
 	var conflicted, rest []int
