@@ -1499,15 +1499,31 @@ func TestResolveAndDeleteActOnTheCommentAtTheCursor(t *testing.T) {
 	}
 }
 
-// TestDeletingACommentLeavesTheCursorOnItsLine holds `D` to the line it was
-// pressed on. The comment named by the cursor is gone by the time the rebuild
-// looks for it, and falling back to the top of the file would throw away the
-// reviewer's place in the diff.
-func TestDeletingACommentLeavesTheCursorOnItsLine(t *testing.T) {
+func TestDeletingACommentMovesToTheNextOneWhoeverWroteIt(t *testing.T) {
+	m := newModel(t, reviewedByBoth(t))
+
+	m.moveTo(m.doc.RowOfComment("a1"))
+	for _, want := range []string{"u1", "a2"} {
+		press(t, m, "D")
+		got, ok := m.doc.CommentAt(m.cursor)
+		if !ok {
+			t.Fatalf("cursor is on a %v, want comment %s", m.doc.Rows[m.cursor].Kind, want)
+		}
+		if got.ID != want {
+			t.Fatalf("cursor is on %q, want %q", got.ID, want)
+		}
+	}
+}
+
+// TestDeletingTheLastCommentLeavesTheCursorOnItsLine holds `D` to the line it
+// was pressed on when there is no comment after it. The comment named by the
+// cursor is gone by the time the rebuild looks for it, and falling back to the
+// top of the file would throw away the reviewer's place in the diff.
+func TestDeletingTheLastCommentLeavesTheCursorOnItsLine(t *testing.T) {
 	backend := reviewedByBoth(t)
 	m := newModel(t, backend)
 
-	row := m.doc.RowOfComment("a1")
+	row := m.doc.RowOfComment("a2")
 	if row < 0 {
 		t.Fatal("the comment was not placed")
 	}

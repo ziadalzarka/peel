@@ -2152,10 +2152,14 @@ func (m *Model) deleteComment() tea.Cmd {
 	if !ok {
 		return nil
 	}
+	next := m.doc.CommentAfter(m.cursor)
 	show := func() {
 		m.comments = withoutComment(m.comments, c.ID)
 		m.status = "deleted comment on " + c.Location()
 		m.relayout()
+		if row := m.doc.RowOfComment(next); row >= 0 {
+			m.moveTo(row)
+		}
 	}
 	back := func(m *Model) {
 		m.comments = withComment(m.comments, c)

@@ -1435,6 +1435,19 @@ func (d Document) RowOfComment(id string) int {
 	return -1
 }
 
+func (d Document) CommentAfter(row int) string {
+	c, ok := d.CommentAt(row)
+	if !ok {
+		return ""
+	}
+	for i := row + 1; i < len(d.Rows); i++ {
+		if next, ok := d.CommentAt(i); ok && d.Rows[i].Head && next.ID != c.ID {
+			return next.ID
+		}
+	}
+	return ""
+}
+
 // TargetKind says what the cursor addresses.
 type TargetKind int
 

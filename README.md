@@ -216,12 +216,13 @@ the note's own place — a comment is corrected where it stands rather than dele
 and written again. Emptying it does not delete it; `D` is that key. Anyone else's
 notes are theirs: they can be resolved, answered or deleted, not rewritten.
 
-`D` leaves the cursor on the code the note was about, so deleting one does not
-cost you your place. A note with no code left to go back to — one on the file as
-a whole, or one whose line is no longer in the diff — is drawn under its file
-with the others in the same position, and there the cursor lands on the next note
-down the stack instead. Working through a stack of them is one key pressed over
-and over, rather than a scroll back up the file between each one.
+`D` moves the cursor to the next comment in the diff, whoever wrote it, so
+working through a review's notes is one key pressed over and over. After the last
+one, the cursor stays on the code the note was about, so deleting it does not
+cost you your place. A note with no code to go back to — one on the file as a
+whole, or one whose line is no longer in the diff — is drawn under its file with
+the others in the same position, and there the cursor lands on the note above it
+instead.
 
 `x` resolves a note and folds it to its first line, struck through, with `…`
 where there was more — done with, but still on the line it was about, and still
