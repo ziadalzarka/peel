@@ -216,10 +216,10 @@ the note's own place — a comment is corrected where it stands rather than dele
 and written again. Emptying it does not delete it; `D` is that key. Anyone else's
 notes are theirs: they can be resolved, answered or deleted, not rewritten.
 
-`D` moves the cursor to the next comment in the diff, whoever wrote it, so
-working through a review's notes is one key pressed over and over. After the last
-one, the cursor stays on the code the note was about, so deleting it does not
-cost you your place. A note with no code to go back to — one on the file as a
+`D` moves the cursor to the next comment on the same line, whoever wrote it, so
+clearing out a thread is one key pressed over and over. It never jumps to a
+comment on another line, hunk or file: once the thread is empty, the cursor stays
+on the code the note was about, so deleting it does not cost you your place. A note with no code to go back to — one on the file as a
 whole, or one whose line is no longer in the diff — is drawn under its file with
 the others in the same position, and there the cursor lands on the note above it
 instead.

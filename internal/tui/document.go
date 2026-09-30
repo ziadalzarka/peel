@@ -1435,13 +1435,14 @@ func (d Document) RowOfComment(id string) int {
 	return -1
 }
 
-func (d Document) CommentAfter(row int) string {
+func (d Document) NextInThread(row int) string {
 	c, ok := d.CommentAt(row)
 	if !ok {
 		return ""
 	}
-	for i := row + 1; i < len(d.Rows); i++ {
-		if next, ok := d.CommentAt(i); ok && d.Rows[i].Head && next.ID != c.ID {
+	for i := row + 1; i < len(d.Rows) && d.Rows[i].Kind == RowComment; i++ {
+		next, ok := d.CommentAt(i)
+		if ok && d.Rows[i].Head && next.ID != c.ID && threadKeyOf(next) == threadKeyOf(c) {
 			return next.ID
 		}
 	}

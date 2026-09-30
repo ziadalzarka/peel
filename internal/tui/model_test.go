@@ -1499,24 +1499,44 @@ func TestResolveAndDeleteActOnTheCommentAtTheCursor(t *testing.T) {
 	}
 }
 
-func TestDeletingACommentMovesToTheNextOneWhoeverWroteIt(t *testing.T) {
-	m := newModel(t, reviewedByBoth(t))
+func TestDeletingACommentMovesToTheNextOneOnTheSameLine(t *testing.T) {
+	backend := reviewedByBoth(t)
+	backend.comments = append(backend.comments,
+		store.Comment{ID: "u0", File: "alpha.go", Line: 3, Body: "and a reply", Author: store.AuthorUser})
+	m := newModel(t, backend)
 
 	m.moveTo(m.doc.RowOfComment("a1"))
-	for _, want := range []string{"u1", "a2"} {
-		press(t, m, "D")
-		got, ok := m.doc.CommentAt(m.cursor)
-		if !ok {
-			t.Fatalf("cursor is on a %v, want comment %s", m.doc.Rows[m.cursor].Kind, want)
-		}
-		if got.ID != want {
-			t.Fatalf("cursor is on %q, want %q", got.ID, want)
-		}
+	press(t, m, "D")
+
+	got, ok := m.doc.CommentAt(m.cursor)
+	if !ok {
+		t.Fatalf("cursor is on a %v, want comment u0", m.doc.Rows[m.cursor].Kind)
+	}
+	if got.ID != "u0" {
+		t.Fatalf("cursor is on %q, want %q", got.ID, "u0")
+	}
+}
+
+func TestDeletingACommentDoesNotJumpToAnotherLine(t *testing.T) {
+	m := newModel(t, reviewedByBoth(t))
+
+	row := m.doc.RowOfComment("a1")
+	want, wantLine, ok := m.doc.LineAt(m.doc.AnchorOf(row))
+	if !ok {
+		t.Fatal("the comment is not anchored to a line")
+	}
+	m.moveTo(row)
+
+	press(t, m, "D")
+
+	got, gotLine, ok := m.doc.LineAt(m.cursor)
+	if !ok || got.ID != want.ID || gotLine != wantLine {
+		t.Errorf("cursor on %v line %d, want %v line %d", got.ID, gotLine, want.ID, wantLine)
 	}
 }
 
 // TestDeletingTheLastCommentLeavesTheCursorOnItsLine holds `D` to the line it
-// was pressed on when there is no comment after it. The comment named by the
+// was pressed on when there is no other comment on that line. The comment named by the
 // cursor is gone by the time the rebuild looks for it, and falling back to the
 // top of the file would throw away the reviewer's place in the diff.
 func TestDeletingTheLastCommentLeavesTheCursorOnItsLine(t *testing.T) {

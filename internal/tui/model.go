@@ -2152,7 +2152,7 @@ func (m *Model) deleteComment() tea.Cmd {
 	if !ok {
 		return nil
 	}
-	next := m.doc.CommentAfter(m.cursor)
+	next := m.doc.NextInThread(m.cursor)
 	show := func() {
 		m.comments = withoutComment(m.comments, c.ID)
 		m.status = "deleted comment on " + c.Location()
