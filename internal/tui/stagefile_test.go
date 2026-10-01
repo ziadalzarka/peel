@@ -75,9 +75,9 @@ func TestStageFromInsideTheDiffStagesTheFile(t *testing.T) {
 }
 
 // Against real git: `s` walks the review queue. Each press stages the file the
-// cursor is in and lands on the next one with work still out of the index, so a
-// pass is a press a file — and a file somebody else put in the index is already
-// done, so the walk goes over it.
+// cursor is in and lands on the next one still open, so a pass is a press a
+// file — and a file somebody else put in the index still has to be read, so the
+// walk stops on it and `s` there only folds it.
 func TestStagingWalksTheQueueOneFileAtATime(t *testing.T) {
 	repo := gittest.New(t)
 	paths := []string{"a-first.txt", "b-second.txt", "c-third.txt", "d-fourth.txt"}
@@ -88,8 +88,8 @@ func TestStagingWalksTheQueueOneFileAtATime(t *testing.T) {
 	for _, path := range paths {
 		repo.Write(path, "new\n")
 	}
-	// b-second.txt is staged already — an agent, or a git add outside peel — so
-	// there is nothing left to decide about it and the walk passes over it.
+	// b-second.txt is staged already — an agent, or a git add outside peel — but
+	// nobody has read it here, so the walk still stops on it.
 	repo.Git("add", "b-second.txt")
 
 	m := realModel(t, repo)
@@ -98,8 +98,13 @@ func TestStagingWalksTheQueueOneFileAtATime(t *testing.T) {
 	}
 
 	press(t, m, "s")
+	if got := m.currentPath(); got != "b-second.txt" {
+		t.Fatalf("after staging a-first.txt the cursor is on %q, want b-second.txt — it is in the index but still open", got)
+	}
+
+	press(t, m, "s")
 	if got := m.currentPath(); got != "c-third.txt" {
-		t.Fatalf("after staging a-first.txt the cursor is on %q, want c-third.txt — b-second.txt is in the index already", got)
+		t.Fatalf("after folding b-second.txt the cursor is on %q, want c-third.txt", got)
 	}
 
 	press(t, m, "s")

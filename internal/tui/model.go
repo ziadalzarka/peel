@@ -1186,9 +1186,9 @@ func (m *Model) switchStageMode() {
 // It acts on the whole file from anywhere inside it, so a hunk header or a diff
 // line stages the file it belongs to rather than asking the cursor to be moved
 // to the header first. The file folds away once it is staged and the cursor
-// carries on to the next file with work still out of the index, since this one
-// has been dealt with — `space` opens it again. Where the cursor goes is
-// `peel.afterStage`, for the passes that read the diff in another order.
+// carries on to the next file still open, since this one has been dealt with —
+// `space` opens it again. Where the cursor goes is `peel.afterStage`, for the
+// passes that read the diff in another order.
 func (m *Model) stageAt() tea.Cmd {
 	t := m.terms()
 	file, ok := m.doc.FileTargetAt(m.cursor)

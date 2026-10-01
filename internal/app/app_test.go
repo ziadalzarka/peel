@@ -882,17 +882,16 @@ func TestOptionsOverrideDefaults(t *testing.T) {
 	}
 }
 
-// With nothing written, staging and folding both carry the pass on to the next
-// file with work still out of the index. That is what a review is: the files
-// nobody has staged are the files still to decide about.
-func TestMovesDefaultToTheNextUnstagedFile(t *testing.T) {
+// With nothing written, staging carries the pass on to the next file still open,
+// and folding to the next file with work still out of the index.
+func TestMovesDefaultWithNothingWritten(t *testing.T) {
 	a, _ := openFixture(t, nil)
 
 	moves, err := a.Moves(context.Background())
 	if err != nil {
 		t.Fatalf("Moves: %v", err)
 	}
-	if want := app.DefaultMoves(); moves != want {
+	if want := (app.Moves{AfterStage: app.MoveOpen, AfterFold: app.MoveUnstaged}); moves != want {
 		t.Errorf("Moves = %+v, want %+v", moves, want)
 	}
 }
@@ -930,7 +929,7 @@ func TestAnUnreadableMoveKeepsTheDefaultAndSaysWhichKey(t *testing.T) {
 	if !strings.Contains(err.Error(), app.AfterStageKey) {
 		t.Errorf("error = %q, want it to name the setting that was not read", err)
 	}
-	if moves.AfterStage != app.MoveUnstaged {
+	if moves.AfterStage != app.DefaultMoves().AfterStage {
 		t.Errorf("AfterStage = %q, want the default kept", moves.AfterStage)
 	}
 	if moves.AfterFold != app.MoveStay {

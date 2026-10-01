@@ -47,7 +47,7 @@ const (
 
 // DefaultMoves is what peel does with neither setting written.
 func DefaultMoves() Moves {
-	return Moves{AfterStage: MoveUnstaged, AfterFold: MoveUnstaged}
+	return Moves{AfterStage: MoveOpen, AfterFold: MoveUnstaged}
 }
 
 // OrDefault fills in whichever of the two was left unset, so a caller holding
