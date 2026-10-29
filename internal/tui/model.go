@@ -2431,6 +2431,9 @@ func (m *Model) tickCmd() tea.Cmd {
 // pollCmd re-reads in the background without the "reloading" banner, since a
 // follow check that finds nothing should be invisible.
 func (m *Model) pollCmd() tea.Cmd {
+	if m.writes.Load() > 0 {
+		return nil
+	}
 	backend, ctx := m.backend, m.ctx
 	// Taken here, on the UI goroutine, before the read goes out: what the poll
 	// comes back holding is only as new as the repository was when it started.

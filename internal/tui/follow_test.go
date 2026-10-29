@@ -239,6 +239,24 @@ func TestAStalePollDoesNotReopenAFileStagedWhileItWasReading(t *testing.T) {
 	}
 }
 
+func TestAPollSentBeforeAStageLandsDoesNotReopenTheFile(t *testing.T) {
+	_, m := followModel(t)
+
+	_, write := m.Update(keyMsg("s"))
+	var stale tea.Msg
+	if check := m.pollCmd(); check != nil {
+		stale = check()
+	}
+	settle(t, m, write, 0)
+	if stale != nil {
+		m.Update(stale)
+	}
+
+	if !m.doc.Files[0].Collapsed {
+		t.Errorf("a follow check that read git before the stage landed reopened the file: %q", m.status)
+	}
+}
+
 // The guard on a stale check is not a latch: once the press has been read back,
 // the next check is about a repository nothing is mid-write on, and follow mode
 // goes on noticing what changes under the review.
