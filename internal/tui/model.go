@@ -167,7 +167,9 @@ type Model struct {
 	// agent change files while reviewing.
 	follow bool
 	// pollEvery is how often follow mode checks. Zero means the default.
-	pollEvery time.Duration
+	pollEvery  time.Duration
+	watchJumps bool
+	jumpSeen   time.Time
 	// fingerprint identifies the diff currently on screen, so a poll that finds
 	// nothing new can be dropped instead of redrawing under the reviewer.
 	fingerprint string
@@ -228,6 +230,7 @@ type options struct {
 	moves     app.Moves
 	stageMode app.StageMode
 	me        store.Author
+	jumps     bool
 }
 
 // Option customises a Model.
@@ -299,6 +302,8 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 		now:          time.Now,
 		follow:       cfg.follow,
 		pollEvery:    cfg.pollEvery,
+		watchJumps:   cfg.jumps,
+		jumpSeen:     time.Now().Add(-jumpMaxAge),
 	}
 	if m.pollEvery <= 0 {
 		m.pollEvery = defaultPollEvery
@@ -422,10 +427,14 @@ func newInput(theme Theme) textarea.Model {
 // the first frame, since nothing on screen waits on them: until they land the
 // diff is what git printed, with no offer to read past it.
 func (m *Model) Init() tea.Cmd {
+	cmd := m.contextCmd()
 	if m.follow {
-		return tea.Batch(m.contextCmd(), m.tickCmd())
+		cmd = tea.Batch(cmd, m.tickCmd())
 	}
-	return m.contextCmd()
+	if m.watchJumps {
+		cmd = tea.Batch(cmd, m.jumpCmd())
+	}
+	return cmd
 }
 
 // Update satisfies tea.Model.
@@ -459,6 +468,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.busy = ""
 		m.err = msg.err
 		return m, nil
+	case jumpMsg:
+		return m, m.applyJump(msg)
 	case tickMsg:
 		if !m.follow {
 			return m, nil

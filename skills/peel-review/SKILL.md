@@ -236,7 +236,8 @@ peel fold clear --author claude
 - `--file` must have changes in the review. A fold on a file with no changes, a
   merge conflict, or a line past the end of the file is refused. So are line
   numbers on a binary file or a deleted file; both can be folded whole.
-- Folds work under `--rev` and refuse `--pr`.
+- Folds work under `--rev` and `--pr`. On a pull request a fold stops hiding once a
+  new commit is pushed, so add them again after one.
 
 `fold list --json` returns `id`, `file`, `line` (`0` for the whole file), `author`,
 `createdAt`, and, when they apply, `endLine`, `label`, `movedFrom` and `outdated`.
@@ -301,6 +302,8 @@ the instruction should keep the shape if the result is meant to stay navigable.
 ```bash
 peel --pr <ref> hunks list --json
 peel --pr <ref> comment add --file <path> --line <n> --body "..."
+peel --pr <ref> fold add --file <path> [--line <n> --end-line <n>] --author claude
+peel --pr <ref> goto <path>:<n>
 peel pr view <ref> [--json]
 ```
 
@@ -311,6 +314,9 @@ Comments on a PR are stored locally and nothing is sent anywhere. They are kept
 in a file named after the pull request, under the user's state directory rather
 than in `.git` — so every command about them takes `--pr <ref>`, and one run
 without it is reading the working tree's review instead.
+
+`goto` moves a review the user has open on that pull request to that line. Your
+own notes are not posted when the user presses `P`, only theirs are.
 
 **Do not run `peel pr submit`.** It posts the review to the forge, where other
 people see it and it cannot be undone from here. It is the user's call, it

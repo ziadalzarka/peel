@@ -5,9 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/ziadalzarka/peel/internal/ai"
 	"github.com/ziadalzarka/peel/internal/app"
-	"github.com/ziadalzarka/peel/internal/forge"
 	"github.com/ziadalzarka/peel/internal/gittest"
 	"github.com/ziadalzarka/peel/internal/store"
 )
@@ -281,20 +279,5 @@ func TestARunKeepsItsSnapshotWhenANoteIsRemoved(t *testing.T) {
 	}
 	if strings.Contains(repo.Git("for-each-ref", "refs/peel/anchors/"), blob) {
 		t.Error("clearing the run left its snapshot held")
-	}
-}
-
-func TestAPullRequestHasNoHiddenRuns(t *testing.T) {
-	ctx := context.Background()
-	a, err := app.Open(ctx, gittest.New(t).Dir, app.WithAIRegistry(ai.NewRegistry()), app.WithForgeRegistry(forge.NewRegistry()))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	s := &app.Session{PR: &forge.PullRequest{}}
-	if runs, err := a.HiddenRuns(ctx, s, store.HiddenFilter{}); err != nil || runs != nil {
-		t.Errorf("got %+v, %v, want none", runs, err)
-	}
-	if _, err := a.AddHiddenRun(ctx, s, store.HiddenRun{File: "a.go"}); err == nil {
-		t.Error("a pull request accepted a run it cannot follow")
 	}
 }

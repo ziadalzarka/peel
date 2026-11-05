@@ -97,26 +97,15 @@ func (s *JSONHiddenRunStore) List(f HiddenFilter) ([]HiddenRun, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := make([]HiddenRun, 0, len(all))
-	for _, r := range all {
-		if f.matches(r) {
-			out = append(out, r)
-		}
-	}
-	return out, nil
+	return filterRuns(all, f), nil
 }
 
 func (s *JSONHiddenRunStore) Add(r HiddenRun) (HiddenRun, error) {
-	if r.Author == "" {
-		r.Author = AuthorUnknown
-	}
-	if err := r.validate(); err != nil {
+	r, err := prepareRun(r, s.params)
+	if err != nil {
 		return HiddenRun{}, err
 	}
-	if r.CreatedAt.IsZero() {
-		r.CreatedAt = s.now().UTC()
-	}
-	err := s.mutate(func(all []HiddenRun) ([]HiddenRun, error) {
+	err = s.mutate(func(all []HiddenRun) ([]HiddenRun, error) {
 		r.ID = uniqueRunID(all, s.newID)
 		return append(all, r), nil
 	})
@@ -128,11 +117,7 @@ func (s *JSONHiddenRunStore) Add(r HiddenRun) (HiddenRun, error) {
 
 func (s *JSONHiddenRunStore) Remove(id string) error {
 	return s.mutate(func(all []HiddenRun) ([]HiddenRun, error) {
-		at := slices.IndexFunc(all, func(r HiddenRun) bool { return r.ID == id })
-		if at < 0 {
-			return nil, fmt.Errorf("%w: %s", ErrRunNotFound, id)
-		}
-		return slices.Delete(all, at, at+1), nil
+		return removeRun(all, id)
 	})
 }
 
@@ -185,10 +170,45 @@ func (s *JSONHiddenRunStore) mutate(apply func([]HiddenRun) ([]HiddenRun, error)
 	if next == nil {
 		next = []HiddenRun{}
 	}
-	slices.SortStableFunc(next, func(a, b HiddenRun) int {
+	sortRuns(next)
+	return writeJSONFile(s.path, "hidden", hiddenFile{Version: currentVersion, Runs: next})
+}
+
+func prepareRun(r HiddenRun, p params) (HiddenRun, error) {
+	if r.Author == "" {
+		r.Author = AuthorUnknown
+	}
+	if err := r.validate(); err != nil {
+		return HiddenRun{}, err
+	}
+	if r.CreatedAt.IsZero() {
+		r.CreatedAt = p.now().UTC()
+	}
+	return r, nil
+}
+
+func filterRuns(all []HiddenRun, f HiddenFilter) []HiddenRun {
+	out := make([]HiddenRun, 0, len(all))
+	for _, r := range all {
+		if f.matches(r) {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func removeRun(all []HiddenRun, id string) ([]HiddenRun, error) {
+	at := slices.IndexFunc(all, func(r HiddenRun) bool { return r.ID == id })
+	if at < 0 {
+		return nil, fmt.Errorf("%w: %s", ErrRunNotFound, id)
+	}
+	return slices.Delete(all, at, at+1), nil
+}
+
+func sortRuns(runs []HiddenRun) {
+	slices.SortStableFunc(runs, func(a, b HiddenRun) int {
 		return cmp.Or(cmp.Compare(a.File, b.File), cmp.Compare(a.Line, b.Line), a.CreatedAt.Compare(b.CreatedAt))
 	})
-	return writeJSONFile(s.path, "hidden", hiddenFile{Version: currentVersion, Runs: next})
 }
 
 func uniqueRunID(all []HiddenRun, newID func() string) string {

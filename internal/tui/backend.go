@@ -33,6 +33,7 @@ type Backend interface {
 	RemoveComment(ctx context.Context, id string) error
 	SetResolved(id string, resolved bool) error
 	HiddenRuns(ctx context.Context) ([]store.HiddenRun, error)
+	PendingJump() (store.Jump, error)
 
 	// IndexTree records the index as it stands, and RestoreIndex puts it back to
 	// a tree recorded that way — refusing when the index is not the one the
@@ -203,6 +204,10 @@ func (b *appBackend) keepAnchors(ctx context.Context) error {
 
 func (b *appBackend) HiddenRuns(ctx context.Context) ([]store.HiddenRun, error) {
 	return b.app.HiddenRuns(ctx, b.session, store.HiddenFilter{})
+}
+
+func (b *appBackend) PendingJump() (store.Jump, error) {
+	return b.app.PendingJump(b.session.Target)
 }
 
 func (b *appBackend) StoredComments() ([]store.Comment, error) {
@@ -539,7 +544,7 @@ func (b *appBackend) SetDescriptionFolded(folded bool) error {
 // ReviewPayload is what P would post: the summary being written and the notes
 // that can go with it, built exactly as `peel pr submit` builds one.
 func (b *appBackend) ReviewPayload(body string, event forge.ReviewEvent) (forge.Review, error) {
-	return b.app.PreviewSubmission(b.session, b.submitOptions(body, event))
+	return b.app.PreviewSubmission(context.Background(), b.session, b.submitOptions(body, event))
 }
 
 func (b *appBackend) SubmitReview(ctx context.Context, body string, event forge.ReviewEvent) (forge.Review, error) {

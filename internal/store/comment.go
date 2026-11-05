@@ -64,6 +64,10 @@ func (a Author) Mine(me Author) bool {
 	return a == "" || a == AuthorUser || (me != "" && a == me)
 }
 
+func (a Author) PostsAs(me Author) bool {
+	return a == AuthorUnknown || a.Mine(me)
+}
+
 // Comment is one inline review note.
 type Comment struct {
 	ID   string `json:"id"`

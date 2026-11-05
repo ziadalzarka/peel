@@ -39,7 +39,7 @@ func Run(ctx context.Context, a *app.App, s *app.Session, opts ...Option) error 
 	// switches it after that, so this is where the pass starts rather than where
 	// it has to stay.
 	mode, modeErr := a.StageMode(ctx)
-	model := New(ctx, backend, s, comments, append(opts, WithMoves(moves), WithStageMode(mode), WithAuthor(a.Author(ctx)))...)
+	model := New(ctx, backend, s, comments, append(opts, WithMoves(moves), WithStageMode(mode), WithAuthor(a.Author(ctx)), withJumps())...)
 	if err := settingsErr(moveErr, modeErr, s.CommentsErr); err != nil {
 		model.err = err
 	}

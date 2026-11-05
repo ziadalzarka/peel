@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/ziadalzarka/peel/internal/store"
@@ -11,9 +10,6 @@ import (
 const deletedFile = "deleted"
 
 func (a *App) AddHiddenRun(ctx context.Context, s *Session, run store.HiddenRun) (store.HiddenRun, error) {
-	if s.PR != nil {
-		return store.HiddenRun{}, errors.New("peel fold only works on the working tree, not on a pull request")
-	}
 	entry, ok := s.Entry(run.File)
 	if !ok {
 		return store.HiddenRun{}, fmt.Errorf("%s has no changes in %s, so there is nothing to hide", run.File, s.Title)
@@ -23,7 +19,7 @@ func (a *App) AddHiddenRun(ctx context.Context, s *Session, run store.HiddenRun)
 	}
 
 	run.Origin = store.OriginWorktree
-	blob, err := a.freezeRun(ctx, run, entry.IsBinary())
+	blob, err := a.freezeRun(ctx, s, run, entry.IsBinary())
 	if err != nil {
 		return store.HiddenRun{}, err
 	}
@@ -33,16 +29,20 @@ func (a *App) AddHiddenRun(ctx context.Context, s *Session, run store.HiddenRun)
 	if err != nil {
 		return store.HiddenRun{}, err
 	}
-	created, err := a.Local.Hidden.Add(run)
+	hidden := a.StateFor(s).Hidden
+	created, err := hidden.Add(run)
 	if err != nil {
 		return store.HiddenRun{}, err
 	}
 	for _, old := range existing {
 		if sameRun(old, run) {
-			if err := a.Local.Hidden.Remove(old.ID); err != nil {
+			if err := hidden.Remove(old.ID); err != nil {
 				return store.HiddenRun{}, err
 			}
 		}
+	}
+	if s.PR != nil {
+		return created, nil
 	}
 	return created, a.KeepAnchors(ctx)
 }
@@ -54,7 +54,13 @@ func sameRun(old, run store.HiddenRun) bool {
 	return !old.Outdated && old.Line == run.Line && old.LastLine() == run.LastLine()
 }
 
-func (a *App) freezeRun(ctx context.Context, run store.HiddenRun, binary bool) (string, error) {
+func (a *App) freezeRun(ctx context.Context, s *Session, run store.HiddenRun, binary bool) (string, error) {
+	if s.PR != nil {
+		if binary && !run.WholeFile() {
+			return "", fmt.Errorf("%s is a binary file and has no lines to hide; leave --line off to hide the whole file", run.File)
+		}
+		return s.PR.HeadSHA, nil
+	}
 	if run.WholeFile() {
 		hashes, err := a.Repo.HashFiles(ctx, []string{run.File})
 		if err != nil {
@@ -79,7 +85,14 @@ func (a *App) freezeRun(ctx context.Context, run store.HiddenRun, binary bool) (
 }
 
 func (a *App) HiddenRuns(ctx context.Context, s *Session, f store.HiddenFilter) ([]store.HiddenRun, error) {
-	if !a.HasRepo() || s == nil || s.PR != nil {
+	if s != nil && s.PR != nil {
+		runs, err := a.StateFor(s).Hidden.List(f)
+		if err != nil {
+			return nil, err
+		}
+		return outdatedByPush(s, runs), nil
+	}
+	if !a.HasRepo() || s == nil {
 		return nil, nil
 	}
 	runs, err := a.Local.Hidden.List(f)
@@ -87,6 +100,15 @@ func (a *App) HiddenRuns(ctx context.Context, s *Session, f store.HiddenFilter) 
 		return nil, err
 	}
 	return a.placeRuns(ctx, s, runs), nil
+}
+
+func outdatedByPush(s *Session, runs []store.HiddenRun) []store.HiddenRun {
+	out := make([]store.HiddenRun, len(runs))
+	for i, r := range runs {
+		r.Outdated = r.Blob != s.PR.HeadSHA
+		out[i] = r
+	}
+	return out
 }
 
 func (a *App) placeRuns(ctx context.Context, s *Session, runs []store.HiddenRun) []store.HiddenRun {

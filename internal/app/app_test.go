@@ -830,7 +830,7 @@ func TestPreviewSubmissionDoesNotPost(t *testing.T) {
 	s, _ := f.app.LoadPullRequest(f.ctx, "", "412")
 	mustAddComment(t, f, store.Comment{File: "pr.go", Line: 1, Body: "note", Target: s.Target})
 
-	got, err := f.app.PreviewSubmission(s, app.SubmitOptions{Body: "summary"})
+	got, err := f.app.PreviewSubmission(f.ctx, s, app.SubmitOptions{Body: "summary"})
 	if err != nil {
 		t.Fatalf("PreviewSubmission: %v", err)
 	}

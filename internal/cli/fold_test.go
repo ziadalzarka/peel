@@ -171,16 +171,54 @@ func TestFoldReportsWhatItCannotHide(t *testing.T) {
 	}
 }
 
-func TestFoldRefusesAPullRequest(t *testing.T) {
+func TestFoldWorksOnAPullRequest(t *testing.T) {
 	h := newHarness(t)
 	foldRepo(h)
-	for _, args := range [][]string{
-		{"--pr", "412", "fold", "add", "--file", "pr.go"},
-		{"--pr", "412", "fold", "list"},
-		{"--pr", "412", "fold", "rm", "abc"},
-		{"--pr", "412", "fold", "clear"},
-	} {
-		if code := h.run(args...); code != 2 || !strings.Contains(h.err(), "working tree") {
+	h.mustRun("--pr", "412", "fold", "add", "--author", "claude", "--file", "pr.go", "--line", "1", "--label", "body")
+	h.mustRun("--pr", "412", "fold", "add", "--author", "someone", "--file", "pr.go")
+
+	var runs []foldOut
+	if err := json.Unmarshal([]byte(h.mustRun("--pr", "412", "fold", "list", "--json")), &runs); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(runs) != 2 {
+		t.Fatalf("runs = %+v, want two", runs)
+	}
+
+	tree := h.mustRun("fold", "list")
+	if !strings.Contains(tree, "no folds") {
+		t.Errorf("the working tree's folds = %q, want none", tree)
+	}
+
+	if out := h.mustRun("--pr", "412", "fold", "clear", "--author", "claude"); !strings.Contains(out, "cleared 1 fold") {
+		t.Errorf("clear said %q", out)
+	}
+	var left []foldOut
+	if err := json.Unmarshal([]byte(h.mustRun("--pr", "412", "fold", "list", "--json")), &left); err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if len(left) != 1 || left[0].Author != "someone" {
+		t.Fatalf("left = %+v, want the other author's", left)
+	}
+	h.mustRun("--pr", "412", "fold", "rm", left[0].ID)
+}
+
+func TestFoldOutsideThePullRequestIsRefused(t *testing.T) {
+	h := newHarness(t)
+	foldRepo(h)
+	if code := h.run("--pr", "412", "fold", "add", "--file", "other.go"); code == 0 {
+		t.Error("a file with no changes was accepted")
+	}
+}
+
+func TestGotoAsksTheOpenReviewToMove(t *testing.T) {
+	h := newHarness(t)
+	if out := h.mustRun("--pr", "412", "goto", "pr.go:3"); !strings.Contains(out, "pr.go:3") {
+		t.Errorf("goto said %q", out)
+	}
+	h.mustRun("goto", "a.txt")
+	for _, args := range [][]string{{"goto"}, {"goto", ":3"}, {"goto", "a.txt:0"}} {
+		if code := h.run(args...); code != 2 {
 			t.Errorf("%v: exit %d, stderr %q", args, code, h.err())
 		}
 	}

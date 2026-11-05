@@ -52,7 +52,7 @@ func (a *App) SubmitReview(ctx context.Context, s *Session, opts SubmitOptions) 
 		return forge.Review{}, err
 	}
 
-	review, submitted, err := a.buildReview(s, opts)
+	review, submitted, err := a.buildReview(ctx, s, opts)
 	if err != nil {
 		return forge.Review{}, err
 	}
@@ -74,14 +74,14 @@ func (a *App) SubmitReview(ctx context.Context, s *Session, opts SubmitOptions) 
 
 // PreviewSubmission returns exactly what SubmitReview would post, so the user
 // can see it before agreeing to publish.
-func (a *App) PreviewSubmission(s *Session, opts SubmitOptions) (forge.Review, error) {
-	review, _, err := a.buildReview(s, opts)
+func (a *App) PreviewSubmission(ctx context.Context, s *Session, opts SubmitOptions) (forge.Review, error) {
+	review, _, err := a.buildReview(ctx, s, opts)
 	return review, err
 }
 
 // buildReview turns unresolved local comments into a forge review, returning
 // both the payload and the comments it came from.
-func (a *App) buildReview(s *Session, opts SubmitOptions) (forge.Review, []store.Comment, error) {
+func (a *App) buildReview(ctx context.Context, s *Session, opts SubmitOptions) (forge.Review, []store.Comment, error) {
 	if s.PR == nil {
 		return forge.Review{}, nil, fmt.Errorf("no pull request in this session")
 	}
@@ -99,10 +99,11 @@ func (a *App) buildReview(s *Session, opts SubmitOptions) (forge.Review, []store
 	}
 	review := forge.Review{Body: opts.Body, Event: event}
 
+	me := a.Author(ctx)
 	var included []store.Comment
 	var skipped []string
 	for _, c := range comments {
-		if c.Remote != "" {
+		if c.Remote != "" || !c.Author.PostsAs(me) {
 			continue
 		}
 		// A review comment must anchor to a line in the diff; a file-level note

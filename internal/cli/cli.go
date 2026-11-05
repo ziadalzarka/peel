@@ -95,6 +95,7 @@ func commands() []command {
 		{"comment", "comment <list|add|rm|resolve|clear>", "read and write review comments", runComment},
 		{"hunks", "hunks list [--json]", "list hunks and whether they are staged", runHunks},
 		{"fold", "fold <add|list|rm|clear>", "mark lines for review mode to collapse", runFold},
+		{"goto", "goto <file>[:<line>]", "move an open review UI to a place in the diff", runGoto},
 		{"walkthrough", "walkthrough [--regen]", "generate or show the AI narrative", runWalkthrough},
 		{"pr", "pr <view|submit>", "inspect a pull request or post a review to it", runPR},
 		{"providers", "providers", "list the AI and forge providers and their status", runProviders},
@@ -327,7 +328,8 @@ generated file: peel fold add --author claude --file F [--line N --end-line M]
 [--label TEXT]. With no --line it hides the whole file. The A key in the review UI
 switches between review mode, which shows other people's comments and collapses
 folds, and the full diff without them. Folds follow their code when lines move,
-and stop hiding it when it is rewritten. A commented line is never hidden.
+and stop hiding it when it is rewritten. A commented line is never hidden. With
+--pr they apply to the pull request, and stop hiding once a new commit is pushed.
 
 Staging is available in the review UI, not on the command line: peel does not
 expose index writes to scripts or agents, which can already run git add.

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 	"sort"
 )
 
@@ -42,14 +43,15 @@ func (s *ReviewStore) Path() string { return s.path }
 // Target returns the review the file holds.
 func (s *ReviewStore) Target() string { return s.target }
 
-// Comments, Folds, Viewed, Views and Walkthroughs are the five faces of the
-// same file, one per thing the rest of peel asks a store for.
+// Comments, Folds, Viewed, Views, Walkthroughs and Hidden are the six faces of
+// the same file, one per thing the rest of peel asks a store for.
 
 func (s *ReviewStore) Comments() CommentStore         { return reviewComments{s} }
 func (s *ReviewStore) Folds() FoldStore               { return reviewFolds{s} }
 func (s *ReviewStore) Viewed() ViewedStore            { return reviewViewed{s} }
 func (s *ReviewStore) Views() ViewStore               { return reviewViews{s} }
 func (s *ReviewStore) Walkthroughs() WalkthroughCache { return reviewWalkthroughs{s} }
+func (s *ReviewStore) Hidden() HiddenRunStore         { return reviewHidden{s} }
 
 // reviewFile is the on-disk shape: everything one review is, under a version so
 // the format can change later without silently misreading an older file.
@@ -62,6 +64,7 @@ type reviewFile struct {
 	View        View            `json:"view"`
 	Walkthrough *Walkthrough    `json:"walkthrough,omitempty"`
 	Imported    map[string]bool `json:"imported,omitempty"`
+	Hidden      []HiddenRun     `json:"hidden,omitempty"`
 }
 
 // read loads the file, treating a missing one as a review nobody has read yet.
@@ -113,6 +116,58 @@ func (s *ReviewStore) mutate(apply func(*reviewFile) error) error {
 	f.Version, f.Target = currentVersion, s.target
 	sortComments(f.Comments)
 	return writeJSONFile(s.path, "review", f)
+}
+
+type reviewHidden struct{ s *ReviewStore }
+
+func (r reviewHidden) List(f HiddenFilter) ([]HiddenRun, error) {
+	file, err := r.s.read()
+	if err != nil {
+		return nil, err
+	}
+	return filterRuns(file.Hidden, f), nil
+}
+
+func (r reviewHidden) Add(run HiddenRun) (HiddenRun, error) {
+	run, err := prepareRun(run, r.s.params)
+	if err != nil {
+		return HiddenRun{}, err
+	}
+	err = r.s.mutate(func(f *reviewFile) error {
+		run.ID = uniqueRunID(f.Hidden, r.s.newID)
+		f.Hidden = append(f.Hidden, run)
+		sortRuns(f.Hidden)
+		return nil
+	})
+	if err != nil {
+		return HiddenRun{}, err
+	}
+	return run, nil
+}
+
+func (r reviewHidden) Remove(id string) error {
+	return r.s.mutate(func(f *reviewFile) error {
+		next, err := removeRun(f.Hidden, id)
+		if err != nil {
+			return err
+		}
+		f.Hidden = next
+		return nil
+	})
+}
+
+func (r reviewHidden) Clear(filter HiddenFilter) (int, error) {
+	removed := 0
+	err := r.s.mutate(func(f *reviewFile) error {
+		kept := slices.DeleteFunc(f.Hidden, filter.matches)
+		removed = len(f.Hidden) - len(kept)
+		f.Hidden = kept
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return removed, nil
 }
 
 // reviewComments is the file's comments, as a CommentStore.

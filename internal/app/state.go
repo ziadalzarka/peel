@@ -56,6 +56,7 @@ func (a *App) reviewState(target string) State {
 		Viewed:       review.Viewed(),
 		Views:        review.Views(),
 		Walkthroughs: review.Walkthroughs(),
+		Hidden:       review.Hidden(),
 	}
 }
 

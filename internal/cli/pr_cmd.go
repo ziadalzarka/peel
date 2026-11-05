@@ -135,7 +135,7 @@ func prSubmit(ctx context.Context, c *CLI, args []string) error {
 		Event:        reviewEvent,
 		ResolveAfter: !*keep,
 	}
-	preview, err := a.PreviewSubmission(s, opts)
+	preview, err := a.PreviewSubmission(ctx, s, opts)
 	if err != nil {
 		return err
 	}

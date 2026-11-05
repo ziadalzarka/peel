@@ -517,6 +517,16 @@ file viewed in part is drawn as two halves, `viewed` and `not viewed yet`, with 
 `●` in the tree. `u` unmarks a file, `a` and `U` mark and unmark everything, and
 `z` takes a mark back. `space` only folds: a file folded away is not viewed.
 
+Review mode works here too. An agent can leave notes and mark lines to collapse
+with `peel --pr <ref> comment add` and `peel --pr <ref> fold add`, and `A` switches
+them on and off as it does on the working tree. A pull request has no copy on disk
+to follow, so a fold stops hiding as soon as a new commit is pushed. `P` only posts
+your own notes: a note signed by an agent stays here unless you write it again.
+
+`peel --pr <ref> goto <file>:<line>` moves a review already open on that pull
+request to that line, opening whatever is hiding it, or the next review opened
+within 30 seconds. `peel goto <file>:<line>` does the same for the working tree.
+
 What is viewed is kept in the pull request's review file, one entry per hunk,
 named by what the hunk says rather than where it sits. So when the author pushes
 again, a hunk they did not touch stays viewed even if it has moved down the file,
@@ -555,6 +565,8 @@ peel fold add --file F --line N --end-line M --label "..." --author claude
 peel fold add --file F --author claude  # the whole file
 peel fold list --json                   # where each run is now, and which stopped hiding
 peel fold clear --author claude         # its own, never the user's
+peel --pr <ref> fold add --file F --author claude  # the same on a pull request
+peel goto F:N                           # move the open review UI to a line
 peel walkthrough                        # the cached narrative, as markdown
 ```
 

@@ -24,9 +24,6 @@ func runFold(ctx context.Context, c *CLI, args []string) error {
 	if !ok {
 		return usageErrorf("unknown fold subcommand %q; want one of %s", args[0], strings.Join(sorted(keysOf(subs)), ", "))
 	}
-	if c.pr != "" {
-		return usageErrorf("peel fold only works on the working tree, not on a pull request")
-	}
 	return run(ctx, c, args[1:])
 }
 
@@ -115,12 +112,13 @@ func foldRemove(ctx context.Context, c *CLI, args []string) error {
 	if len(args) == 0 {
 		return usageErrorf("fold rm needs at least one fold id")
 	}
-	a, _, err := c.openSession(ctx)
+	a, s, err := c.openSession(ctx)
 	if err != nil {
 		return err
 	}
+	hidden := a.StateFor(s).Hidden
 	for _, id := range args {
-		if err := a.Local.Hidden.Remove(id); err != nil {
+		if err := hidden.Remove(id); err != nil {
 			return err
 		}
 		fmt.Fprintf(c.Stdout, "removed %s\n", id)
@@ -140,11 +138,11 @@ func foldClear(ctx context.Context, c *CLI, args []string) error {
 		return err
 	}
 
-	a, _, err := c.openSession(ctx)
+	a, s, err := c.openSession(ctx)
 	if err != nil {
 		return err
 	}
-	n, err := a.Local.Hidden.Clear(filter)
+	n, err := a.StateFor(s).Hidden.Clear(filter)
 	if err != nil {
 		return err
 	}

@@ -190,6 +190,7 @@ type edit struct {
 // fakeBackend records every call so tests can assert on what the UI asked for
 // rather than on what git did with it.
 type fakeBackend struct {
+	jump     store.Jump
 	session  *app.Session
 	comments []store.Comment
 
@@ -351,6 +352,10 @@ func (f *fakeBackend) SetResolved(id string, resolved bool) error {
 
 func (f *fakeBackend) HiddenRuns(context.Context) ([]store.HiddenRun, error) {
 	return f.runs, nil
+}
+
+func (f *fakeBackend) PendingJump() (store.Jump, error) {
+	return f.jump, nil
 }
 
 func (f *fakeBackend) StoredComments() ([]store.Comment, error) {
