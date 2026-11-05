@@ -44,11 +44,14 @@ type Model struct {
 	ctx     context.Context
 	backend Backend
 
-	session  *app.Session
-	comments []store.Comment
-	// othersHidden keeps the notes anyone else signed out of the diff, leaving the
-	// reviewer's own. It is a display change and nothing else: what is hidden is
-	// still in the store, and `A` puts it back.
+	session    *app.Session
+	comments   []store.Comment
+	hiddenRuns []store.HiddenRun
+	openRuns   map[string]bool
+	// othersHidden is review mode switched off: the notes anyone else signed are
+	// out of the diff, leaving the reviewer's own, and nothing is collapsed. It is
+	// a display change and nothing else: what is hidden is still in the store, and
+	// `A` puts it back.
 	othersHidden bool
 	me           store.Author
 	doc          Document
@@ -288,6 +291,8 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 		input:        newInput(cfg.theme),
 		walkFolded:   map[int]bool{},
 		commentFolds: map[string]bool{},
+		hiddenRuns:   loadHiddenRuns(ctx, backend),
+		openRuns:     map[string]bool{},
 		moves:        cfg.moves.OrDefault(),
 		stageMode:    cfg.stageMode.OrDefault(),
 		me:           cfg.me,
@@ -357,7 +362,7 @@ func (m *Model) restoreOthersHidden() {
 		m.err = err
 		return
 	}
-	m.othersHidden = hidden && len(m.others(m.comments)) > 0
+	m.othersHidden = hidden && (len(m.others(m.comments)) > 0 || m.activeRuns() > 0)
 }
 
 func (m *Model) restoreDescriptionFold() {
@@ -998,6 +1003,8 @@ type spot struct {
 	// of the two headings rather than in the diff under them.
 	side        store.Origin
 	description bool
+	run         string
+	first       int
 }
 
 // spot records where the cursor is, so a rebuild can put it back.
@@ -1022,6 +1029,14 @@ func (m *Model) spot() spot {
 			at.under, at.over = m.doc.StackedAround(row)
 		}
 		row = m.doc.AnchorOf(row)
+	}
+	if hidden := m.doc.HiddenAt(row); hidden >= 0 {
+		ref := m.doc.HiddenRows[hidden]
+		at.run, at.first = ref.RunID, ref.First
+		if ref.Hunk >= 0 {
+			at.hunk, at.line = m.doc.Hunks[ref.Hunk].ID, ref.First
+		}
+		return at
 	}
 	if side := m.doc.SideAt(row); side >= 0 {
 		at.side = m.doc.Sides[side].Origin()
@@ -1064,7 +1079,17 @@ func (m *Model) moveToSpot(at spot) {
 		}
 	}
 	hunk := m.findHunk(at.hunk)
+	if at.run != "" {
+		if row := m.doc.RowOfHidden(at.run, hunk, at.first); row >= 0 {
+			m.moveTo(row)
+			return
+		}
+	}
 	if row := m.doc.RowOfLine(hunk, at.line); row >= 0 {
+		m.moveTo(row)
+		return
+	}
+	if row := m.doc.RowHiding(hunk, at.line); row >= 0 {
 		m.moveTo(row)
 		return
 	}
@@ -1219,9 +1244,10 @@ func (m *Model) stageAt() tea.Cmd {
 	}
 	before, view := file.Entry, m.viewport()
 	folded := m.collapsed[path]
+	hiddenLines := m.doc.hiddenInFile(m.doc.FileAt(m.cursor))
 	show := func() {
 		m.session = restaged(m.session, true, only(path))
-		m.status = t.staged + " " + path
+		m.status = withHiddenLines(t.staged+" "+path, hiddenLines)
 		m.foldStaged(path)
 	}
 	staged := m.stagedFolds[path]
@@ -1285,7 +1311,7 @@ func (m *Model) stageHunkAt() tea.Cmd {
 		m.staged = lastStage{}
 		return m.stageAt()
 	}
-	if file.Entry.Untracked || onlyHunkInTheFile(file.Entry) {
+	if file.Entry.Untracked || onlyHunkInTheFile(file.Entry) || file.Hidden {
 		return m.stageAt()
 	}
 	if !m.canStage() {
@@ -1299,6 +1325,10 @@ func (m *Model) stageHunkAt() tea.Cmd {
 
 	m.staged = lastStage{path: path, at: m.now()}
 	before, view := file.Entry, m.viewport()
+	hiddenLines := 0
+	if at := m.findHunk(id); at >= 0 {
+		hiddenLines = m.doc.Hunks[at].HiddenLines
+	}
 	show := func() {
 		// There is always work left over: a file whose work was one hunk went in
 		// as the file above, so what is being patched here had at least two.
@@ -1307,7 +1337,7 @@ func (m *Model) stageHunkAt() tea.Cmd {
 			m.session = session
 			m.carryOnInside(path)
 		}
-		m.status = t.staged + " one hunk of " + path
+		m.status = withHiddenLines(t.staged+" one hunk of "+path, hiddenLines)
 	}
 	back := func(m *Model) {
 		m.session = withEntry(m.session, before)
@@ -1728,6 +1758,10 @@ func (a anchor) rangeEnd() int {
 // screen of its own: what is being commented on stays in front of the reviewer
 // while they write about it.
 func (m *Model) openComment() {
+	if at := m.doc.HiddenAt(m.cursor); at >= 0 && m.doc.HiddenRows[at].Hunk >= 0 {
+		m.status = "space opens these lines, then c comments on one of them"
+		return
+	}
 	got, ok := m.anchorAt()
 	if !ok {
 		m.status = "nothing to comment on here"
@@ -2227,17 +2261,13 @@ func (m *Model) copyComments() tea.Cmd {
 // sitting in it. Nothing is written: `X` is the one that deletes.
 func (m *Model) toggleOthers() {
 	n := len(m.others(m.comments))
-	if n == 0 {
+	if n == 0 && m.activeRuns() == 0 {
 		m.status = "no comments by others"
 		return
 	}
 	m.setOthersHidden(!m.othersHidden)
 	m.relayout()
-	if m.othersHidden {
-		m.status = plural(n, "comment") + " by others hidden"
-		return
-	}
-	m.status = plural(n, "comment") + " by others shown"
+	m.status = m.reviewModeStatus(n)
 }
 
 // setOthersHidden takes everyone else's notes out of the diff or puts them
@@ -2461,12 +2491,13 @@ func load(ctx context.Context, backend Backend, note string) tea.Msg {
 	if err != nil {
 		return errMsg{err}
 	}
-	return loadedMsg{session: session, comments: comments, note: note}
+	return loadedMsg{session: session, comments: comments, runs: loadHiddenRuns(ctx, backend), note: note}
 }
 
 type loadedMsg struct {
 	session  *app.Session
 	comments []store.Comment
+	runs     []store.HiddenRun
 	note     string
 	// poll marks a load nobody asked for, which may be dropped.
 	poll bool
@@ -2569,7 +2600,8 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 	treeMoved := fingerprint != m.fingerprint
 	m.session = msg.session
 	m.comments = msg.comments
-	if m.othersHidden && len(m.others(m.comments)) == 0 {
+	m.hiddenRuns = msg.runs
+	if m.othersHidden && len(m.others(m.comments)) == 0 && m.activeRuns() == 0 {
 		m.setOthersHidden(false)
 	}
 	// The copies the code around the hunks is read out of are left up while the
@@ -2659,7 +2691,8 @@ func (m *Model) acceptPoll(msg loadedMsg) bool {
 	if msg.drawn != m.drawn.Load() {
 		return false
 	}
-	return fingerprintOf(msg.session) != m.fingerprint || !sameComments(msg.comments, m.comments)
+	return fingerprintOf(msg.session) != m.fingerprint || !sameComments(msg.comments, m.comments) ||
+		!sameRuns(msg.runs, m.hiddenRuns)
 }
 
 func (m *Model) pollNote(treeMoved bool, before []store.Comment) string {
@@ -2668,6 +2701,9 @@ func (m *Model) pollNote(treeMoved bool, before []store.Comment) string {
 	}
 	arrived := newComments(before, m.comments)
 	if len(arrived) == 0 {
+		if sameComments(before, m.comments) {
+			return "reloaded — the hidden lines changed"
+		}
 		return "reloaded — the comments changed"
 	}
 	note := plural(len(arrived), "new comment")
@@ -2791,7 +2827,7 @@ func (m *Model) rebuild() {
 	m.doc = Build(m.session, m.visibleComments(), m.collapsed, m.layout,
 		WithGroups(m.groups()), WithDraft(m.draft()), WithSideFolds(m.sideFolds),
 		WithPaneWidth(m.diffWidth()), WithExpansion(m.expansion()), WithCommentFolds(m.commentFolds),
-		WithDescriptionFolded(m.descFolded))
+		WithDescriptionFolded(m.descFolded), WithHiddenRuns(m.runsInForce(), m.openRuns))
 	m.fileRows = fileTree(m.doc.Files)
 	if m.cursor >= m.doc.Len() {
 		m.cursor = m.doc.LastStop()
@@ -2850,6 +2886,11 @@ func (m *Model) fileIndex(path string) int {
 func (m *Model) toggleCollapse() {
 	if at := m.doc.ExpandAt(m.cursor); at >= 0 {
 		m.expandAt(at)
+		return
+	}
+	if at := m.doc.HiddenAt(m.cursor); at >= 0 {
+		what, back, forth := m.toggleRun(at)
+		m.hist.add(drawn(what, back, forth))
 		return
 	}
 	what, back, forth, ok := m.foldAt()

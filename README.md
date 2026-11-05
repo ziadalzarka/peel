@@ -135,6 +135,7 @@ repository changes.
 | `b` | hide or show the file tree, giving the diff the whole width |
 | `space` | fold away the file, the half already staged, a walkthrough note, a comment or a pull request's description — or open it again |
 | `space` on a `▴`/`▾` row | read in twenty more lines of the code the diff left out |
+| `space` on a hidden row | open those lines, and hide them again on the next press |
 | `s` | stage the file the cursor is in, folding it away and moving to the next |
 | `S` | switch `s` between the whole file and the hunk the cursor is in |
 | `s` (by hunk) | stage that hunk, moving to the next one still out of the index |
@@ -148,7 +149,8 @@ repository changes.
 | `e` | edit a comment of your own, where it stands |
 | `x` / `D` | resolve, folding the comment to one line / delete the comment at the cursor |
 | `C` | copy the threads you have an open comment in as text, to paste into an agent |
-| `A` / `X` | hide the comments anyone else left / delete every one of them |
+| `A` | switch review mode: comments from others and collapsed lines, or the full diff with neither |
+| `X` | delete every comment anyone else left |
 | `P` | post the review to the pull request: a summary, then approve / request changes / comment |
 | `\` | toggle unified and side-by-side |
 | `w` / `W` | walkthrough on-off / regenerate it |
@@ -260,14 +262,58 @@ still say `user:` for yours and `agent:` for an agent's.
 Only your own notes are yours to lose, so everyone else's are kept apart — `A`
 takes every note not signed by you out of the diff and puts them back, a display
 change that deletes nothing, and `X` deletes every one of them at once, after
-asking. Neither can reach a note you wrote, and nothing anyone else writes
+asking. `A` also opens or closes the lines an agent collapsed: see
+[Review mode](#review-mode). Neither can reach a note you wrote, and nothing anyone else writes
 replaces one: comments are only ever appended.
 
 Which of the two `A` was left on is remembered between runs, with the rest of
 that review's state — `.git/peel/view.json` for the working tree — so a diff you
 read without everyone else's notes does not have them back the next morning. The
 header says `others hidden` for as long as it is, and a review with no notes but
-yours in it opens plain whatever was written down — there is nothing to take out.
+yours and nothing collapsed opens plain whatever was written down — there is
+nothing to take out.
+
+### Review mode
+
+An agent can mark lines you probably do not need to read, with `peel fold add`.
+A test's bodies are the usual case: collapse them and its `should reject ...`
+lines read as a list. A generated file such as `openapi-public.json` can collapse
+whole.
+
+```text
+  3 +should reject empty
+    ▸ 2 lines hidden by claude — test bodies
+  6 +end
+```
+
+| `A` | What you see |
+|---|---|
+| on | comments from others, and marked lines collapsed to one row each |
+| off | the full diff, with no comments from others and nothing collapsed |
+
+`space` on a row opens that one run and leaves the others closed. `z` takes that
+back. The header counts what is still hidden, and so does the heading of each hunk
+that has some. Opening a run lasts until you quit.
+
+Three rules decide what may stay hidden:
+
+- **Rewritten code comes back.** Each run follows its code when lines move above
+  it. If a line inside it is rewritten, or code is added in the middle, the run
+  stops hiding anything. A run on a whole file stops as soon as the file changes.
+  If peel cannot tell where the code went, it also stops hiding.
+- **A commented line always shows.** A comment inside a run splits it into two
+  rows with the commented line between them. A whole-file run with comments on
+  lines collapses each stretch around those lines instead of the whole file.
+- **A merge conflict always shows.**
+
+A collapsed row belongs to its hunk, so staging does not change. `s` by hunk on
+the row stages the whole hunk, hidden lines included, and the status line says how
+many there were. On a whole-file row, `s` stages the file. To comment on a hidden
+line, open the run first.
+
+Line numbers in a run count the file on disk, so in a file that is part staged
+only the unstaged half collapses. Pull requests have no runs, since the code is
+not on disk to follow.
 
 ### Opening a file
 
@@ -496,6 +542,10 @@ peel --rev HEAD~2 hunks list --json     # the same, measured from an older base
 peel comment list --json                # what the user wrote while reading
 peel comment add --file F --line N --body "..." --author claude
 peel comment clear --author claude      # its own review, never the user's
+peel fold add --file F --line N --end-line M --label "..." --author claude
+peel fold add --file F --author claude  # the whole file
+peel fold list --json                   # where each run is now, and which stopped hiding
+peel fold clear --author claude         # its own, never the user's
 peel walkthrough                        # the cached narrative, as markdown
 ```
 

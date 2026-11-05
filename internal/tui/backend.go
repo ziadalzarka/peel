@@ -32,6 +32,7 @@ type Backend interface {
 	EditComment(id, body string) error
 	RemoveComment(ctx context.Context, id string) error
 	SetResolved(id string, resolved bool) error
+	HiddenRuns(ctx context.Context) ([]store.HiddenRun, error)
 
 	// IndexTree records the index as it stands, and RestoreIndex puts it back to
 	// a tree recorded that way — refusing when the index is not the one the
@@ -198,6 +199,10 @@ func (b *appBackend) keepAnchors(ctx context.Context) error {
 		return nil
 	}
 	return b.app.KeepAnchors(ctx)
+}
+
+func (b *appBackend) HiddenRuns(ctx context.Context) ([]store.HiddenRun, error) {
+	return b.app.HiddenRuns(ctx, b.session, store.HiddenFilter{})
 }
 
 func (b *appBackend) StoredComments() ([]store.Comment, error) {

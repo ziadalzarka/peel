@@ -94,6 +94,7 @@ func commands() []command {
 	return []command{
 		{"comment", "comment <list|add|rm|resolve|clear>", "read and write review comments", runComment},
 		{"hunks", "hunks list [--json]", "list hunks and whether they are staged", runHunks},
+		{"fold", "fold <add|list|rm|clear>", "mark lines for review mode to collapse", runFold},
 		{"walkthrough", "walkthrough [--regen]", "generate or show the AI narrative", runWalkthrough},
 		{"pr", "pr <view|submit>", "inspect a pull request or post a review to it", runPR},
 		{"providers", "providers", "list the AI and forge providers and their status", runProviders},
@@ -320,6 +321,13 @@ Comments are signed with a name. The review UI signs yours with git config
 peel.author, or your gh login when that is unset. On the command line pass
 --author, e.g. peel comment add --author claude; without it a note is signed
 unknown. peel comment add -h lists every flag.
+
+Folds are lines an agent marks as not worth reading, such as a test's body or a
+generated file: peel fold add --author claude --file F [--line N --end-line M]
+[--label TEXT]. With no --line it hides the whole file. The A key in the review UI
+switches between review mode, which shows other people's comments and collapses
+folds, and the full diff without them. Folds follow their code when lines move,
+and stop hiding it when it is rewritten. A commented line is never hidden.
 
 Staging is available in the review UI, not on the command line: peel does not
 expose index writes to scripts or agents, which can already run git add.

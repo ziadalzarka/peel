@@ -25,6 +25,7 @@ type State struct {
 	Viewed       store.ViewedStore
 	Views        store.ViewStore
 	Walkthroughs store.WalkthroughCache
+	Hidden       store.HiddenRunStore
 }
 
 // StateFor returns the state of what s is reviewing. A nil session, or one with

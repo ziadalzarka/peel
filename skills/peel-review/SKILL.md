@@ -1,6 +1,6 @@
 ---
 name: peel-review
-description: Reads and annotates a peel diff review — lists hunks and their staged state, leaves inline review comments the user sees in the TUI, and generates a walkthrough of a changeset. Use when the user is reviewing a diff with peel, asks for a code review of their working tree, or wants comments left on specific lines.
+description: Reads and annotates a peel diff review — lists hunks and their staged state, leaves inline review comments the user sees in the TUI, marks lines that review mode collapses, and generates a walkthrough of a changeset. Use when the user is reviewing a diff with peel, asks for a code review of their working tree, or wants comments left on specific lines.
 ---
 
 # Peel Review
@@ -22,7 +22,8 @@ and needs nothing else running.
 1. peel hunks list --json                # what changed, and what is already staged
 2. read the actual code with your normal tools
 3. peel comment add ...                  # one note per thing worth saying
-4. peel comment list --json              # confirm what the user will see
+4. peel fold add ...                     # optional: lines the user does not need to read
+5. peel comment list --json              # confirm what the user will see
 ```
 
 ## peel never stages
@@ -199,10 +200,69 @@ Nothing you write can overwrite a user comment — `add` always appends a new on
 comments and does not say whose, clear yours and say so; if they meant all of
 them, that is a second, deliberate command naming their author.
 
-The user has the same distinction in the TUI: `A` hides every comment not signed
-with their name, yours included, and `X` deletes every one of those after asking. A review of yours that
+The user has the same distinction in the TUI: `A` turns off review mode, which
+hides every comment not signed with their name, yours included, and opens every
+fold. `X` deletes every one of those comments after asking. A review of yours that
 is in their way is one keypress from being gone, so leaving fewer, better notes
 is worth more than covering everything.
+
+## Collapse what does not need reading
+
+A fold marks lines for review mode to collapse, so the user reads what matters and
+opens the rest when they want it. Use it for a test's bodies, so its case names
+read as a list, or for a generated file. peel understands no language: you decide
+which lines, and you pass the numbers.
+
+```bash
+peel fold add --author claude --file <path> --line <n> [--end-line <n>] [--label "<short text>"] [--json]
+peel fold add --author claude --file <path> [--label "<short text>"] [--json]   # the whole file
+peel fold list [--json] [--file <path>] [--author <name>]
+peel fold rm <id>...
+peel fold clear --author claude
+```
+
+- The lines shown collapse to one row, with the count, your name and `--label`:
+  `▸ 12 lines hidden by claude — request setup`. Keep the label to a few words
+  that say what is inside; that row is all the user sees.
+- **Always pass `--author claude`,** for the same reason as on a comment.
+- **Only clear your own.** `peel fold clear` with no flags removes the user's
+  folds and any other agent's too.
+- `--line` is read against the file on disk at that moment, the same as for a
+  comment. Numbers from before an edit point at the wrong code, so fold after your
+  last edit, or re-read the file first.
+- Adding the same lines again under the same author replaces the old fold, so
+  running a review again does not pile up duplicates.
+- `--file` must have changes in the review. A fold on a file with no changes, a
+  merge conflict, or a line past the end of the file is refused. So are line
+  numbers on a binary file or a deleted file; both can be folded whole.
+- Folds work under `--rev` and refuse `--pr`.
+
+`fold list --json` returns `id`, `file`, `line` (`0` for the whole file), `author`,
+`createdAt`, and, when they apply, `endLine`, `label`, `movedFrom` and `outdated`.
+Numbers are worked out fresh on every call, so **re-run `fold list` after you edit
+a file**.
+
+- `"movedFrom": 42` means the fold was added on line 42 and its code now sits at
+  `line`. Nothing to do.
+- `"outdated": true` means the code inside the fold was rewritten, code was added
+  in the middle of it, or peel could not tell. A whole-file fold is outdated as
+  soon as the file changes. **An outdated fold hides nothing**, because changed
+  code the user has not seen must never stay hidden. Read the code again and add
+  a new fold if it still applies, and remove the old one with `peel fold rm <id>`.
+
+What the user sees:
+
+- `A` switches review mode. On: your comments show and your folds are collapsed.
+  Off: the full diff with no comments from anyone else. Review mode is on unless
+  they turned it off.
+- `space` on a row opens that one run and leaves the others closed.
+- A commented line is never hidden. A comment inside a fold splits the fold into
+  two rows with the commented line between them.
+- Hidden lines still belong to their hunk. `s` on a hunk stages all of it,
+  collapsed lines included, and peel says how many were hidden. So never fold code
+  to get it past the user: anything that needs a decision belongs in a comment.
+- The staged half of a part-staged file stays visible, since line numbers count
+  the file on disk.
 
 ## Walkthrough
 
@@ -282,3 +342,8 @@ Your job is to say the things the user would not spot themselves.
   `claude` or `codex` for walkthroughs, `gh` for pull requests.
 - **"comment add needs --file"** / **"needs --body, or text on stdin"** — the
   anchor and the body are both required.
+- **"has no changes in ..., so there is nothing to hide"** — the file is not in
+  this review. Run `peel hunks list` to see what is, and add `--rev` if the code is
+  already committed.
+- **"peel fold only works on the working tree"** — folds are not available with
+  `--pr`.

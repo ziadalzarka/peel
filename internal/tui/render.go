@@ -129,6 +129,8 @@ func (r *Renderer) Row(d Document, i int, st RowState) string {
 		return r.side(d, row, st)
 	case RowExpand:
 		return r.expand(d, row, st)
+	case RowHidden:
+		return r.hidden(d, row, st)
 	case RowNote:
 		return r.note(row, st)
 	case RowComment:
@@ -288,6 +290,9 @@ func (r *Renderer) hunk(d Document, row Row, st RowState) string {
 	// change has to say what it is on its own.
 	if origin := r.hunkOrigin(d, ref); origin != "" {
 		head += "  " + origin
+	}
+	if ref.HiddenLines > 0 {
+		head += "  " + r.theme.Dim.Render(fmt.Sprintf("%d of %s hidden", ref.HiddenLines, plural(realLines(ref.Hunk.Lines), "line")))
 	}
 	return r.fit(head)
 }

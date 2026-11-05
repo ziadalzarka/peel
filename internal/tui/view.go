@@ -108,7 +108,10 @@ func (m *Model) headerView() string {
 	// Hidden notes are said to be hidden, so a diff someone else has commented on
 	// does not read as one it has not.
 	if m.othersHidden {
-		right = append([]string{m.theme.Partial.Render("others hidden")}, right...)
+		right = append([]string{m.theme.Partial.Render(m.othersHiddenLabel())}, right...)
+	}
+	if m.doc.HiddenLines > 0 {
+		right = append([]string{m.theme.Partial.Render(plural(m.doc.HiddenLines, "line") + " hidden")}, right...)
 	}
 	if n := len(m.visibleComments()); n > 0 {
 		right = append([]string{m.theme.Comment.Render(plural(n, "comment"))}, right...)
@@ -169,7 +172,11 @@ func (m *Model) hints() string {
 		if m.session != nil && m.session.PR != nil {
 			hints += " · P post review"
 		}
-		return hints + " · ? help · q quit"
+		hints += " · ? help · q quit"
+		if m.activeRuns() > 0 {
+			hints = "A review mode · " + hints
+		}
+		return hints
 	}
 }
 
@@ -356,7 +363,7 @@ func (m *Model) helpBindings() []binding {
 		{"b", "hide or show the file tree, giving the diff the whole width"},
 		{"g / G", "first / last row — cmd+↑ / cmd+↓ too, where the terminal sends them"},
 		{"ctrl+d / ctrl+u", "half a page down / up"},
-		{"space", "fold a file, a " + t.staged + " half, a walkthrough note, a comment or the description away — or, on a ▴/▾ row, read in more code"},
+		{"space", "fold a file, a " + t.staged + " half, a walkthrough note, a comment or the description away — on a ▴/▾ row, read in more code; on a row of hidden lines, open or close that run"},
 		stage,
 		{"S", t.switchHelp},
 		{"u", t.unstageHelp},
@@ -369,7 +376,7 @@ func (m *Model) helpBindings() []binding {
 		{"x / D", "resolve, folding it to one line, or reopen / delete the comment at the cursor"},
 		{"C", "copy the threads you have an open comment in as text, to paste into an agent"},
 		{"drag", "sweep the mouse over the screen to select text — letting go copies it"},
-		{"A", "hide or show the comments anyone else left, leaving your own"},
+		{"A", "review mode on or off: on shows the comments anyone else left and collapses the lines they marked; off is the full diff without those comments"},
 		{"X", "delete every comment anyone else left — it asks first"},
 		{"P", "post the review to the pull request: a summary, then approve / request changes / comment"},
 		{`\`, "toggle unified and side-by-side"},

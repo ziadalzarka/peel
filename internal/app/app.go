@@ -314,5 +314,6 @@ func localState(stateDir string, opts []store.Option) State {
 		Walkthroughs: store.NewJSONWalkthroughCache(filepath.Join(stateDir, "walkthrough.json")),
 		Folds:        store.NewJSONFoldStore(filepath.Join(stateDir, "folds.json")),
 		Views:        store.NewJSONViewStore(filepath.Join(stateDir, "view.json")),
+		Hidden:       store.NewJSONHiddenRunStore(filepath.Join(stateDir, "hidden.json"), opts...),
 	}
 }

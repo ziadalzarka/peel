@@ -75,6 +75,7 @@ const (
 	RowDescription
 	RowDescriptionText
 	RowDescriptionEdge
+	RowHidden
 )
 
 // Row is one rendered line of the document.
@@ -107,6 +108,7 @@ type Row struct {
 	Noted bool
 	Text  string
 	Head  bool
+	Run   int
 }
 
 // HunkRef is one addressable hunk within the document.
@@ -124,6 +126,7 @@ type HunkRef struct {
 	// header of a run of hunks git named alike — so the header has nothing left
 	// to add by repeating it.
 	SectionShown bool
+	HiddenLines  int
 	markdown     *markdownHunk
 	shared       bool
 }
@@ -179,6 +182,7 @@ type FileRef struct {
 	// were left on it before its changes went. It has no diff, so there is
 	// nothing under it to stage and nothing but the notes to read.
 	Orphan bool
+	Hidden bool
 }
 
 // StepRef is one walkthrough group as the document lays it out.
@@ -232,6 +236,8 @@ type buildConfig struct {
 	expand       Expansion
 	commentFolds map[string]bool
 	description  bool
+	runs         []store.HiddenRun
+	openRuns     map[string]bool
 }
 
 // BuildOption customises how a document is laid out.
@@ -307,6 +313,10 @@ type Document struct {
 	expand       Expansion
 	commentFolds map[string]bool
 	viewing      bool
+	HiddenRows   []HiddenRef
+	HiddenLines  int
+	runs         []store.HiddenRun
+	openRuns     map[string]bool
 }
 
 func (d Document) CommentFolded(c store.Comment) bool {
@@ -323,7 +333,8 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 		opt(&cfg)
 	}
 	doc := Document{Comments: comments, Layout: layout, Draft: cfg.draft, DraftRow: -1,
-		pane: cfg.pane, expand: cfg.expand, commentFolds: cfg.commentFolds}
+		pane: cfg.pane, expand: cfg.expand, commentFolds: cfg.commentFolds,
+		runs: cfg.runs, openRuns: cfg.openRuns}
 	if s == nil {
 		return doc
 	}
@@ -618,6 +629,18 @@ func (d *Document) addBody(fi int, entry git.FileEntry, idx *commentIndex, folds
 			Text: conflictNote(entry)})
 	}
 
+	wholeInHunks := false
+	if run := d.fileRun(entry); run >= 0 {
+		wholeInHunks = idx.hasLineNotes(entry.Path)
+		if !wholeInHunks {
+			d.addHiddenFile(fi, entry, run)
+			if !d.runOpen(run) {
+				d.Files[fi].Hidden = true
+				return
+			}
+		}
+	}
+
 	if entry.IsBinary() {
 		d.add(Row{Kind: RowNote, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1,
 			Text: "binary file — no diff to show"})
@@ -640,7 +663,7 @@ func (d *Document) addBody(fi int, entry git.FileEntry, idx *commentIndex, folds
 				continue
 			}
 		}
-		d.addHunks(fi, entry, side, si, idx)
+		d.addHunks(fi, entry, side, si, idx, wholeInHunks)
 	}
 
 	// A file with nothing to show says so — unless what it has is only hidden,
@@ -696,7 +719,7 @@ func sideFolded(e git.FileEntry, s side, folds map[string]bool) bool {
 // like any other context. What is still hidden is marked instead: a row under
 // the hunk above the run, a row over the hunk below it, and `space` on either
 // opens that end.
-func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *commentIndex) {
+func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *commentIndex, wholeInHunks bool) {
 	gaps := gapsOf(FileSide{Path: entry.Path, Staged: s.staged}, s.diff.Hunks, s.diff.ID, d.expand)
 	count := len(s.diff.Hunks)
 
@@ -741,14 +764,26 @@ func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *co
 		// code it is about to show will be.
 		d.addExpand(fi, gaps, i, count, gaps.above)
 		pairs := pairLines(shown.Lines, d.Layout)
+		hides := d.hiddenPairs(d.Hunks[hi], pairs, idx, wholeInHunks)
+		drawnAt := func(pi int) bool {
+			return hides == nil || hides[pi] < 0 || d.runOpen(hides[pi])
+		}
 		for pi, pair := range pairs {
+			if hides != nil && hides[pi] >= 0 {
+				if pi == 0 || hides[pi-1] != hides[pi] {
+					d.addHiddenSegment(fi, hi, pairs, hides, pi)
+				}
+				if !drawnAt(pi) {
+					continue
+				}
+			}
 			table := md.tableOf(lineOf(pair))
-			if table >= 0 && (pi == 0 || md.tableOf(lineOf(pairs[pi-1])) != table) {
+			if table >= 0 && (pi == 0 || !drawnAt(pi-1) || md.tableOf(lineOf(pairs[pi-1])) != table) {
 				d.addTableEdge(fi, hi, lineOf(pair), true)
 			}
 			d.add(Row{Kind: RowLine, File: fi, Hunk: hi, Left: pair.left, Right: pair.right, Step: -1, Side: -1, Expand: -1,
 				Noted: idx.covers(d.Hunks[hi], pair)})
-			if table >= 0 && (pi+1 == len(pairs) || md.tableOf(lineOf(pairs[pi+1])) != table) {
+			if table >= 0 && (pi+1 == len(pairs) || !drawnAt(pi+1) || md.tableOf(lineOf(pairs[pi+1])) != table) {
 				d.addTableEdge(fi, hi, lineOf(pair), false)
 			}
 			d.addComments(fi, hi, idx.takeLine(d.Hunks[hi], pair))
@@ -1145,7 +1180,7 @@ func (d Document) endsLeap(row int) bool {
 		return false
 	}
 	switch d.Rows[row].Kind {
-	case RowFile, RowSide, RowStep, RowExpand:
+	case RowFile, RowSide, RowStep, RowExpand, RowHidden:
 		return true
 	case RowComment:
 		return d.Rows[row].Head
@@ -1536,7 +1571,7 @@ func (d Document) HunkTargetAt(row int) (HunkRef, bool) {
 	}
 	r := d.Rows[row]
 	switch r.Kind {
-	case RowHunk, RowLine, RowComment:
+	case RowHunk, RowLine, RowComment, RowHidden:
 	default:
 		return HunkRef{}, false
 	}
@@ -1677,6 +1712,34 @@ func (x *commentIndex) takeLine(ref HunkRef, pair linePair) []int {
 		}
 		return pairHolds(ref, pair, c.Side, hangsOn(c.Line, c.EndLine))
 	})
+}
+
+func (x *commentIndex) touches(ref HunkRef, pair linePair) bool {
+	for _, i := range x.byFile[ref.Path] {
+		c := x.comments[i]
+		if c.Line <= 0 || !sameOrigin(c.Origin, ref) {
+			continue
+		}
+		if c.Outdated {
+			if c.NearestLine > 0 && pairHolds(ref, pair, c.Side, c.NearestLine) {
+				return true
+			}
+			continue
+		}
+		if pairWithin(ref, pair, c) {
+			return true
+		}
+	}
+	return false
+}
+
+func (x *commentIndex) hasLineNotes(path string) bool {
+	for _, i := range x.byFile[path] {
+		if x.comments[i].Line > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // covers reports that some saved note was written about this displayed pair.

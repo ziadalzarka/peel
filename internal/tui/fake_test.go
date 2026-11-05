@@ -228,6 +228,8 @@ type fakeBackend struct {
 	descriptionFolded      bool
 	descriptionFoldedSaves int
 
+	runs []store.HiddenRun
+
 	added    []store.Comment
 	edited   []edit
 	removed  []string
@@ -345,6 +347,10 @@ func (f *fakeBackend) SetResolved(id string, resolved bool) error {
 		}
 	}
 	return nil
+}
+
+func (f *fakeBackend) HiddenRuns(context.Context) ([]store.HiddenRun, error) {
+	return f.runs, nil
 }
 
 func (f *fakeBackend) StoredComments() ([]store.Comment, error) {

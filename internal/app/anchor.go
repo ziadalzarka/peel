@@ -158,10 +158,16 @@ type anchorKey struct {
 // Best effort: a note peel cannot work out is left exactly as stored, which is
 // how every note behaved before anchors existed.
 func (a *App) Relocate(ctx context.Context, s *Session, comments []store.Comment) []store.Comment {
+	out, _ := a.relocate(ctx, s, comments)
+	return out
+}
+
+func (a *App) relocate(ctx context.Context, s *Session, comments []store.Comment) ([]store.Comment, []bool) {
+	worked := make([]bool, len(comments))
 	// A pull request is not in this working tree, so nothing can have moved
 	// under it and there is no local copy to diff against.
 	if s == nil || s.PR != nil || len(comments) == 0 {
-		return comments
+		return comments, worked
 	}
 
 	// Only the files this review is about are worth asking git about. A note on a
@@ -226,6 +232,7 @@ func (a *App) Relocate(ctx context.Context, s *Session, comments []store.Comment
 		if !ok {
 			continue
 		}
+		worked[i] = true
 
 		// Line stays where it was written when the code is gone: there is no
 		// current line to name, and the number it was written at is the only
@@ -244,7 +251,7 @@ func (a *App) Relocate(ctx context.Context, s *Session, comments []store.Comment
 			c.EndLine = end
 		}
 	}
-	return out
+	return out, worked
 }
 
 // lineMaps answers, for every snapshot some note is measured from, how numbering
@@ -424,6 +431,15 @@ func (a *App) KeepAnchors(ctx context.Context) error {
 	for _, c := range all {
 		if c.Blob != "" {
 			blobs = append(blobs, c.Blob)
+		}
+	}
+	runs, err := a.Local.Hidden.List(store.HiddenFilter{})
+	if err != nil {
+		return err
+	}
+	for _, r := range runs {
+		if !r.WholeFile() {
+			blobs = append(blobs, r.Blob)
 		}
 	}
 	return a.Repo.KeepAnchors(ctx, blobs)

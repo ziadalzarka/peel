@@ -142,6 +142,7 @@ it doesn't get relitigated.
 | **peel says when it is out of date** | one line on the way out — the release and `brew upgrade ziadalzarka/tap/peel` — checked at most once a day, off with `PEEL_NO_UPDATE_CHECK` | Added 2026-08-05. Brew only upgrades what someone asks it to, so a reviewer who installed peel once stays on that version until they think to check, and nothing in a local tool ever prompts the thought. The cost has to be nothing: the request goes out while the review is open and is spoken about only after peel has quit, so it is never between the reviewer and the diff, and quitting waits a fraction of a second for it at most. It is the only thing peel sends anywhere without being asked, which is why it is one unauthenticated GET to the releases API, cached in the user's cache directory for a day — failures cached too, so a machine with no network asks once a day rather than every run — and silent about everything except a version newer than the running one. A build from a checkout is never checked: its version does not parse as a release, and whoever built it does not need telling about brew |
 
 | **Go to a file by name** | `cmd+p`, in the terminals that report the key, over the files already in the diff | Added 2026-08-05. A review knows which file it is about to look at more often than it knows how far down the diff that file is, and the tree on the left is a map to scroll against rather than a list to ask. So the search names what is under review and nothing else — not the repository — and goes to the file the way `opt+↓` does, leaving a folded one folded: the fold is what says a file was dealt with, and opening one quietly would put a diff back on screen that had been read. It draws over the foot of the diff rather than on a screen of its own, so what is being searched is still in front of the reviewer. `ctrl+p` opened it too at first, as the binding that arrives whatever the terminal does — revised 2026-08-06 to `cmd+p` alone. It is the key an editor uses, which is the whole reason the search is worth having under a chord rather than a letter, and the hand goes to it without being told; a second key for the same thing is another row of the help screen saying what the first one said, and the one nobody presses. The cost is the same one `cmd`+`↑`/`↓` already pay: a terminal that keeps `cmd` to itself is a terminal with no way to open the search, where before there was one |
+| **Review mode collapses lines an agent marked** | `peel fold add` stores a run of lines, or a whole file, in `.git/peel/hidden.json`. With `A` on, each run collapses to one row inside its hunk; with `A` off the diff is complete, with no comments from others | Added 2026-11-05. An agent reviewing a change often knows which lines are not worth reading, such as a test's bodies under its case names or a generated file, and hiding them is more useful than saying so in a note. peel takes line numbers and understands no language. Runs are stored the same way as notes, with a frozen copy of the file, so they follow their code. Anything that cannot be shown to be unchanged stops hiding: a rewrite inside the run, an insertion in the middle, a missing copy, a git failure, a changed file under a whole-file run. A commented line and a merge conflict are never hidden. `s` is unchanged and stages the whole hunk, so the row sits inside its hunk and the status line counts the hidden lines. Numbering always means the file on disk, so a part-staged file only collapses its unstaged half, and a pull request has no runs. Which runs are open is not saved: a new session starts collapsed. Chosen over CLI staging and a record of who staged what, because reading less is what was wanted, and the decision to stage stays with the person reading |
 
 Deferred, not rejected: jj/Sapling support; web frontend (keep `internal/git`
 UI-agnostic so it stays possible).
@@ -338,6 +339,10 @@ peel comment add --author claude --file F --line N --summary "..."   # agent lea
 peel comment rm <id>
 peel comment clear [--author claude]                # its own review, not the user's
 peel hunks list [--json]                     # read-only: what's staged / not
+peel fold add --author claude --file F [--line N --end-line M] [--label "..."]   # collapse in review mode
+peel fold list [--json] [--author claude]    # where each run is now, and which stopped hiding
+peel fold rm <id>
+peel fold clear --author claude              # its own runs, not the user's
 peel walkthrough [--regen]                   # cached markdown narrative
 peel --rev <ref> <any of the above>          # measured from an older base
 ```
@@ -583,7 +588,7 @@ that report one; `h`/`l` are the path that always works.
 | `x` | resolve or reopen the comment at the cursor; resolving folds it to its first line |
 | `D` | delete the comment at the cursor |
 | `C` | copy the threads you have an open comment in as text, to paste into an agent |
-| `A` | hide or show the comments anyone else left, leaving the reviewer's own |
+| `A` | switch review mode: the comments anyone else left and the collapsed runs, or the full diff with neither. The reviewer's own comments stay |
 | `X` | delete every comment anyone else left, after asking |
 | `\` | toggle unified ↔ side-by-side |
 | `w` | walkthrough on / off |
