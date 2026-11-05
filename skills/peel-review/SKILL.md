@@ -221,9 +221,10 @@ peel fold rm <id>...
 peel fold clear --author claude
 ```
 
-- The lines shown collapse to one row, with the count, your name and `--label`:
-  `▸ 12 lines hidden by claude — request setup`. Keep the label to a few words
-  that say what is inside; that row is all the user sees.
+- The lines shown collapse to one row with the count: `▸ 12 lines hidden`. Folds
+  next to each other share a row, even across hunks, and a hunk that starts hidden
+  draws no heading. Your name and `--label` show only when the cursor is on the
+  row, so keep the label to a few words that say what is inside.
 - **Always pass `--author claude`,** for the same reason as on a comment.
 - **Only clear your own.** `peel fold clear` with no flags removes the user's
   folds and any other agent's too.
@@ -255,11 +256,12 @@ What the user sees:
 - `A` switches review mode. On: your comments show and your folds are collapsed.
   Off: the full diff with no comments from anyone else. Review mode is on unless
   they turned it off.
-- `space` on a row opens that one run and leaves the others closed.
+- `space` on a row opens everything it hides and leaves the other rows closed.
 - A commented line is never hidden. A comment inside a fold splits the fold into
   two rows with the commented line between them.
 - Hidden lines still belong to their hunk. `s` on a hunk stages all of it,
-  collapsed lines included, and peel says how many were hidden. So never fold code
+  collapsed lines included, and peel says how many were hidden. A row that covers
+  several hunks stages the first of them. So never fold code
   to get it past the user: anything that needs a decision belongs in a comment.
 - The staged half of a part-staged file stays visible, since line numbers count
   the file on disk.

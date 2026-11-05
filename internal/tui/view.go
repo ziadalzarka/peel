@@ -363,7 +363,7 @@ func (m *Model) helpBindings() []binding {
 		{"b", "hide or show the file tree, giving the diff the whole width"},
 		{"g / G", "first / last row — cmd+↑ / cmd+↓ too, where the terminal sends them"},
 		{"ctrl+d / ctrl+u", "half a page down / up"},
-		{"space", "fold a file, a " + t.staged + " half, a walkthrough note, a comment or the description away — on a ▴/▾ row, read in more code; on a row of hidden lines, open or close that run"},
+		{"space", "fold a file, a " + t.staged + " half, a walkthrough note, a comment or the description away — on a ▴/▾ row, read in more code; on a row of hidden lines, open or close those lines"},
 		stage,
 		{"S", t.switchHelp},
 		{"u", t.unstageHelp},

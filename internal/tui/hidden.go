@@ -101,15 +101,34 @@ func (d *Document) addHiddenFile(fi int, entry git.FileEntry, run int) {
 func (d *Document) addHiddenRow(fi, hi, run, lines, first, last int) {
 	r := d.runs[run]
 	open := d.runOpen(run)
+	row := len(d.Rows)
+	joined := !open && d.closedRowAt(row-1)
+	if joined {
+		row--
+	}
 	ri := len(d.HiddenRows)
 	d.HiddenRows = append(d.HiddenRows, HiddenRef{
 		RunID: r.ID, Label: r.Label, Author: r.Author,
-		File: fi, Hunk: hi, Lines: lines, First: first, Last: last, Open: open, Row: len(d.Rows),
+		File: fi, Hunk: hi, Lines: lines, First: first, Last: last, Open: open, Row: row,
 	})
-	d.add(Row{Kind: RowHidden, File: fi, Hunk: hi, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1, Run: ri})
+	if !joined {
+		d.add(Row{Kind: RowHidden, File: fi, Hunk: hi, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1, Run: ri})
+	}
 	if !open {
 		d.HiddenLines += lines
 	}
+}
+
+func (d Document) closedRowAt(row int) bool {
+	return row >= 0 && row < len(d.Rows) && d.Rows[row].Kind == RowHidden && !d.HiddenRows[d.Rows[row].Run].Open
+}
+
+func (d Document) hiddenOnRow(at int) []HiddenRef {
+	end := at + 1
+	for end < len(d.HiddenRows) && d.HiddenRows[end].Row == d.HiddenRows[at].Row {
+		end++
+	}
+	return d.HiddenRows[at:end]
 }
 
 func (d *Document) addHiddenSegment(fi, hi int, pairs []linePair, hides []int, from int) {
@@ -229,31 +248,53 @@ func pairLineCount(lines []git.Line, pair linePair) int {
 }
 
 func (r *Renderer) hidden(d Document, row Row, st RowState) string {
-	ref := d.HiddenRows[row.Run]
+	refs := d.hiddenOnRow(row.Run)
 	style := r.theme.Note
+	text := hiddenText(refs)
 	if st.Cursor {
 		style = r.theme.Cursor
+		text += hiddenDetail(refs)
 	}
-	return r.fit(r.marker(st) + codeIndent(d.Layout) + style.Render(hiddenText(ref)))
+	return r.fit(r.marker(st) + codeIndent(d.Layout) + style.Render(text))
 }
 
-func hiddenText(ref HiddenRef) string {
-	arrow, what := "▸", plural(ref.Lines, "line")+" hidden"
-	if ref.Open {
-		arrow, what = "▾", plural(ref.Lines, "line")
+func hiddenText(refs []HiddenRef) string {
+	lines := hiddenLineCount(refs)
+	open := refs[0].Open
+	arrow, what := "▸", plural(lines, "line")+" hidden"
+	if open {
+		arrow, what = "▾", plural(lines, "line")
 	}
-	if ref.Lines == 0 {
+	if lines == 0 {
 		what = "file hidden"
-		if ref.Open {
+		if open {
 			what = "file"
 		}
 	}
-	text := arrow + " " + what
-	if ref.Author != "" && ref.Author != store.AuthorUnknown {
-		text += " by " + string(ref.Author)
+	return arrow + " " + what
+}
+
+func hiddenLineCount(refs []HiddenRef) int {
+	lines := 0
+	for _, ref := range refs {
+		lines += ref.Lines
 	}
-	if ref.Label != "" {
-		text += " — " + ref.Label
+	return lines
+}
+
+func hiddenDetail(refs []HiddenRef) string {
+	first := refs[0]
+	for _, ref := range refs[1:] {
+		if ref.Author != first.Author || ref.Label != first.Label {
+			return ""
+		}
+	}
+	text := ""
+	if first.Author != "" && first.Author != store.AuthorUnknown {
+		text += " by " + string(first.Author)
+	}
+	if first.Label != "" {
+		text += " — " + first.Label
 	}
 	return text
 }
@@ -290,25 +331,36 @@ func (m *Model) runsInForce() []store.HiddenRun {
 }
 
 func (m *Model) toggleRun(at int) (what string, back, forth func(*Model)) {
-	ref := m.doc.HiddenRows[at]
+	refs := m.doc.hiddenOnRow(at)
+	ref, lines := refs[0], hiddenLineCount(refs)
+	ids := make([]string, 0, len(refs))
+	for _, r := range refs {
+		ids = append(ids, r.RunID)
+	}
 	view := m.viewport()
 	was := m.openRuns[ref.RunID]
-	setFlag(m.openRuns, ref.RunID, true, !was)
+	setRunsOpen(m.openRuns, ids, !was)
 	m.rebuild()
 	if row := m.doc.RowOfHidden(ref.RunID, ref.Hunk, ref.First); row >= 0 {
 		m.moveTo(row)
 	}
-	what = "hiding " + plural(ref.Lines, "line") + " again"
+	what = "hiding " + plural(lines, "line") + " again"
 	if !was {
-		what = "opening " + plural(ref.Lines, "line")
+		what = "opening " + plural(lines, "line")
 	}
 	m.status = what
-	return what, runFold(ref.RunID, was, view), runFold(ref.RunID, !was, m.viewport())
+	return what, runFold(ids, was, view), runFold(ids, !was, m.viewport())
 }
 
-func runFold(id string, open bool, v viewport) func(*Model) {
+func setRunsOpen(into map[string]bool, ids []string, open bool) {
+	for _, id := range ids {
+		setFlag(into, id, true, open)
+	}
+}
+
+func runFold(ids []string, open bool, v viewport) func(*Model) {
 	return func(m *Model) {
-		setFlag(m.openRuns, id, true, open)
+		setRunsOpen(m.openRuns, ids, open)
 		m.rebuild()
 		m.putViewport(v)
 	}

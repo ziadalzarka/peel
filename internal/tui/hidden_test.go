@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -84,7 +85,7 @@ func TestARunCollapsesToOneRowInsideItsHunk(t *testing.T) {
 	wantShown(t, m, "should reject empty", "end", "should reject duplicate", "bodyB1")
 
 	text := hiddenRowText(t, m, 0)
-	for _, want := range []string{"▸", "2 lines hidden", "by claude", bodiesLabel} {
+	for _, want := range []string{"▸", "2 lines hidden"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("row = %q, want it to mention %q", text, want)
 		}
@@ -123,7 +124,7 @@ func TestTheHunkHeaderAndTheScreenSayHowMuchIsHidden(t *testing.T) {
 func TestARunWithNoAuthorOrLabelSaysOnlyTheCount(t *testing.T) {
 	_, m := casesModel(t, store.HiddenRun{ID: "a", File: "cases_test.go", Line: 4, Author: store.AuthorUnknown})
 
-	text := hiddenRowText(t, m, 0)
+	text := ansi.Strip(m.renderer.Row(m.doc, m.doc.HiddenRows[0].Row, RowState{Cursor: true}))
 	if !strings.Contains(text, "1 line hidden") || strings.Contains(text, "unknown") || strings.Contains(text, "—") {
 		t.Errorf("row = %q", text)
 	}
@@ -308,8 +309,7 @@ func TestAWholeFileRunCollapsesTheFile(t *testing.T) {
 
 	wantHidden(t, m, "new")
 	wantShown(t, m, "func One")
-	text := hiddenRowText(t, m, 0)
-	if !strings.Contains(text, "3 lines hidden") || !strings.Contains(text, "generated") {
+	if text := hiddenRowText(t, m, 0); !strings.Contains(text, "3 lines hidden") {
 		t.Errorf("row = %q", text)
 	}
 
@@ -545,13 +545,13 @@ func TestAPollPicksUpANewRunAndARewriteUnhidesIt(t *testing.T) {
 	poll(t, m)
 
 	wantHidden(t, m, "println(1)")
-	wantShown(t, m, "the call")
+	wantShown(t, m, "▸")
 
 	repo.Write("main.go", "package main\n\nfunc main() { println(2) }\n")
 	poll(t, m)
 
 	wantShown(t, m, "println(2)")
-	wantHidden(t, m, "the call")
+	wantHidden(t, m, "▸")
 }
 
 func TestAPollFollowsARunWhenLinesAreAddedAbove(t *testing.T) {
@@ -564,6 +564,231 @@ func TestAPollFollowsARunWhenLinesAreAddedAbove(t *testing.T) {
 
 	wantShown(t, m, "// top")
 	wantHidden(t, m, "println(1)")
+}
+
+func contextDoc(t *testing.T, open map[string]bool, runs ...store.HiddenRun) Document {
+	t.Helper()
+	return Build(newSession(t, contextDiff), nil, nil, LayoutUnified,
+		WithExpansion(expansionOf(nil)), WithHiddenRuns(runs, open))
+}
+
+func wideRun(id string, line, end int) store.HiddenRun {
+	return store.HiddenRun{ID: id, File: "wide.go", Line: line, EndLine: end, Label: "test code", Author: "claude"}
+}
+
+func rowKinds(doc Document) []RowKind {
+	kinds := make([]RowKind, 0, len(doc.Rows))
+	for _, r := range doc.Rows {
+		kinds = append(kinds, r.Kind)
+	}
+	return kinds
+}
+
+func wantKinds(t *testing.T, doc Document, want ...RowKind) {
+	t.Helper()
+	if got := rowKinds(doc); !slices.Equal(got, want) {
+		t.Errorf("rows = %v, want %v", got, want)
+	}
+}
+
+func drawnRow(doc Document, row int, st RowState) string {
+	return strings.TrimSpace(ansi.Strip(plainRenderer(70).Row(doc, row, st)))
+}
+
+func TestOneRowStandsBetweenVisibleLinesAcrossHunksAndGaps(t *testing.T) {
+	doc := contextDoc(t, nil, wideRun("a", 2, 8), wideRun("b", 47, 49), wideRun("c", 51, 53))
+
+	wantKinds(t, doc, RowFile, RowHidden, RowLine, RowLine, RowHidden, RowBlank)
+	if got, want := drawnRow(doc, 1, RowState{}), "▸ 11 lines hidden"; got != want {
+		t.Errorf("first row = %q, want %q", got, want)
+	}
+	if got, want := drawnRow(doc, 4, RowState{}), "▸ 3 lines hidden"; got != want {
+		t.Errorf("last row = %q, want %q", got, want)
+	}
+	if doc.HiddenLines != 14 {
+		t.Errorf("HiddenLines = %d, want 14", doc.HiddenLines)
+	}
+}
+
+func TestARowSaysOnlyTheCountUntilTheCursorIsOnIt(t *testing.T) {
+	doc := contextDoc(t, nil, wideRun("a", 2, 8), wideRun("b", 47, 49))
+
+	if got, want := drawnRow(doc, 1, RowState{}), "▸ 11 lines hidden"; got != want {
+		t.Errorf("row = %q, want %q", got, want)
+	}
+	if got := drawnRow(doc, 1, RowState{Cursor: true}); !strings.Contains(got, "by claude — test code") {
+		t.Errorf("the cursor row = %q, want who hid the lines and why", got)
+	}
+}
+
+func TestARowOverRunsThatDisagreeNamesNeither(t *testing.T) {
+	other := wideRun("b", 47, 49)
+	other.Label = "fixtures"
+	doc := contextDoc(t, nil, wideRun("a", 2, 8), other)
+
+	if got, want := drawnRow(doc, 1, RowState{Cursor: true}), "▸ 11 lines hidden"; !strings.Contains(got, want) ||
+		strings.Contains(got, "claude") || strings.Contains(got, "fixtures") {
+		t.Errorf("the cursor row = %q, want only %q", got, want)
+	}
+}
+
+func TestAHiddenHunkLeavesTheGapRowsOfVisibleCodeAlone(t *testing.T) {
+	first := contextDoc(t, nil, wideRun("a", 2, 8))
+	wantKinds(t, first, RowFile, RowHidden, RowHunk, RowExpand,
+		RowLine, RowLine, RowLine, RowLine, RowLine, RowLine, RowLine, RowLine, RowExpand, RowBlank)
+
+	second := contextDoc(t, nil, wideRun("b", 47, 53))
+	wantKinds(t, second, RowFile, RowHunk, RowExpand,
+		RowLine, RowLine, RowLine, RowLine, RowLine, RowLine, RowLine, RowLine, RowHidden, RowBlank)
+}
+
+func TestAnOpenRunDrawsItsHunkAsUsual(t *testing.T) {
+	doc := contextDoc(t, map[string]bool{"a": true}, wideRun("a", 2, 8))
+
+	wantKinds(t, doc, RowFile, RowHunk, RowExpand, RowHidden,
+		RowLine, RowLine, RowLine, RowLine, RowLine, RowLine, RowLine, RowLine, RowExpand,
+		RowHunk, RowExpand,
+		RowLine, RowLine, RowLine, RowLine, RowLine, RowLine, RowLine, RowLine, RowExpand, RowBlank)
+}
+
+func TestAHeaderThatWasNotDrawnDoesNotTakeTheNameOfTheNextOne(t *testing.T) {
+	const diff = `diff --git a/a.go b/a.go
+index 1111111..2222222 100644
+--- a/a.go
++++ b/a.go
+@@ -1,1 +1,1 @@ func One
+-a
++b
+@@ -9,1 +9,1 @@ func One
+-c
++d
+`
+	runs := []store.HiddenRun{{ID: "a", File: "a.go", Line: 1, Author: "claude"}}
+	doc := Build(newSession(t, diff), nil, nil, LayoutUnified, WithHiddenRuns(runs, nil))
+
+	row := doc.RowOfHunk(1)
+	if doc.Rows[row].Kind != RowHunk {
+		t.Fatalf("the second hunk has no header: %v", rowKinds(doc))
+	}
+	if got := drawnRow(doc, row, RowState{}); !strings.Contains(got, "func One") {
+		t.Errorf("header = %q, want the name no earlier header gave", got)
+	}
+}
+
+func TestAHunkWithNoHeaderIsFoundAtItsRow(t *testing.T) {
+	doc := contextDoc(t, nil, wideRun("a", 2, 8), wideRun("b", 47, 53))
+
+	if doc.RowOfHunk(0) != 1 || doc.RowOfHunk(1) != 1 {
+		t.Errorf("RowOfHunk = %d and %d, want the shared row at 1", doc.RowOfHunk(0), doc.RowOfHunk(1))
+	}
+}
+
+func TestAWholeFileRowIsNotTakenForAHunk(t *testing.T) {
+	runs := []store.HiddenRun{{ID: "a", File: "wide.go", Author: "claude"}}
+	doc := contextDoc(t, nil, runs...)
+
+	if got := doc.RowOfHunk(-1); got != -1 {
+		t.Errorf("RowOfHunk(-1) = %d, want -1", got)
+	}
+}
+
+func TestSpaceOpensEverythingOnARowAndUndoClosesIt(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoHunkFile))
+	backend.runs = []store.HiddenRun{
+		{ID: "a", File: "list.txt", Line: 3, EndLine: 5, Author: "claude"},
+		{ID: "b", File: "list.txt", Line: 8, EndLine: 9, Author: "claude"},
+	}
+	m := newModel(t, backend)
+
+	if got := m.doc.HiddenRows[0].Row; got != m.doc.HiddenRows[1].Row {
+		t.Fatalf("the runs drew rows %d and %d, want one row", got, m.doc.HiddenRows[1].Row)
+	}
+	wantShown(t, m, "5 lines hidden")
+	wantHidden(t, m, "three", "eight")
+
+	m.moveTo(m.doc.HiddenRows[0].Row)
+	press(t, m, "space")
+	wantShown(t, m, "three", "eight", "nine")
+	if !strings.Contains(m.status, "opening 5 lines") {
+		t.Errorf("status = %q", m.status)
+	}
+	if m.cursor != m.doc.HiddenRows[0].Row {
+		t.Errorf("cursor = %d, want the first open row at %d", m.cursor, m.doc.HiddenRows[0].Row)
+	}
+
+	press(t, m, "z")
+	wantShown(t, m, "5 lines hidden")
+	wantHidden(t, m, "three", "eight")
+}
+
+func TestClosingARunJoinsItToTheRowBesideIt(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoHunkFile))
+	backend.runs = []store.HiddenRun{
+		{ID: "a", File: "list.txt", Line: 3, EndLine: 5, Author: "claude"},
+		{ID: "b", File: "list.txt", Line: 8, EndLine: 9, Author: "claude"},
+	}
+	m := newModel(t, backend)
+	m.moveTo(m.doc.HiddenRows[0].Row)
+	press(t, m, "space")
+	wantShown(t, m, "three", "eight")
+
+	press(t, m, "space")
+	wantHidden(t, m, "three")
+	wantShown(t, m, "eight")
+	if !strings.Contains(m.status, "hiding 3 lines again") {
+		t.Errorf("status = %q", m.status)
+	}
+
+	m.moveTo(m.doc.HiddenRows[1].Row)
+	press(t, m, "space")
+	wantShown(t, m, "5 lines hidden")
+	if m.cursor != m.doc.HiddenRows[1].Row {
+		t.Errorf("cursor = %d, want the joined row at %d", m.cursor, m.doc.HiddenRows[1].Row)
+	}
+}
+
+func TestJStopsOnARowThatTookTheHeadersPlace(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoHunkFile))
+	backend.runs = []store.HiddenRun{{ID: "b", File: "list.txt", Line: 8, EndLine: 9, Author: "claude"}}
+	m := newModel(t, backend)
+
+	row := m.doc.HiddenRows[0].Row
+	m.moveTo(m.doc.RowOfHunk(0))
+	press(t, m, "j")
+	if m.cursor != row {
+		t.Errorf("j went to %d, want the row at %d", m.cursor, row)
+	}
+}
+
+func TestJStepsOverARowInTheMiddleOfAHunk(t *testing.T) {
+	_, m := casesModel(t, bodiesRun())
+
+	if m.doc.IsMark(m.doc.HiddenRows[0].Row) {
+		t.Error("a row with its hunk's header above it should not be a stop for j")
+	}
+}
+
+func TestStagingFromARowOverSeveralHunksTakesTheFirst(t *testing.T) {
+	backend := newFakeBackend(newSession(t, threeHunkFile))
+	backend.runs = []store.HiddenRun{
+		{ID: "a", File: "list.txt", Line: 1, EndLine: 5, Author: "claude"},
+		{ID: "b", File: "list.txt", Line: 8, EndLine: 11, Author: "claude"},
+	}
+	m := newModel(t, backend, WithStageMode(app.StageModeHunk))
+	first := m.doc.Hunks[0].ID
+
+	m.moveTo(m.doc.HiddenRows[0].Row)
+	press(t, m, "s")
+
+	if len(backend.stagedHunks) != 1 || backend.stagedHunks[0] != first {
+		t.Fatalf("staged %v, want only the first hunk %v", backend.stagedHunks, first)
+	}
+	if !strings.Contains(m.status, "including 6 hidden lines") {
+		t.Errorf("status = %q", m.status)
+	}
+	if m.doc.Rows[m.cursor].Kind != RowHidden {
+		t.Errorf("the cursor left the rest of the row: it is on a %v", m.doc.Rows[m.cursor].Kind)
+	}
 }
 
 func addHiddenRun(t *testing.T, repo *gittest.Repo, run store.HiddenRun) {

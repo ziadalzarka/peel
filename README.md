@@ -282,18 +282,26 @@ whole.
 
 ```text
   3 +should reject empty
-    ▸ 2 lines hidden by claude — test bodies
+    ▸ 2 lines hidden
   6 +end
 ```
 
 | `A` | What you see |
 |---|---|
-| on | comments from others, and marked lines collapsed to one row each |
+| on | comments from others, and marked lines collapsed |
 | off | the full diff, with no comments from others and nothing collapsed |
 
-`space` on a row opens that one run and leaves the others closed. `z` takes that
-back. The header counts what is still hidden, and so does the heading of each hunk
-that has some. Opening a run lasts until you quit.
+Two visible lines never have more than one row of hidden lines between them.
+Hidden lines next to each other share a row, even across hunks, and its count is
+the lines of the diff it hides. A hunk that starts hidden draws no heading, and
+code the diff left out next to hidden lines gets no `▴`/`▾` row. Opening the row
+brings them back.
+
+`space` on a row opens everything it hides and leaves the other rows closed. `z`
+takes that back. With the cursor on a row, it also says who hid the lines and why,
+such as `by claude — test bodies`. The header counts what is still hidden, and so
+does the heading of each hunk that still has one. Opening a run lasts until you
+quit.
 
 Three rules decide what may stay hidden:
 
@@ -308,7 +316,8 @@ Three rules decide what may stay hidden:
 
 A collapsed row belongs to its hunk, so staging does not change. `s` by hunk on
 the row stages the whole hunk, hidden lines included, and the status line says how
-many there were. On a whole-file row, `s` stages the file. To comment on a hidden
+many there were. A row that covers several hunks stages the first of them. On a
+whole-file row, `s` stages the file. To comment on a hidden
 line, open the run first.
 
 Line numbers in a run count the file on disk, so in a file that is part staged

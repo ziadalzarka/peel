@@ -732,6 +732,7 @@ func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *co
 	// down the screen once per hunk; the first header answers what the change
 	// sits inside, and the ones under it repeat an answer already read.
 	said := map[string]bool{}
+	endedHidden := false
 	for i, h := range s.diff.Hunks {
 		hi := len(d.Hunks)
 		shown := h
@@ -747,49 +748,62 @@ func (d *Document) addHunks(fi int, entry git.FileEntry, s side, si int, idx *co
 			markdown:     md,
 			shared:       d.viewing,
 		})
-		if h.Section != "" {
-			said[h.Section] = true
-		}
 		above = append(above, shown.Lines...)
 		d.Files[fi].Hunks = append(d.Files[fi].Hunks, hi)
 		if si >= 0 {
 			d.Sides[si].Hunks = append(d.Sides[si].Hunks, hi)
 		}
-		d.add(Row{Kind: RowHunk, File: fi, Hunk: hi, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1})
-		d.addDraft(fi, hi, d.draftOnHunk(d.Hunks[hi]))
 		d.measure(shown.Lines, md)
 
-		// The run above this hunk is marked under its header rather than over it:
-		// the lines it opens arrive directly below, so the row stands where the
-		// code it is about to show will be.
-		d.addExpand(fi, gaps, i, count, gaps.above)
 		pairs := pairLines(shown.Lines, d.Layout)
 		hides := d.hiddenPairs(d.Hunks[hi], pairs, idx, wholeInHunks)
-		drawnAt := func(pi int) bool {
-			return hides == nil || hides[pi] < 0 || d.runOpen(hides[pi])
+		closed := func(pi int) bool {
+			return pi >= 0 && pi < len(hides) && hides[pi] >= 0 && !d.runOpen(hides[pi])
+		}
+		startsHidden := closed(0) && !d.draftOnHunk(d.Hunks[hi])
+		if !startsHidden {
+			if !endedHidden {
+				d.addExpand(fi, gaps, i, count, gaps.below)
+			}
+			if h.Section != "" {
+				said[h.Section] = true
+			}
+			d.add(Row{Kind: RowHunk, File: fi, Hunk: hi, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1})
+			d.addDraft(fi, hi, d.draftOnHunk(d.Hunks[hi]))
+
+			// The run above this hunk is marked under its header rather than over it:
+			// the lines it opens arrive directly below, so the row stands where the
+			// code it is about to show will be.
+			d.addExpand(fi, gaps, i, count, gaps.above)
 		}
 		for pi, pair := range pairs {
 			if hides != nil && hides[pi] >= 0 {
 				if pi == 0 || hides[pi-1] != hides[pi] {
 					d.addHiddenSegment(fi, hi, pairs, hides, pi)
 				}
-				if !drawnAt(pi) {
+				if closed(pi) {
+					if pi == 0 {
+						d.Rows[len(d.Rows)-1].Head = true
+					}
 					continue
 				}
 			}
 			table := md.tableOf(lineOf(pair))
-			if table >= 0 && (pi == 0 || !drawnAt(pi-1) || md.tableOf(lineOf(pairs[pi-1])) != table) {
+			if table >= 0 && (pi == 0 || closed(pi-1) || md.tableOf(lineOf(pairs[pi-1])) != table) {
 				d.addTableEdge(fi, hi, lineOf(pair), true)
 			}
 			d.add(Row{Kind: RowLine, File: fi, Hunk: hi, Left: pair.left, Right: pair.right, Step: -1, Side: -1, Expand: -1,
 				Noted: idx.covers(d.Hunks[hi], pair)})
-			if table >= 0 && (pi+1 == len(pairs) || !drawnAt(pi+1) || md.tableOf(lineOf(pairs[pi+1])) != table) {
+			if table >= 0 && (pi+1 == len(pairs) || closed(pi+1) || md.tableOf(lineOf(pairs[pi+1])) != table) {
 				d.addTableEdge(fi, hi, lineOf(pair), false)
 			}
 			d.addComments(fi, hi, idx.takeLine(d.Hunks[hi], pair))
 			d.addDraft(fi, hi, d.draftOnLine(d.Hunks[hi], pair))
 		}
-		d.addExpand(fi, gaps, i+1, count, gaps.below)
+		endedHidden = closed(len(pairs) - 1)
+	}
+	if !endedHidden {
+		d.addExpand(fi, gaps, count, count, gaps.below)
 	}
 }
 
@@ -1018,7 +1032,7 @@ func (d Document) IsMark(i int) bool {
 	switch d.Rows[i].Kind {
 	case RowFile, RowHunk, RowStep, RowSide, RowDescription:
 		return true
-	case RowComment:
+	case RowComment, RowHidden:
 		return d.Rows[i].Head
 	default:
 		return false
@@ -1229,16 +1243,12 @@ func (d Document) lineBeside(row, dir int) int {
 }
 
 func (d Document) firstChangeRow(hunk int) int {
-	header := -1
 	for i, r := range d.Rows {
-		switch {
-		case r.Kind == RowHunk && r.Hunk == hunk:
-			header = i
-		case r.Kind == RowLine && r.Hunk == hunk && d.changedRow(i):
+		if r.Kind == RowLine && r.Hunk == hunk && d.changedRow(i) {
 			return i
 		}
 	}
-	return header
+	return d.RowOfHunk(hunk)
 }
 
 // StopBetween returns a cursor position within the inclusive row range, or -1
@@ -1415,11 +1425,20 @@ func (d Document) RowOfFile(file int) int {
 	return d.Files[file].Row
 }
 
-// RowOfHunk returns the header row of a hunk, or -1.
+// RowOfHunk returns the header row of a hunk, or the row of hidden lines standing
+// in for it, or -1.
 func (d Document) RowOfHunk(hunk int) int {
+	if hunk < 0 {
+		return -1
+	}
 	for i, r := range d.Rows {
 		if r.Kind == RowHunk && r.Hunk == hunk {
 			return i
+		}
+	}
+	for _, ref := range d.HiddenRows {
+		if ref.Hunk == hunk {
+			return ref.Row
 		}
 	}
 	return -1
