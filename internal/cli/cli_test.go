@@ -1042,6 +1042,36 @@ func TestPRSubmitEvents(t *testing.T) {
 	}
 }
 
+func TestPRSubmitApprovalNeedsNoBody(t *testing.T) {
+	h := newHarness(t)
+	h.dirty()
+
+	out := h.mustRun("pr", "submit", "412", "--yes", "--event", "approve")
+
+	if got := h.forge.submitted[0].Event; got != forge.EventApprove {
+		t.Errorf("Event = %q, want %q", got, forge.EventApprove)
+	}
+	if !strings.Contains(out, "approved ") {
+		t.Errorf("output = %q, want it to say the pull request was approved", out)
+	}
+}
+
+func TestPRSubmitRefusesAnEmptyCommentOrRequestForChanges(t *testing.T) {
+	for _, event := range []string{"comment", "request-changes"} {
+		t.Run(event, func(t *testing.T) {
+			h := newHarness(t)
+			h.dirty()
+
+			if code := h.run("pr", "submit", "412", "--yes", "--event", event); code == 0 {
+				t.Error("an empty review was accepted")
+			}
+			if len(h.forge.submitted) != 0 {
+				t.Errorf("submitted = %v", h.forge.submitted)
+			}
+		})
+	}
+}
+
 func TestPRSubmitUnknownEvent(t *testing.T) {
 	h := newHarness(t)
 	h.dirty()

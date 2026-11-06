@@ -791,6 +791,48 @@ func TestSubmitReviewFileLevelCommentWithBodySucceeds(t *testing.T) {
 	}
 }
 
+func TestSubmitReviewApprovalNeedsNoBodyOrComments(t *testing.T) {
+	f := newFixture(t)
+	f.repo.Write("f.txt", "x\n")
+	f.repo.Commit("base")
+
+	s, _ := f.app.LoadPullRequest(f.ctx, "", "412")
+	if _, err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{Event: forge.EventApprove}); err != nil {
+		t.Fatalf("SubmitReview: %v", err)
+	}
+
+	if len(f.gh.submitted) != 1 || f.gh.submitted[0].Event != forge.EventApprove {
+		t.Fatalf("submitted = %v, want one approval", f.gh.submitted)
+	}
+}
+
+func TestSubmitReviewApprovalLeavesAFileLevelCommentOpen(t *testing.T) {
+	f := newFixture(t)
+	f.repo.Write("f.txt", "x\n")
+	f.repo.Commit("base")
+
+	s, _ := f.app.LoadPullRequest(f.ctx, "", "412")
+	mustAddComment(t, f, store.Comment{File: "pr.go", Body: "general thought", Target: s.Target})
+
+	opts := app.SubmitOptions{Event: forge.EventApprove, ResolveAfter: true}
+	if _, err := f.app.SubmitReview(f.ctx, s, opts); err != nil {
+		t.Fatalf("SubmitReview: %v", err)
+	}
+
+	if len(f.gh.submitted) != 1 || len(f.gh.submitted[0].Comments) != 0 {
+		t.Fatalf("submitted = %v, want one approval with no comments", f.gh.submitted)
+	}
+	filter := s.CommentFilter()
+	filter.Unresolved = true
+	remaining, err := f.app.StateFor(s).Comments.List(filter)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(remaining) != 1 {
+		t.Errorf("%d comments unresolved, want the file-level one still open", len(remaining))
+	}
+}
+
 func TestSubmitReviewNeedsAPullRequest(t *testing.T) {
 	f := newFixture(t)
 	f.repo.Write("f.txt", "x\n")

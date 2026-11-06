@@ -162,7 +162,11 @@ func prSubmit(ctx context.Context, c *CLI, args []string) error {
 	if _, err := a.SubmitReview(ctx, s, opts); err != nil {
 		return err
 	}
-	fmt.Fprintf(c.Stdout, "posted %s to %s\n", plural(len(preview.Comments), "comment"), s.PR.Ref)
+	if preview.Empty() {
+		fmt.Fprintf(c.Stdout, "approved %s\n", s.PR.Ref)
+	} else {
+		fmt.Fprintf(c.Stdout, "posted %s to %s\n", plural(len(preview.Comments), "comment"), s.PR.Ref)
+	}
 	if pr := s.PR; pr.URL != "" {
 		fmt.Fprintln(c.Stdout, pr.URL)
 	}

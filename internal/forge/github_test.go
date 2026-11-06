@@ -289,6 +289,20 @@ func TestSubmitReviewBodyOnly(t *testing.T) {
 	}
 }
 
+func TestSubmitReviewApprovalNeedsNoBody(t *testing.T) {
+	runner := exec.NewFakeRunner().Respond("gh api", "{}")
+
+	err := newGitHub(runner).SubmitReview(context.Background(), Ref{"o", "r", 1},
+		Review{Event: EventApprove})
+	if err != nil {
+		t.Fatalf("SubmitReview: %v", err)
+	}
+
+	if got, want := runner.LastStdin(), `{"event":"APPROVE"}`; got != want {
+		t.Errorf("payload = %s, want %s", got, want)
+	}
+}
+
 func TestSubmitReviewValidation(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -296,6 +310,8 @@ func TestSubmitReviewValidation(t *testing.T) {
 	}{
 		{"unknown event", Review{Body: "x", Event: "MAYBE"}},
 		{"empty review", Review{Event: EventComment}},
+		{"empty request for changes", Review{Event: EventRequestChanges}},
+		{"approval with a comment with no body", Review{Event: EventApprove, Comments: []ReviewComment{{Path: "f.go", Line: 1}}}},
 		{"comment with no path", Review{Event: EventComment, Comments: []ReviewComment{{Line: 1, Body: "x"}}}},
 		{"comment with no body", Review{Event: EventComment, Comments: []ReviewComment{{Path: "f.go", Line: 1}}}},
 		{"comment with no line", Review{Event: EventComment, Comments: []ReviewComment{{Path: "f.go", Body: "x"}}}},

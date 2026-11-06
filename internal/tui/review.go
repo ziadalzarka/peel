@@ -44,7 +44,7 @@ func (m *Model) openReview() {
 	}
 	inline, fileLevel := m.pendingReview()
 	if inline == 0 && fileLevel == 0 {
-		m.status = "no open comments to post — c writes one, or write a summary and post that"
+		m.status = "no open comments to post — c writes one, or write a summary; approve needs neither"
 	}
 
 	m.mode = modeReview
@@ -156,6 +156,9 @@ type postedMsg struct{ note string }
 
 // postedNote is what the footer says once the review has gone.
 func postedNote(review forge.Review, ref string) string {
+	if review.Empty() {
+		return "approved " + ref
+	}
 	return "posted " + carried(review) + " to " + ref + " · " + eventName(review.Event)
 }
 
@@ -220,7 +223,7 @@ func (m *Model) reviewLines(width int) []string {
 	inline, fileLevel := m.pendingReview()
 	count := m.theme.Comment.Render(plural(inline, "comment"))
 	if inline == 0 {
-		count = m.theme.Note.Render("no comments — the summary is the review")
+		count = m.theme.Note.Render("no comments — only approve can go without a summary")
 	}
 	if fileLevel > 0 {
 		count += "  " + m.theme.Partial.Render(plural(fileLevel, "file note")+" cannot be posted inline")

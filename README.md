@@ -547,8 +547,9 @@ approve, `r` request changes, `c` comment — and that choice sends it; `esc` ba
 out instead. What goes is every unresolved note written here, and posting
 resolves them: they are the other side's to answer now. A note left on a file
 rather than a line has nowhere inline to attach, so the panel says it is staying
-behind. `peel pr submit` does the same thing from the command line, and prints
-the whole payload before it asks.
+behind. An approval can go with no summary and no notes; request changes and
+comment need one or the other. `peel pr submit` does the same thing from the
+command line, and prints the whole payload before it asks.
 
 ## For agents
 

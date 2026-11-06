@@ -125,7 +125,7 @@ func (a *App) buildReview(ctx context.Context, s *Session, opts SubmitOptions) (
 		included = append(included, c)
 	}
 
-	if len(skipped) > 0 && len(review.Comments) == 0 && strings.TrimSpace(review.Body) == "" {
+	if len(skipped) > 0 && review.Empty() && event != forge.EventApprove {
 		return forge.Review{}, nil, fmt.Errorf(
 			"nothing to submit: %d file-level comment(s) (%s) cannot be posted inline; add a review body with --body",
 			len(skipped), strings.Join(skipped, ", "))

@@ -127,12 +127,16 @@ type Review struct {
 	Comments []ReviewComment
 }
 
+func (r Review) Empty() bool {
+	return strings.TrimSpace(r.Body) == "" && len(r.Comments) == 0
+}
+
 // Validate reports whether the review can be submitted.
 func (r Review) Validate() error {
 	if !r.Event.Valid() {
 		return fmt.Errorf("unknown review event %q", r.Event)
 	}
-	if strings.TrimSpace(r.Body) == "" && len(r.Comments) == 0 {
+	if r.Empty() && r.Event != EventApprove {
 		return fmt.Errorf("review is empty: needs a body or at least one comment")
 	}
 	for i, c := range r.Comments {

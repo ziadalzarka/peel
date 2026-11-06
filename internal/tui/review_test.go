@@ -152,19 +152,40 @@ func TestPostingNeedsAPullRequest(t *testing.T) {
 
 // A review with nothing in it is refused rather than sent.
 func TestPostingRefusesAnEmptyReview(t *testing.T) {
+	for _, key := range []string{"c", "r"} {
+		t.Run(key, func(t *testing.T) {
+			backend := newFakeBackend(prSession(t))
+			m := newModel(t, backend)
+
+			press(t, m, "P", "enter", key)
+
+			if m.mode != modeBrowse {
+				t.Fatalf("mode = %v, want browse", m.mode)
+			}
+			if m.err == nil {
+				t.Fatal("an empty review was accepted silently")
+			}
+			if len(backend.posted) != 0 {
+				t.Errorf("posted %v", backend.posted)
+			}
+		})
+	}
+}
+
+func TestPostingApprovesWithNoSummaryOrComments(t *testing.T) {
 	backend := newFakeBackend(prSession(t))
 	m := newModel(t, backend)
 
-	press(t, m, "P", "enter", "c")
+	press(t, m, "P", "enter", "a")
 
-	if m.mode != modeBrowse {
-		t.Fatalf("mode = %v, want browse", m.mode)
+	if m.err != nil {
+		t.Fatalf("err = %v", m.err)
 	}
-	if m.err == nil {
-		t.Fatal("an empty review was accepted silently")
+	if len(backend.posted) != 1 || backend.posted[0].Event != forge.EventApprove {
+		t.Fatalf("posted = %v, want one approval", backend.posted)
 	}
-	if len(backend.posted) != 0 {
-		t.Errorf("posted %v", backend.posted)
+	if !strings.Contains(m.status, "approved cli/cli#412") {
+		t.Errorf("status = %q, want it to say the pull request was approved", m.status)
 	}
 }
 
