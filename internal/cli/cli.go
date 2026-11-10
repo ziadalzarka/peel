@@ -95,6 +95,7 @@ func commands() []command {
 		{"comment", "comment <list|add|rm|resolve|clear>", "read and write review comments", runComment},
 		{"hunks", "hunks list [--json]", "list hunks and whether they are staged", runHunks},
 		{"fold", "fold <add|list|rm|clear>", "mark lines for review mode to collapse", runFold},
+		{"replace", "replace --author <name>", "swap one author's comments and folds for the ones on stdin", runReplace},
 		{"goto", "goto <file>[:<line>]", "move an open review UI to a place in the diff", runGoto},
 		{"walkthrough", "walkthrough [--regen]", "generate or show the AI narrative", runWalkthrough},
 		{"pr", "pr <view|submit>", "inspect a pull request or post a review to it", runPR},
@@ -330,6 +331,13 @@ switches between review mode, which shows other people's comments and collapses
 folds, and the full diff without them. Folds follow their code when lines move,
 and stop hiding it when it is rewritten. A commented line is never hidden. With
 --pr they apply to the pull request, and stop hiding once a new commit is pushed.
+
+A tool that rewrites its whole review each time, such as an automatic reviewer,
+can pipe {"comments": [{"file", "line", "endLine", "side", "origin", "body"}],
+"folds": [{"file", "line", "endLine", "label"}]} into peel replace --author NAME.
+That author's comments and folds become exactly those, in one call. The ones
+already there are kept as they are, so an open review UI only redraws when
+something actually changed.
 
 Staging is available in the review UI, not on the command line: peel does not
 expose index writes to scripts or agents, which can already run git add.

@@ -10,20 +10,10 @@ import (
 const deletedFile = "deleted"
 
 func (a *App) AddHiddenRun(ctx context.Context, s *Session, run store.HiddenRun) (store.HiddenRun, error) {
-	entry, ok := s.Entry(run.File)
-	if !ok {
-		return store.HiddenRun{}, fmt.Errorf("%s has no changes in %s, so there is nothing to hide", run.File, s.Title)
-	}
-	if entry.Conflicted {
-		return store.HiddenRun{}, fmt.Errorf("%s is a merge conflict and has to be read, so it cannot be hidden", run.File)
-	}
-
-	run.Origin = store.OriginWorktree
-	blob, err := a.freezeRun(ctx, s, run, entry.IsBinary())
+	run, err := a.prepareHiddenRun(ctx, s, run)
 	if err != nil {
 		return store.HiddenRun{}, err
 	}
-	run.Blob = blob
 
 	existing, err := a.HiddenRuns(ctx, s, store.HiddenFilter{File: run.File, Author: run.Author})
 	if err != nil {
@@ -45,6 +35,24 @@ func (a *App) AddHiddenRun(ctx context.Context, s *Session, run store.HiddenRun)
 		return created, nil
 	}
 	return created, a.KeepAnchors(ctx)
+}
+
+func (a *App) prepareHiddenRun(ctx context.Context, s *Session, run store.HiddenRun) (store.HiddenRun, error) {
+	entry, ok := s.Entry(run.File)
+	if !ok {
+		return store.HiddenRun{}, fmt.Errorf("%s has no changes in %s, so there is nothing to hide", run.File, s.Title)
+	}
+	if entry.Conflicted {
+		return store.HiddenRun{}, fmt.Errorf("%s is a merge conflict and has to be read, so it cannot be hidden", run.File)
+	}
+
+	run.Origin = store.OriginWorktree
+	blob, err := a.freezeRun(ctx, s, run, entry.IsBinary())
+	if err != nil {
+		return store.HiddenRun{}, err
+	}
+	run.Blob = blob
+	return run, nil
 }
 
 func sameRun(old, run store.HiddenRun) bool {

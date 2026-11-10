@@ -43,7 +43,7 @@ func (r HiddenRun) Location() string {
 	}
 }
 
-func (r HiddenRun) validate() error {
+func (r HiddenRun) Validate() error {
 	if strings.TrimSpace(r.File) == "" {
 		return errors.New("fold: file is required")
 	}
@@ -76,6 +76,7 @@ type HiddenRunStore interface {
 	Add(r HiddenRun) (HiddenRun, error)
 	Remove(id string) error
 	Clear(f HiddenFilter) (int, error)
+	Replace(f HiddenFilter, with []HiddenRun) (added, removed int, err error)
 }
 
 type hiddenFile struct {
@@ -133,6 +134,21 @@ func (s *JSONHiddenRunStore) Clear(f HiddenFilter) (int, error) {
 	}
 	return removed, nil
 }
+func (s *JSONHiddenRunStore) Replace(f HiddenFilter, with []HiddenRun) (int, int, error) {
+	added, removed := 0, 0
+	err := s.mutate(func(all []HiddenRun) ([]HiddenRun, error) {
+		next, a, r, err := replaceRuns(all, f, with, s.params)
+		if err != nil {
+			return nil, err
+		}
+		added, removed = a, r
+		return next, nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return added, removed, nil
+}
 
 func (s *JSONHiddenRunStore) read() ([]HiddenRun, error) {
 	b, err := os.ReadFile(s.path)
@@ -178,7 +194,7 @@ func prepareRun(r HiddenRun, p params) (HiddenRun, error) {
 	if r.Author == "" {
 		r.Author = AuthorUnknown
 	}
-	if err := r.validate(); err != nil {
+	if err := r.Validate(); err != nil {
 		return HiddenRun{}, err
 	}
 	if r.CreatedAt.IsZero() {
@@ -195,6 +211,38 @@ func filterRuns(all []HiddenRun, f HiddenFilter) []HiddenRun {
 		}
 	}
 	return out
+}
+func replaceRuns(all []HiddenRun, f HiddenFilter, with []HiddenRun, p params) ([]HiddenRun, int, int, error) {
+	next := make([]HiddenRun, 0, len(all)+len(with))
+	var replaced []HiddenRun
+	for _, r := range all {
+		if f.matches(r) {
+			replaced = append(replaced, r)
+			continue
+		}
+		next = append(next, r)
+	}
+	var added []HiddenRun
+	for _, r := range with {
+		prepared, err := prepareRun(r, p)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if at := slices.IndexFunc(replaced, func(old HiddenRun) bool { return sameFold(old, prepared) }); at >= 0 {
+			next = append(next, replaced[at])
+			replaced = slices.Delete(replaced, at, at+1)
+			continue
+		}
+		prepared.ID = uniqueRunID(slices.Concat(all, added), p.newID)
+		added = append(added, prepared)
+	}
+	return append(next, added...), len(added), len(replaced), nil
+}
+
+func sameFold(a, b HiddenRun) bool {
+	a.ID, a.CreatedAt = "", time.Time{}
+	b.ID, b.CreatedAt = "", time.Time{}
+	return a == b
 }
 
 func removeRun(all []HiddenRun, id string) ([]HiddenRun, error) {

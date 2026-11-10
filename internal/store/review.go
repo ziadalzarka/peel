@@ -170,6 +170,23 @@ func (r reviewHidden) Clear(filter HiddenFilter) (int, error) {
 	return removed, nil
 }
 
+func (r reviewHidden) Replace(f HiddenFilter, with []HiddenRun) (int, int, error) {
+	added, removed := 0, 0
+	err := r.s.mutate(func(file *reviewFile) error {
+		next, a, rm, err := replaceRuns(file.Hidden, f, with, r.s.params)
+		if err != nil {
+			return err
+		}
+		sortRuns(next)
+		file.Hidden, added, removed = next, a, rm
+		return nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return added, removed, nil
+}
+
 // reviewComments is the file's comments, as a CommentStore.
 type reviewComments struct{ s *ReviewStore }
 
@@ -242,6 +259,22 @@ func (r reviewComments) Clear(f Filter) (int, error) {
 		return 0, err
 	}
 	return removed, nil
+}
+
+func (r reviewComments) Replace(f Filter, with []Comment) (int, int, error) {
+	added, removed := 0, 0
+	err := r.s.mutate(func(file *reviewFile) error {
+		next, a, rm, err := replaceComments(file.Comments, f, with, r.s.params)
+		if err != nil {
+			return err
+		}
+		file.Comments, added, removed = next, a, rm
+		return nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return added, removed, nil
 }
 
 // reviewFolds is the file's folds. The file is one review, so the target names

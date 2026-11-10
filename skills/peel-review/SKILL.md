@@ -219,6 +219,7 @@ peel fold add --author claude --file <path> [--label "<short text>"] [--json]   
 peel fold list [--json] [--file <path>] [--author <name>]
 peel fold rm <id>...
 peel fold clear --author claude
+peel replace --author claude [--json] < notes.json   # your whole set of comments and folds at once
 ```
 
 - The lines shown collapse to one row with the count: `▸ 12 lines hidden`. Folds
@@ -228,6 +229,12 @@ peel fold clear --author claude
 - **Always pass `--author claude`,** for the same reason as on a comment.
 - **Only clear your own.** `peel fold clear` with no flags removes the user's
   folds and any other agent's too.
+- **Rewriting your whole review? Use `peel replace`.** It reads
+  `{"comments": [{"file", "line", "endLine", "side", "origin", "body"}], "folds": [{"file", "line", "endLine", "label"}]}`
+  on stdin and makes your comments and folds exactly those, in one call. The ones
+  already there keep their ids, so the open review only redraws for what changed.
+  Clearing and adding one at a time makes it redraw after every write. Anything it
+  cannot place is listed on stderr and the command exits 1; the rest is still saved.
 - `--line` is read against the file on disk at that moment, the same as for a
   comment. Numbers from before an edit point at the wrong code, so fold after your
   last edit, or re-read the file first.

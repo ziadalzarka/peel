@@ -346,6 +346,7 @@ peel fold add --author claude --file F [--line N --end-line M] [--label "..."]  
 peel fold list [--json] [--author claude]    # where each run is now, and which stopped hiding
 peel fold rm <id>
 peel fold clear --author claude              # its own runs, not the user's
+peel replace --author claude < notes.json    # its whole set of comments and folds in one call
 peel walkthrough [--regen]                   # cached markdown narrative
 peel --rev <ref> <any of the above>          # measured from an older base
 ```

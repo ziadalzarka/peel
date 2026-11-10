@@ -163,6 +163,22 @@ func (s *JSONStore) Clear(f Filter) (int, error) {
 	return removed, nil
 }
 
+func (s *JSONStore) Replace(f Filter, with []Comment) (int, int, error) {
+	added, removed := 0, 0
+	err := s.mutate(func(all []Comment) ([]Comment, error) {
+		next, a, r, err := replaceComments(all, f, with, s.params)
+		if err != nil {
+			return nil, err
+		}
+		added, removed = a, r
+		return next, nil
+	})
+	if err != nil {
+		return 0, 0, err
+	}
+	return added, removed, nil
+}
+
 // read loads the store, treating a missing file as empty.
 func (s *JSONStore) read() ([]Comment, error) {
 	b, err := os.ReadFile(s.path)

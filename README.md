@@ -567,6 +567,7 @@ peel fold add --file F --author claude  # the whole file
 peel fold list --json                   # where each run is now, and which stopped hiding
 peel fold clear --author claude         # its own, never the user's
 peel --pr <ref> fold add --file F --author claude  # the same on a pull request
+peel --pr <ref> replace --author claude < notes.json  # all its comments and folds in one call
 peel goto F:N                           # move the open review UI to a line
 peel walkthrough                        # the cached narrative, as markdown
 ```

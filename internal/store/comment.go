@@ -5,6 +5,7 @@ package store
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -301,6 +302,39 @@ func clearComments(all []Comment, f Filter) ([]Comment, int) {
 	return kept, removed
 }
 
+func replaceComments(all []Comment, f Filter, with []Comment, p params) ([]Comment, int, int, error) {
+	next := make([]Comment, 0, len(all)+len(with))
+	var replaced []Comment
+	for _, c := range all {
+		if f.Matches(c) {
+			replaced = append(replaced, c)
+			continue
+		}
+		next = append(next, c)
+	}
+	var added []Comment
+	for _, c := range with {
+		prepared, err := prepareComment(c, p)
+		if err != nil {
+			return nil, 0, 0, err
+		}
+		if at := slices.IndexFunc(replaced, func(old Comment) bool { return sameNote(old, prepared) }); at >= 0 {
+			next = append(next, replaced[at])
+			replaced = slices.Delete(replaced, at, at+1)
+			continue
+		}
+		prepared.ID = uniqueID(slices.Concat(all, added), p.newID)
+		added = append(added, prepared)
+	}
+	return append(next, added...), len(added), len(replaced), nil
+}
+
+func sameNote(a, b Comment) bool {
+	a.ID, a.CreatedAt, a.Resolved = "", time.Time{}, false
+	b.ID, b.CreatedAt, b.Resolved = "", time.Time{}, false
+	return a == b
+}
+
 // uniqueID returns an ID not already present in all.
 func uniqueID(all []Comment, newID func() string) string {
 	taken := make(map[string]bool, len(all))
@@ -332,4 +366,5 @@ type CommentStore interface {
 	// Clear deletes every comment matching the filter and reports how many
 	// were removed.
 	Clear(f Filter) (int, error)
+	Replace(f Filter, with []Comment) (added, removed int, err error)
 }
