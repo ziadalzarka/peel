@@ -16,7 +16,7 @@ a whole directory once every file in it is staged. The footer is the whole
 keymap.
 
 - **Staging is the review.** `s` stages the file you just read and moves to the
-  next one still open, so a pass is `s` after `s`. `S` switches `s` to the hunk,
+  next one with work still out of the index, so a pass is `s` after `s`. `S` switches `s` to the hunk,
   for the file that holds a change you are finished with and one you are not —
   and `s` twice over there takes the whole file.
 - **Comment where the code is.** `c` anywhere — changed line or not — opens the
@@ -415,10 +415,12 @@ it unfolds on its own, on the new work alone — which happens only to a file fo
 because it was staged, never to one you folded by hand.
 
 Staging a file collapses it and moves the cursor down the diff to the next file
-still open, never back to find where you were. A file somebody else staged is a
-stop like any other, since nobody has read its diff here, and `s` on it only
-folds it. A file you folded away is passed over, whatever is left in it. Only
-when nothing below is left does the cursor stay put. The fold is display only:
+with work still out of the index, never back to find where you were. This is the
+same in every mode: file or hunk, the working tree, `--rev` or a pull request,
+where "out of the index" means not yet marked viewed. A file already staged is
+passed over, whoever staged it. A file you folded away with work still left in
+it is a stop, since a fold is where a file is on screen, not whether it is done.
+Only when nothing below is left does the cursor stay put. The fold is display only:
 `space` reads a staged file back without touching the index, and a stage that
 fails leaves the file open, and the cursor on it, because it still has to be
 dealt with.
@@ -436,8 +438,8 @@ if the write fails, the change comes back off and the footer says why. `q`
 straight after `s` waits for that stage to land.
 
 `space` does the same thing without the index. Not every file you read is a file
-to stage — a `--rev` session cannot stage at all, and a working
-tree has files you look at and leave alone — so folding one away moves you on
+to stage — a working tree has files you look at and leave alone — so folding
+one away moves you on
 exactly as staging does. Where there is no index to read that against, the fold
 is what the pass goes by instead: a folded file has been read and an open one has
 not. On the heading of a half it folds that half instead, leaving the rest of the
@@ -447,14 +449,13 @@ Where the cursor lands after either key is yours to set, since a pass that stage
 and a pass that only reads do not always walk the same way:
 
 ```sh
-git config --global peel.afterStage next-open      # the default for staging
-git config --global peel.afterFold next-unstaged   # the default for folding
+git config --global peel.afterStage next-unstaged  # the default, for both
+git config --global peel.afterFold next-open       # the next file still open
 git config --global peel.afterStage stay           # nowhere; stay on the file
 ```
 
 `next-unstaged` is the next file below with work still out of the index, folded
-or not — and the next file still open in a session that cannot stage, which has
-no index to read. `next-open` is the next file below still open whatever the
+or not. `next-open` is the next file below still open whatever the
 index holds, so a file staged outside peel is a stop because its diff has not
 been read here. `stay` leaves the cursor on the file just dealt with. The two
 keys are set separately, and setting either in a repository instead of

@@ -924,8 +924,8 @@ func TestOptionsOverrideDefaults(t *testing.T) {
 	}
 }
 
-// With nothing written, staging carries the pass on to the next file still open,
-// and folding to the next file with work still out of the index.
+// With nothing written, staging and folding both carry the pass on to the next
+// file with work still out of the index.
 func TestMovesDefaultWithNothingWritten(t *testing.T) {
 	a, _ := openFixture(t, nil)
 
@@ -933,7 +933,7 @@ func TestMovesDefaultWithNothingWritten(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Moves: %v", err)
 	}
-	if want := (app.Moves{AfterStage: app.MoveOpen, AfterFold: app.MoveUnstaged}); moves != want {
+	if want := (app.Moves{AfterStage: app.MoveUnstaged, AfterFold: app.MoveUnstaged}); moves != want {
 		t.Errorf("Moves = %+v, want %+v", moves, want)
 	}
 }

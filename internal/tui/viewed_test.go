@@ -112,6 +112,41 @@ func TestSInARevisionSessionMarksTheFileViewed(t *testing.T) {
 	}
 }
 
+func TestMarkingAFileViewedMovesToTheNextFileNotViewed(t *testing.T) {
+	for name, open := range map[string]func(*app.Session){
+		"pull request": func(s *app.Session) {
+			s.Target = "github:cli/cli#412"
+			s.PR = &forge.PullRequest{Ref: forge.Ref{Owner: "cli", Repo: "cli", Number: 412}}
+		},
+		"revision": func(s *app.Session) {
+			s.Base = "0123456789abcdef0123456789abcdef01234567"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			entries := parseFiles(t, threeFileDiff)
+			entries[1] = app.FileViewed(entries[1], true)
+			session := sessionOf(entries)
+			open(session)
+			backend := newFakeBackend(session)
+			backend.folded = []string{"gamma.md"}
+
+			viewed := parseFiles(t, threeFileDiff)
+			viewed[0] = app.FileViewed(viewed[0], true)
+			viewed[1] = app.FileViewed(viewed[1], true)
+			next := sessionOf(viewed)
+			open(next)
+			backend.nextSession = next
+
+			m := newModel(t, backend)
+			press(t, m, "s")
+
+			if got := m.doc.Files[m.doc.FileAt(m.cursor)].Entry.Path; got != "gamma.md" {
+				t.Errorf("cursor is on %q, want gamma.md — beta.txt is viewed, and gamma.md is folded but not viewed", got)
+			}
+		})
+	}
+}
+
 func TestSpaceFoldsAPullRequestFileWithoutMarkingItViewed(t *testing.T) {
 	backend := newFakeBackend(pullRequestOf(t, twoFileDiff, ""))
 	m := newModel(t, backend)
