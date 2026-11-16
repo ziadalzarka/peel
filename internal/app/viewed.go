@@ -19,8 +19,11 @@ type Viewer struct {
 }
 
 func (a *App) Viewer(s *Session) *Viewer {
+	if s == nil || !s.MarksViewed() {
+		return nil
+	}
 	viewed := a.StateFor(s).Viewed
-	if s == nil || viewed == nil {
+	if viewed == nil {
 		return nil
 	}
 	files := make([]git.FileEntry, len(s.Files))
@@ -66,7 +69,7 @@ func (v *Viewer) StageHunk(_ context.Context, id git.HunkID) error {
 			return v.mark(keys[i:i+1], true)
 		}
 	}
-	return fmt.Errorf("%s is not a hunk of this pull request", id)
+	return fmt.Errorf("%s is not a hunk of this review", id)
 }
 
 func (v *Viewer) UnstageFile(_ context.Context, path string) error {
@@ -129,7 +132,7 @@ func (v *Viewer) file(path string) (git.FileEntry, bool) {
 func (v *Viewer) keysOf(path string) ([]string, error) {
 	f, ok := v.file(path)
 	if !ok {
-		return nil, fmt.Errorf("%s is not in this pull request", path)
+		return nil, fmt.Errorf("%s is not in this review", path)
 	}
 	return viewKeys(*f.Unstaged), nil
 }

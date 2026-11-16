@@ -47,9 +47,9 @@ keymap.
 - **It keeps up.** Follow mode re-reads the repository and the review's notes as
   they change, so a note an agent leaves shows up without a reload, and the
   screen moves on the keypress rather than waiting for git.
-- **Other bases.** `--rev` reviews further back than HEAD, read-only. `--pr`
-  reviews a GitHub pull request — from any checkout, or none at all — with its
-  description at the top, drawn as Markdown, and `s` marking a file viewed
+- **Other bases.** `--rev` reviews further back than HEAD. `--pr` reviews a
+  GitHub pull request — from any checkout, or none at all — with its
+  description at the top, drawn as Markdown. In both, `s` marks a file viewed
   instead of staging it.
 - **A pull request's review follows the pull request.** Its notes, folds, what
   you have marked viewed and its narrative are filed under `#412` rather than
@@ -101,7 +101,7 @@ made from a checkout. `PEEL_NO_UPDATE_CHECK=1` turns it off.
 
 ```sh
 peel                      # review the working tree
-peel --rev HEAD~2         # review everything since a commit (read-only)
+peel --rev HEAD~2         # review everything since a commit, marking files viewed as you go
 peel --pr 412             # review a GitHub PR, marking files viewed as you go
 peel --no-watch           # don't re-read the repository while open
 peel --provider codex     # use Codex for the walkthrough instead of Claude
@@ -114,11 +114,14 @@ hash, a branch, `origin/main` to read your whole branch back. The base is pinned
 when the session opens, so a commit landing while you read cannot slide the diff
 out from under you.
 
-Those sessions are read-only, because HEAD is the only base staging means
-anything against: a file whose change is half committed cannot be `git add`ed
-into the shape on screen. Commenting, walkthroughs and follow mode all work as
-usual — the far side is still the live working tree, so it keeps up as the
-repository changes.
+Those sessions do not touch the index, because HEAD is the only base staging
+means anything against: a file whose change is half committed cannot be `git
+add`ed into the shape on screen. Instead `s`, `u`, `a` and `U` mark and unmark
+what you have viewed, the same way they do in a pull request. What is marked
+viewed is kept in `.git/peel/viewed.json`, by the content of each hunk, so a
+hunk you edit afterwards comes back to read. Commenting, walkthroughs and follow
+mode all work as usual — the far side is still the live working tree, so it
+keeps up as the repository changes.
 
 ### Keys
 
@@ -159,8 +162,9 @@ repository changes.
 | `r` | reload from git |
 | `?` / `q` | help / quit |
 
-In a pull request, `s`, `u`, `a` and `U` mark and unmark what you have viewed
-instead of touching the index — see [Pull requests](#pull-requests).
+In a pull request or a `--rev` session, `s`, `u`, `a` and `U` mark and unmark
+what you have viewed instead of touching the index — see
+[Pull requests](#pull-requests).
 
 There is one cursor and it rests anywhere — file headers, hunk headers, comments,
 and every line of a diff body, changed or not. Nothing to enter first: `s`

@@ -134,7 +134,13 @@ func (b *appBackend) Reload(ctx context.Context) (*app.Session, error) {
 		}
 		return b.viewer.Session(b.session)
 	}
-	s, err := b.app.LoadRevision(ctx, b.session.Base)
+	var s *app.Session
+	var err error
+	if b.session.Base != "" {
+		s, err = b.app.LoadSince(ctx, b.session.Title, b.session.Base)
+	} else {
+		s, err = b.app.LoadRevision(ctx, "")
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +148,14 @@ func (b *appBackend) Reload(ctx context.Context) (*app.Session, error) {
 	s.Target = b.session.Target
 	s.Title = b.session.Title
 	b.session = s
-	return s, nil
+	if !s.MarksViewed() {
+		return s, nil
+	}
+	b.viewer = b.app.Viewer(s)
+	if b.viewer == nil {
+		return s, nil
+	}
+	return b.viewer.Session(s)
 }
 
 func (b *appBackend) Comments(ctx context.Context) ([]store.Comment, error) {
@@ -450,6 +463,10 @@ func copiesWanted(s *app.Session) []copyRead {
 			out = append(out, headCopiesWanted(s.PR, f)...)
 			continue
 		}
+		if s.MarksViewed() {
+			out = append(out, workingCopiesWanted(f)...)
+			continue
+		}
 		if f.Unstaged != nil {
 			out = append(out, copyRead{
 				side: FileSide{Path: f.Path},
@@ -463,6 +480,18 @@ func copiesWanted(s *app.Session) []copyRead {
 				index: f.State() == git.StatePartial,
 			})
 		}
+	}
+	return out
+}
+
+func workingCopiesWanted(f git.FileEntry) []copyRead {
+	id := copyID{Path: f.Path, Changes: changesOf(app.FileViewed(f, false).Unstaged)}
+	var out []copyRead
+	if f.Unstaged != nil {
+		out = append(out, copyRead{side: FileSide{Path: f.Path}, id: id})
+	}
+	if f.Staged != nil {
+		out = append(out, copyRead{side: FileSide{Path: f.Path, Staged: true}, id: id})
 	}
 	return out
 }

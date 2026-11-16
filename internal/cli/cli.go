@@ -305,8 +305,8 @@ Commands:
 	fmt.Fprint(w, `
 Flags:
   --rev <ref>      review everything since a commit — HEAD~2, a hash, a branch.
-                   Commits made since it and uncommitted work alike. Read-only:
-                   staging only means something against HEAD
+                   Commits made since it and uncommitted work alike. s marks
+                   files viewed rather than staging them, as in a pull request
   --pr <ref>       review a pull request: a number, owner/repo#number, or a URL.
                    Its review is filed under the pull request rather than in a
                    checkout, so owner/repo#number works from any directory

@@ -76,7 +76,7 @@ func termsFor(viewing bool) terms {
 }
 
 func (m *Model) terms() terms {
-	return termsFor(m.session != nil && m.session.PR != nil)
+	return termsFor(m.session != nil && m.session.MarksViewed())
 }
 
 func (d Document) terms() terms { return termsFor(d.viewing) }

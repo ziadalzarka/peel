@@ -327,7 +327,7 @@ func New(ctx context.Context, backend Backend, session *app.Session, comments []
 // that is the only way a file ends up in both of those states. So a change
 // landing in it tomorrow still opens it, the way it would have today.
 func (m *Model) restoreFolds() {
-	viewing := m.session.PR != nil
+	viewing := m.session.MarksViewed()
 	if viewing {
 		for _, f := range m.session.Files {
 			if f.State() == git.StateStaged {

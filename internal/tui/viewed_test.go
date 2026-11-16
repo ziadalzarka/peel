@@ -87,6 +87,31 @@ func TestSInAPullRequestMarksTheFileViewed(t *testing.T) {
 	}
 }
 
+func TestSInARevisionSessionMarksTheFileViewed(t *testing.T) {
+	session := newSession(t, twoFileDiff)
+	session.Title = "HEAD~2..working tree"
+	session.Base = "0123456789abcdef0123456789abcdef01234567"
+	backend := newFakeBackend(session)
+	backend.nextSession = withFiles(session, []git.FileEntry{app.FileViewed(session.Files[0], true), session.Files[1]})
+	m := newModel(t, backend)
+
+	press(t, m, "s")
+
+	if got := backend.stagedFiles; len(got) != 1 || got[0] != "alpha.go" {
+		t.Fatalf("marked %v, want [alpha.go]", got)
+	}
+	if !strings.Contains(m.status, "viewed alpha.go") {
+		t.Errorf("status = %q, want it to say the file was viewed", m.status)
+	}
+	view := m.View()
+	if !strings.Contains(view, "1/2 viewed") {
+		t.Errorf("the header does not count what is viewed:\n%s", view)
+	}
+	if strings.Contains(view, "read-only") {
+		t.Errorf("a revision session still says read-only:\n%s", view)
+	}
+}
+
 func TestSpaceFoldsAPullRequestFileWithoutMarkingItViewed(t *testing.T) {
 	backend := newFakeBackend(pullRequestOf(t, twoFileDiff, ""))
 	m := newModel(t, backend)

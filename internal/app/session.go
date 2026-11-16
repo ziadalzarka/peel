@@ -27,13 +27,14 @@ type Session struct {
 	DiffText string
 	// Stageable reports whether `s` has somewhere to put what the reviewer is
 	// done with: git's index for the working tree, and the list of what has been
-	// marked viewed for a pull request. A review measured from an older commit
-	// has neither.
+	// marked viewed for a pull request or a review measured from an older commit.
 	Stageable bool
 	// PR is set when reviewing a pull request.
 	PR          *forge.PullRequest
 	CommentsErr error
 }
+
+func (s *Session) MarksViewed() bool { return s.PR != nil || s.Base != "" }
 
 // IsEmpty reports whether there is nothing to review.
 func (s *Session) IsEmpty() bool { return len(s.Files) == 0 }
@@ -133,11 +134,14 @@ func (a *App) LoadRevision(ctx context.Context, ref string) (*Session, error) {
 	}
 	// HEAD is the working-tree session's base already, and HEAD is the only
 	// base staging can mean anything against, so keep the richer session
-	// rather than hand back a read-only copy of it.
+	// rather than hand back a copy that only marks hunks viewed.
 	if head, err := a.Repo.ResolveCommit(ctx, "HEAD"); err == nil && head == base {
 		return a.LoadWorkingTree(ctx)
 	}
+	return a.LoadSince(ctx, ref, base)
+}
 
+func (a *App) LoadSince(ctx context.Context, ref, base string) (*Session, error) {
 	status, err := a.Repo.LoadStatusSince(ctx, base)
 	if err != nil {
 		return nil, err
@@ -158,7 +162,7 @@ func (a *App) LoadRevision(ctx context.Context, ref string) (*Session, error) {
 		Branch:    branch,
 		Files:     status.Files,
 		DiffText:  diffText,
-		Stageable: false,
+		Stageable: true,
 	}, nil
 }
 

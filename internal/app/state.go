@@ -29,8 +29,15 @@ type State struct {
 }
 
 // StateFor returns the state of what s is reviewing. A nil session, or one with
-// no pull request behind it, is this repository's own.
+// no pull request behind it, is this repository's own. A review since an older
+// commit adds the hunks marked viewed in it, which the working tree keeps in
+// git's index instead.
 func (a *App) StateFor(s *Session) State {
+	if s != nil && s.PR == nil && s.Base != "" && a.StateDir != "" {
+		local := a.Local
+		local.Viewed = store.NewReviewStore(filepath.Join(a.StateDir, "viewed.json"), "", a.storeOpts...).Viewed()
+		return local
+	}
 	if s == nil || s.PR == nil {
 		return a.Local
 	}

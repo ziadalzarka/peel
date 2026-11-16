@@ -119,7 +119,7 @@ func (m *Model) headerView() string {
 	if !m.session.Stageable {
 		right = append([]string{m.theme.Partial.Render("read-only")}, right...)
 	}
-	if m.session.PR != nil {
+	if m.session.MarksViewed() {
 		right = append([]string{m.theme.Staged.Render(m.viewedCount())}, right...)
 	}
 	if m.busy != "" {
@@ -234,7 +234,7 @@ func (m *Model) viewedCount() string {
 }
 
 func (m *Model) emptyMessage() string {
-	if m.session.Stageable && m.session.PR == nil {
+	if !m.session.MarksViewed() {
 		return "nothing to review — the working tree is clean"
 	}
 	return "nothing to review"

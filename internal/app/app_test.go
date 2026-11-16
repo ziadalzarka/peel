@@ -298,8 +298,8 @@ func TestLoadRevisionReachesPastTheLastCommit(t *testing.T) {
 	if !strings.Contains(s.DiffText, "landed") || !strings.Contains(s.DiffText, "three") {
 		t.Errorf("DiffText missing the full range:\n%s", s.DiffText)
 	}
-	if s.Stageable {
-		t.Error("Stageable = true against a base behind HEAD")
+	if !s.Stageable || !s.MarksViewed() {
+		t.Errorf("Stageable = %v, MarksViewed = %v against a base behind HEAD, want both", s.Stageable, s.MarksViewed())
 	}
 	if s.Target != "" {
 		t.Errorf("Target = %q, want the working tree's, so comments stay in one place", s.Target)

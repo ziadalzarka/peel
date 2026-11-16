@@ -338,7 +338,7 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 	if s == nil {
 		return doc
 	}
-	doc.viewing = s.PR != nil
+	doc.viewing = s.MarksViewed()
 	if s.PR != nil {
 		doc.addDescription(*s.PR, cfg.description)
 	}

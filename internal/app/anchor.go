@@ -30,6 +30,10 @@ type version struct {
 // versionOf returns the copy a note on this half of this file counts lines in.
 func versionOf(s *Session, file string, origin store.Origin, side store.Side) version {
 	switch {
+	case s != nil && s.Base != "" && side == store.SideOld:
+		return version{path: file, rev: s.Base}
+	case s != nil && s.Base != "":
+		return version{path: file, disk: true}
 	case origin == store.OriginIndex && side == store.SideOld:
 		return version{path: file, rev: baseOr(s)}
 	case origin == store.OriginIndex:

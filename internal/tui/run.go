@@ -17,7 +17,7 @@ func Run(ctx context.Context, a *app.App, s *app.Session, opts ...Option) error 
 		opt(&cfg)
 	}
 	backend := NewBackend(a, s, cfg.provider)
-	if s.PR != nil {
+	if s.MarksViewed() {
 		viewed, err := backend.Reload(ctx)
 		if err != nil {
 			return fmt.Errorf("read what is marked viewed: %w", err)

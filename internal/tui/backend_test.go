@@ -123,35 +123,57 @@ func TestBackendStageAllThenUnstageAll(t *testing.T) {
 	}
 }
 
-// A review measured from an older commit has no index staging can mean
-// anything against, so every staging operation must refuse rather than write to
-// the one HEAD is measured from.
-func TestBackendRefusesToStageAReadOnlySession(t *testing.T) {
+func TestBackendMarksARevisionSessionViewedWithoutTouchingTheIndex(t *testing.T) {
 	ctx := context.Background()
-	a, _, _ := openBackend(t)
+	repo := gittest.New(t)
+	repo.Write("main.go", "package main\n")
+	repo.Commit("initial")
+	repo.Write("committed.go", "package main\n")
+	repo.Commit("second")
+	repo.Write("main.go", "package main\n\nfunc main() {}\n")
 
-	session := &app.Session{
-		Title:     "HEAD~1..working tree",
-		Base:      "0000000000000000000000000000000000000000",
-		Stageable: false,
+	a, err := app.Open(ctx, repo.Dir,
+		app.WithAIRegistry(ai.NewRegistry()),
+		app.WithForgeRegistry(forge.NewRegistry()),
+	)
+	if err != nil {
+		t.Fatalf("app.Open: %v", err)
+	}
+	session, err := a.LoadRevision(ctx, "HEAD~1")
+	if err != nil {
+		t.Fatalf("LoadRevision: %v", err)
 	}
 	backend := tui.NewBackend(a, session)
 
-	ops := map[string]func() error{
-		"StageFile":   func() error { return backend.StageFile(ctx, "main.go") },
-		"UnstageFile": func() error { return backend.UnstageFile(ctx, "main.go") },
-		"StageAll":    func() error { return backend.StageAll(ctx) },
-		"UnstageAll":  func() error { return backend.UnstageAll(ctx) },
+	if err := backend.StageFile(ctx, "committed.go"); err != nil {
+		t.Fatalf("StageFile: %v", err)
 	}
-	for name, op := range ops {
-		err := op()
-		if err == nil {
-			t.Errorf("%s succeeded on a read-only session", name)
-			continue
-		}
-		if !strings.Contains(err.Error(), "not in this working tree") {
-			t.Errorf("%s error = %v, want it to explain why", name, err)
-		}
+	if got := repo.StatusLines(); !slices.Equal(got, []string{" M main.go"}) {
+		t.Errorf("git status = %q, want the index left alone", got)
+	}
+
+	reopened, err := tui.NewBackend(a, session).Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	viewed, _ := reopened.Entry("committed.go")
+	if viewed.State() != git.StateStaged {
+		t.Errorf("committed.go state = %v after marking it viewed, want staged", viewed.State())
+	}
+	open, _ := reopened.Entry("main.go")
+	if open.State() != git.StateUnstaged {
+		t.Errorf("main.go state = %v, want it left to view", open.State())
+	}
+
+	if err := backend.UnstageAll(ctx); err != nil {
+		t.Fatalf("UnstageAll: %v", err)
+	}
+	cleared, err := backend.Reload(ctx)
+	if err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	if again, _ := cleared.Entry("committed.go"); again.State() != git.StateUnstaged {
+		t.Errorf("committed.go state = %v after unmarking everything, want unstaged", again.State())
 	}
 }
 
@@ -355,8 +377,8 @@ func TestBackendReloadOfARevisionFollowsTheWorkingTree(t *testing.T) {
 		t.Errorf("reload = base %q title %q, want %q and %q",
 			reloaded.Base, reloaded.Title, session.Base, session.Title)
 	}
-	if reloaded.Stageable {
-		t.Error("Stageable = true after reloading a revision session")
+	if !reloaded.MarksViewed() {
+		t.Error("a reloaded revision session no longer marks hunks viewed")
 	}
 }
 

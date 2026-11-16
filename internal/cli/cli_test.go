@@ -305,9 +305,8 @@ func TestRevOpensTheTUIOnEverythingSinceACommit(t *testing.T) {
 	if got := h.tuiSession.Paths(); len(got) != 2 {
 		t.Errorf("Paths() = %v, want the committed and the uncommitted change", got)
 	}
-	// Staging only means something against HEAD, so this session is read-only.
-	if h.tuiSession.Stageable {
-		t.Error("Stageable = true against a base behind HEAD")
+	if !h.tuiSession.MarksViewed() {
+		t.Error("a base behind HEAD does not mark hunks viewed")
 	}
 }
 
