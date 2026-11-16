@@ -107,3 +107,74 @@ func TestSpaceOnAFileHeaderStillFoldsTheFile(t *testing.T) {
 		t.Error("space on the file header did not fold the file")
 	}
 }
+
+func TestFoldingAFileFoldsTheCommentsOnIt(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "line", File: "alpha.go", Line: 3, Body: "first\nsecond", Author: store.AuthorUser},
+		{ID: "file", File: "alpha.go", Body: "first\nsecond", Author: store.AuthorUser},
+	}
+	m := newModel(t, backend)
+
+	m.moveTo(m.doc.RowOfFile(m.fileIndex("alpha.go")))
+	press(t, m, " ")
+	if !m.collapsed["alpha.go"] {
+		t.Fatal("space on the file header did not fold the file")
+	}
+	for _, id := range []string{"line", "file"} {
+		if got := rowsOfComment(m, id); got != 1 {
+			t.Errorf("comment %q on a folded file takes %d rows, want 1", id, got)
+		}
+	}
+
+	m.moveTo(m.doc.RowOfFile(m.fileIndex("alpha.go")))
+	press(t, m, " ")
+	for _, id := range []string{"line", "file"} {
+		if got := rowsOfComment(m, id); got != 2 {
+			t.Errorf("comment %q on a reopened file takes %d rows, want 2", id, got)
+		}
+	}
+}
+
+func TestSpaceOpensACommentOnAFoldedFileAndLeavesTheFileFolded(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.comments = []store.Comment{
+		{ID: "c1", File: "alpha.go", Line: 3, Body: "first\nsecond", Author: store.AuthorUser},
+	}
+	m := newModel(t, backend)
+	m.moveTo(m.doc.RowOfFile(m.fileIndex("alpha.go")))
+	press(t, m, " ")
+
+	m.moveTo(m.doc.RowOfComment("c1"))
+	press(t, m, " ")
+	if got := rowsOfComment(m, "c1"); got != 2 {
+		t.Errorf("space left the comment taking %d rows, want 2", got)
+	}
+	if !m.collapsed["alpha.go"] {
+		t.Error("opening the comment opened the file")
+	}
+
+	m.moveTo(m.doc.RowOfComment("c1"))
+	press(t, m, " ")
+	if got := rowsOfComment(m, "c1"); got != 1 {
+		t.Errorf("space again left the comment taking %d rows, want 1", got)
+	}
+}
+
+func TestACommentOnTheFoldedStagedHalfIsFolded(t *testing.T) {
+	comments := []store.Comment{
+		{ID: "staged", File: "alpha.go", Line: 3, Origin: store.OriginIndex, Body: "first\nsecond", Author: store.AuthorUser},
+	}
+	doc := Build(partStagedSession(t), comments, nil, LayoutUnified)
+	if !doc.Sides[0].Folded {
+		t.Fatal("the index's half should open folded")
+	}
+	if got := commentRows(doc, "staged"); got != 1 {
+		t.Errorf("comment on the folded staged half takes %d rows, want 1", got)
+	}
+
+	open := Build(partStagedSession(t), comments, nil, LayoutUnified, WithSideFolds(map[string]bool{"alpha.go": false}))
+	if got := commentRows(open, "staged"); got != 2 {
+		t.Errorf("comment on the opened staged half takes %d rows, want 2", got)
+	}
+}

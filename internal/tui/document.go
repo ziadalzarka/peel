@@ -312,6 +312,7 @@ type Document struct {
 	// worked out one side at a time.
 	expand       Expansion
 	commentFolds map[string]bool
+	tucked       map[string]bool
 	viewing      bool
 	HiddenRows   []HiddenRef
 	HiddenLines  int
@@ -323,7 +324,32 @@ func (d Document) CommentFolded(c store.Comment) bool {
 	if folded, ok := d.commentFolds[c.ID]; ok {
 		return folded
 	}
-	return c.Resolved
+	return d.FoldsByDefault(c)
+}
+
+func (d Document) FoldsByDefault(c store.Comment) bool {
+	return c.Resolved || d.tucked[c.ID]
+}
+
+func (d *Document) tuck(ids []int) {
+	if d.tucked == nil {
+		d.tucked = map[string]bool{}
+	}
+	for _, ci := range ids {
+		d.tucked[d.Comments[ci].ID] = true
+	}
+}
+
+func (d Document) bodyFolded(fi int) bool {
+	if d.Files[fi].Collapsed || d.Files[fi].Hidden {
+		return true
+	}
+	for _, side := range d.Sides {
+		if side.File == fi && side.Folded {
+			return true
+		}
+	}
+	return false
 }
 
 // Build flattens a session into rows. collapsed hides a file's body by path.
@@ -352,13 +378,21 @@ func Build(s *app.Session, comments []store.Comment, collapsed map[string]bool, 
 			hidden := collapsed[entry.Path]
 			doc.Files = append(doc.Files, FileRef{Entry: entry, Row: len(doc.Rows), Collapsed: hidden})
 			doc.add(Row{Kind: RowFile, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1})
-			doc.addComments(fi, -1, idx.takeFile(entry.Path))
+			fileNotes := idx.takeFile(entry.Path)
+			if hidden {
+				doc.tuck(fileNotes)
+			}
+			doc.addComments(fi, -1, fileNotes)
 			doc.addDraft(fi, -1, doc.draftOnFile(entry.Path))
 
 			if !hidden {
 				doc.addBody(fi, entry, idx, cfg.sides)
 			}
-			doc.addComments(fi, -1, idx.rest(entry.Path))
+			rest := idx.rest(entry.Path)
+			if doc.bodyFolded(fi) {
+				doc.tuck(rest)
+			}
+			doc.addComments(fi, -1, rest)
 			// A draft whose line is not on screen — a collapsed file, or a line
 			// the diff no longer holds — still has to be somewhere, and it goes
 			// where the comments in the same position go: under its file.
@@ -407,6 +441,9 @@ func (d *Document) addOrphans(s *app.Session, idx *commentIndex, collapsed map[s
 		// The notes stay on screen whether or not the file is folded away, as
 		// they do on a file the diff still holds: a folded note is a note back
 		// where it was, drawn nowhere.
+		if hidden {
+			d.tuck(notes)
+		}
 		d.addComments(fi, -1, notes)
 		d.addDraft(fi, -1, d.Draft.path == c.File)
 		d.add(Row{Kind: RowBlank, File: fi, Hunk: -1, Left: -1, Right: -1, Step: -1, Side: -1, Expand: -1})

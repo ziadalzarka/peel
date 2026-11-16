@@ -3234,7 +3234,7 @@ func (m *Model) author() store.Author {
 
 func (m *Model) foldComment(c store.Comment) string {
 	folded := !m.doc.CommentFolded(c)
-	if folded == c.Resolved {
+	if folded == m.doc.FoldsByDefault(c) {
 		delete(m.commentFolds, c.ID)
 	} else {
 		m.commentFolds[c.ID] = folded
