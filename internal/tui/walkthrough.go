@@ -1,11 +1,14 @@
 package tui
 
 import (
+	"context"
 	"regexp"
 	"strconv"
 	"strings"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/ziadalzarka/peel/internal/app"
 	"github.com/ziadalzarka/peel/internal/git"
 	"github.com/ziadalzarka/peel/internal/store"
 )
@@ -21,6 +24,8 @@ type Groups struct {
 	Steps []store.Step
 	// Folded hides a step's explanation, by its index in Document.Steps.
 	Folded map[int]bool
+	Viewed map[string]bool
+	ID     string
 	// Width is the room an explanation is wrapped to.
 	Width int
 }
@@ -212,9 +217,9 @@ func (r *Renderer) step(d Document, row Row, st RowState) string {
 		title = "Walkthrough"
 	}
 
-	styled := r.theme.Header.Render(title)
-	if st.Cursor {
-		styled = r.theme.Cursor.Render(title)
+	styled := r.theme.Title.Render(title)
+	if step.Viewed {
+		styled = r.theme.Staged.Render("✓") + " " + styled
 	}
 	return r.fit(r.marker(st) + " " + r.theme.Title.Render(label) + " " +
 		r.theme.Dim.Render(arrow) + " " + styled)
@@ -262,4 +267,85 @@ func (d Document) StepSummary() string {
 		return plural(len(d.Steps), "section")
 	}
 	return plural(numbered, "step")
+}
+
+func stepViewKey(walkID string, step int) string {
+	return walkID + "/" + strconv.Itoa(step)
+}
+
+func (m *Model) markStep(index int, viewed bool) tea.Cmd {
+	step := m.doc.Steps[index]
+	id := m.walkID
+	key := stepViewKey(id, index)
+	before := m.viewport()
+	draw := func(m *Model, mark, folded bool) {
+		setFlag(m.walkViewed, key, mark, mark)
+		if m.walkID == id {
+			setFlag(m.walkFolded, index, folded, folded)
+			m.rebuild()
+		}
+	}
+	back := func(m *Model) {
+		draw(m, step.Viewed, step.Folded)
+		if m.walkOn && m.walkID == id {
+			m.putViewport(before)
+		}
+	}
+	what := "unmarked walkthrough step"
+	if viewed {
+		what = "marked walkthrough step viewed"
+	}
+	forth := func(m *Model) {
+		draw(m, viewed, viewed)
+		if m.walkOn && m.walkID == id && index < len(m.doc.Steps) {
+			next := index
+			if viewed {
+				next = m.nextWalkthroughStep(index)
+			}
+			m.showFile(m.doc.Steps[next].Row)
+		}
+	}
+	show := func() {
+		forth(m)
+		m.status = what
+	}
+	if step.Viewed == viewed {
+		show()
+		if step.Folded != viewed || before != m.viewport() {
+			m.hist.add(drawn(what, back, forth))
+		}
+		return nil
+	}
+	views := m.backend.WalkthroughViews()
+	write := func(mark bool) func(context.Context) error {
+		return func(context.Context) error {
+			return views.Update(func(keys map[string]bool) error {
+				setFlag(keys, key, mark, mark)
+				return nil
+			})
+		}
+	}
+	change := recorded{undo: write(!viewed), redo: write(viewed)}
+	return m.record(written(what, back, forth), show, func(ctx context.Context) (recorded, error) {
+		return change, change.redo(ctx)
+	})
+}
+
+func (m *Model) nextWalkthroughStep(index int) int {
+	for i := index + 1; i < len(m.doc.Steps); i++ {
+		step := m.doc.Steps[i]
+		switch m.moves.AfterStage {
+		case app.MoveUnstaged:
+			if !step.Viewed {
+				return i
+			}
+		case app.MoveOpen:
+			if !step.Folded {
+				return i
+			}
+		default:
+			return index
+		}
+	}
+	return index
 }

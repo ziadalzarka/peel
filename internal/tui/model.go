@@ -136,6 +136,8 @@ type Model struct {
 	// puts the files back in git's order with no commentary between them.
 	walkOn bool
 	// walkFolded hides a step's explanation, by step index.
+	walkID       string
+	walkViewed   map[string]bool
 	walkFolded   map[int]bool
 	commentFolds map[string]bool
 	descFolded   bool
@@ -965,7 +967,7 @@ func (m *Model) groups() Groups {
 	if !m.walkOn || !m.walkLoaded {
 		return Groups{}
 	}
-	return Groups{Steps: m.walkSteps, Folded: m.walkFolded, Width: m.walkWidth()}
+	return Groups{Steps: m.walkSteps, Folded: m.walkFolded, Viewed: m.walkViewed, ID: m.walkID, Width: m.walkWidth()}
 }
 
 // walkWidth is the room a step's explanation is wrapped to, leaving the indent
@@ -973,12 +975,29 @@ func (m *Model) groups() Groups {
 func (m *Model) walkWidth() int { return max(m.diffWidth()-stepIndent-1, 20) }
 
 func (m *Model) showWalkthrough(walkthrough store.Walkthrough) {
+	if !m.walkLoaded {
+		viewed, err := m.backend.WalkthroughViews().Load()
+		if err != nil {
+			m.err = err
+			return
+		}
+		m.walkViewed = make(map[string]bool, len(viewed))
+		for _, key := range viewed {
+			m.walkViewed[key] = true
+		}
+	}
+	m.walkID = store.Fingerprint(walkthrough.Fingerprint + "\x00" + walkthrough.Markdown())
 	m.walkSteps = walkthrough.Steps()
 	m.walkWritten = len(walkthrough.Written) > 0
 	m.walkIndex = 0
 	m.walkLoaded = true
 	m.walkOn = true
 	m.walkFolded = map[int]bool{}
+	for i := 0; i <= len(m.walkSteps); i++ {
+		if m.walkViewed[stepViewKey(m.walkID, i)] {
+			m.walkFolded[i] = true
+		}
+	}
 	m.walkCode, m.walkStale = codeFingerprintOf(m.session), false
 	m.relayout()
 	if m.walkWritten {
@@ -1035,7 +1054,9 @@ func (m *Model) toggleWalkthrough() tea.Cmd {
 // spot identifies what the cursor is on in a way that survives a rebuild, since
 // rebuilding renumbers every row.
 type spot struct {
-	path string
+	walkID string
+	step   int
+	path   string
 	// comment is the ID of the comment the cursor is on, when it is on one.
 	comment string
 	// under and over are the notes drawn either side of comment, for the notes
@@ -1067,6 +1088,9 @@ type spot struct {
 func (m *Model) spot() spot {
 	at := spot{path: m.currentPath(), line: -1}
 	row := m.cursor
+	if step := m.doc.StepAt(row); step >= 0 {
+		at.walkID, at.step = m.walkID, step
+	}
 	if c, ok := m.doc.CommentAt(row); ok {
 		at.comment = c.ID
 		// A note on the file as a whole, and one whose line is not in the diff,
@@ -1109,6 +1133,10 @@ func (m *Model) spot() spot {
 // moveToSpot puts the cursor back on what spot named, falling back through the
 // line, the hunk and then the file when the comment or the exact line has gone.
 func (m *Model) moveToSpot(at spot) {
+	if at.walkID != "" && at.walkID == m.walkID && at.step < len(m.doc.Steps) {
+		m.moveTo(m.doc.Steps[at.step].Row)
+		return
+	}
 	for _, id := range []string{at.comment, at.under, at.over} {
 		if row := m.doc.RowOfComment(id); row >= 0 {
 			m.moveTo(row)
@@ -1229,6 +1257,9 @@ func (m *Model) quit() tea.Cmd {
 // whole files never wants the hunk under that finger, and a review that goes
 // hunk by hunk never wants the file.
 func (m *Model) stage() tea.Cmd {
+	if step := m.doc.StepAt(m.cursor); step >= 0 {
+		return m.markStep(step, true)
+	}
 	if m.stageMode == app.StageModeHunk {
 		return m.stageHunkAt()
 	}
@@ -1483,6 +1514,9 @@ func (m *Model) carryOnInside(path string) {
 // unstageAt takes the file the cursor is in back out of the index, and opens it
 // again — it is back to being something to review.
 func (m *Model) unstageAt() tea.Cmd {
+	if step := m.doc.StepAt(m.cursor); step >= 0 {
+		return m.markStep(step, false)
+	}
 	t := m.terms()
 	file, ok := m.doc.FileTargetAt(m.cursor)
 	if !ok {

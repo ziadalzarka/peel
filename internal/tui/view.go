@@ -160,6 +160,13 @@ func (m *Model) hints() string {
 	case modeReviewEvent:
 		return "a approve · r request changes · c comment · esc cancel"
 	default:
+		if m.doc.StepAt(m.cursor) >= 0 {
+			hint := "s mark viewed · u unmark · space fold"
+			if m.walkWritten {
+				hint += " · enter go to code · opt+↓/↑ step"
+			}
+			return hint + " · ? help"
+		}
 		if m.walkOn && m.walkWritten {
 			return "opt+↓/↑ walkthrough step · enter go to code · w hide walkthrough · ? help"
 		}
@@ -383,6 +390,7 @@ func (m *Model) helpBindings() []binding {
 		{"X", "delete every comment anyone else left — it asks first"},
 		{"P", "post the review to the pull request: a summary, then approve / request changes / comment"},
 		{`\`, "toggle unified and side-by-side"},
+		{"s / u on a step", "mark the walkthrough step viewed and fold it / unmark it and open it"},
 		{"w", "walkthrough: group the diff into steps, with a note before each"},
 		{"W", "generate an AI walkthrough"},
 		{"opt+↓/↑ / enter", "in a supplied walkthrough: move between steps / go to a step’s code"},

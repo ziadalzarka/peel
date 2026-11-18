@@ -79,6 +79,7 @@ type Backend interface {
 	DescriptionFolded() (bool, error)
 	SetDescriptionFolded(folded bool) error
 
+	WalkthroughViews() store.ViewedStore
 	Walkthrough(ctx context.Context, regenerate bool) (store.Walkthrough, error)
 
 	// ReviewPayload is what posting the review would send: the summary written
@@ -97,9 +98,10 @@ type appBackend struct {
 	session *app.Session
 	// state is where this review is kept: the repository's own files for the
 	// working tree, the file named after the pull request for one of those.
-	state    app.State
-	provider string
-	viewer   *app.Viewer
+	state     app.State
+	provider  string
+	viewer    *app.Viewer
+	walkViews store.ViewedStore
 
 	// mu guards copies, which is read and written on whichever goroutine the UI
 	// puts a read on.
@@ -118,7 +120,7 @@ func NewBackend(a *app.App, s *app.Session, provider ...string) Backend {
 	if len(provider) > 0 {
 		name = provider[0]
 	}
-	return &appBackend{app: a, session: s, state: a.StateFor(s), provider: name, viewer: a.Viewer(s)}
+	return &appBackend{app: a, session: s, state: a.StateFor(s), provider: name, viewer: a.Viewer(s), walkViews: a.WalkthroughViews(s)}
 }
 
 // Reload re-reads what is being reviewed. A pull request is not in this working
@@ -585,6 +587,8 @@ func (b *appBackend) SubmitReview(ctx context.Context, body string, event forge.
 func (b *appBackend) submitOptions(body string, event forge.ReviewEvent) app.SubmitOptions {
 	return app.SubmitOptions{Body: body, Event: event, ResolveAfter: true}
 }
+
+func (b *appBackend) WalkthroughViews() store.ViewedStore { return b.walkViews }
 
 func (b *appBackend) Walkthrough(ctx context.Context, regenerate bool) (store.Walkthrough, error) {
 	return b.app.Walkthrough(ctx, b.session, app.WalkthroughRequest{

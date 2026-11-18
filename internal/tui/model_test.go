@@ -18,6 +18,9 @@ import (
 // output is plain text.
 func newModel(t *testing.T, backend *fakeBackend, opts ...Option) *Model {
 	t.Helper()
+	if backend.walkViews == nil {
+		backend.walkViews = store.NewReviewStore(t.TempDir()+"/walkthrough.json", "").Viewed()
+	}
 	comments, err := backend.Comments(t.Context())
 	if err != nil {
 		t.Fatalf("Comments: %v", err)
@@ -2536,19 +2539,62 @@ func TestTabFoldsAWalkthroughNote(t *testing.T) {
 	}
 }
 
-func TestAWalkthroughNoteIsNotStageable(t *testing.T) {
+func TestMarkWalkthroughStepViewed(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.walkWritten = []store.WalkthroughStep{
+		{Title: "First function", Text: "Start here.", File: "alpha.go", Line: 3},
+		{Title: "Second function", Text: "Continue here.", File: "alpha.go", Line: 4},
+	}
+	m := newModel(t, backend)
+	press(t, m, "w", "s")
+
+	check := func(index int, viewed, folded bool) {
+		t.Helper()
+		step := m.doc.Steps[index]
+		if step.Viewed != viewed || step.Folded != folded {
+			t.Fatalf("step %d viewed/folded = %t/%t, want %t/%t", index, step.Viewed, step.Folded, viewed, folded)
+		}
+	}
+	check(0, true, true)
+	check(1, false, false)
+	if m.doc.StepAt(m.cursor) != 1 || !strings.Contains(m.View(), "✓ First function") {
+		t.Fatalf("expected a check on the first step and focus on the second:\n%s", m.View())
+	}
+	if len(backend.stagedFiles) != 0 || len(backend.stagedHunks) != 0 || m.collapsed["alpha.go"] {
+		t.Fatal("marking the step affected the file")
+	}
+	press(t, m, "z")
+	check(0, false, false)
+	press(t, m, "Z")
+	check(0, true, true)
+
+	m = newModel(t, backend, WithMoves(app.Moves{AfterStage: app.MoveStay}))
+	press(t, m, "w")
+	check(0, true, true)
+	check(1, false, false)
+	press(t, m, "space")
+	check(0, true, false)
+	press(t, m, "s", "s")
+	check(0, true, true)
+	if m.doc.StepAt(m.cursor) != 0 {
+		t.Fatal("marking moved past the step with afterStage set to stay")
+	}
+	press(t, m, "u")
+	check(0, false, false)
+	press(t, m, "w", "w")
+	check(0, false, false)
+}
+
+func TestReplacedWalkthroughStartsUnviewed(t *testing.T) {
 	backend := newFakeBackend(newSession(t, twoFileDiff))
 	m := newModel(t, backend)
-
 	press(t, m, "w")
 	m.moveTo(m.doc.Steps[0].Row)
 	press(t, m, "s")
-
-	if len(backend.stagedFiles) != 0 {
-		t.Errorf("s on a walkthrough note staged %v", backend.stagedFiles)
-	}
-	if m.status == "" {
-		t.Error("s on a walkthrough note said nothing")
+	backend.walkBody = "## 1. New explanation\n`alpha.go`\n\nRead this next."
+	press(t, m, "W")
+	if step := m.doc.Steps[0]; step.Viewed || step.Folded {
+		t.Fatalf("a different step inherited progress: %+v", step)
 	}
 }
 

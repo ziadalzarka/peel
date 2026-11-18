@@ -243,6 +243,7 @@ type fakeBackend struct {
 	restored     [][2]string
 	indexTreeErr error
 
+	walkViews   store.ViewedStore
 	walkCalls   int
 	regenerate  bool
 	walkWritten []store.WalkthroughStep
@@ -524,6 +525,8 @@ func (f *fakeBackend) Copy(_ context.Context, text string) error {
 	f.copied = append(f.copied, text)
 	return nil
 }
+
+func (f *fakeBackend) WalkthroughViews() store.ViewedStore { return f.walkViews }
 
 func (f *fakeBackend) Walkthrough(_ context.Context, regenerate bool) (store.Walkthrough, error) {
 	f.walkCalls++

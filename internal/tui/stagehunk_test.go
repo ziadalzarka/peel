@@ -407,8 +407,8 @@ func TestTheHunkModeOnAWalkthroughHeadingStagesNothing(t *testing.T) {
 	if len(backend.stagedHunks) != 0 || len(backend.stagedFiles) != 0 {
 		t.Fatalf("a walkthrough heading staged something: %v %v", backend.stagedHunks, backend.stagedFiles)
 	}
-	if !strings.Contains(m.status, "nothing to stage") {
-		t.Errorf("status = %q, want it to say there is nothing there to stage", m.status)
+	if !m.doc.Steps[0].Viewed || !m.doc.Steps[0].Folded {
+		t.Errorf("step after s = %+v, want viewed and folded", m.doc.Steps[0])
 	}
 }
 

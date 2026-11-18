@@ -31,6 +31,10 @@ func (a *App) ClearWalkthrough(s *Session, author store.Author) error {
 	return a.authoredWalkthroughStore(s).ClearWalkthrough(author)
 }
 
+func (a *App) WalkthroughViews(s *Session) store.ViewedStore {
+	return a.authoredWalkthroughStore(s).Viewed()
+}
+
 func (a *App) authoredWalkthroughStore(s *Session) *store.ReviewStore {
 	path := filepath.Join(a.StateDir, "authored-walkthrough.json")
 	if s.PR != nil {

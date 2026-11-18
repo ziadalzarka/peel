@@ -195,6 +195,7 @@ type StepRef struct {
 	// Folded hides the explanation, leaving the heading, so a walkthrough that
 	// has been read can be got out of the way of the diff it describes.
 	Folded bool
+	Viewed bool
 }
 
 type DescriptionRef struct {
@@ -562,7 +563,7 @@ func (d *Document) addStep(group fileGroup, groups Groups) {
 		return
 	}
 	index := len(d.Steps)
-	ref := StepRef{Step: *group.step, Row: len(d.Rows), Folded: groups.Folded[index]}
+	ref := StepRef{Step: *group.step, Row: len(d.Rows), Folded: groups.Folded[index], Viewed: groups.Viewed[stepViewKey(groups.ID, index)]}
 	// The group's files are appended by the caller, directly after this heading.
 	for i := range group.files {
 		ref.Files = append(ref.Files, len(d.Files)+i)

@@ -141,6 +141,7 @@ keeps up as the repository changes.
 | `space` on a `▴`/`▾` row | read in twenty more lines of the code the diff left out |
 | `space` on a hidden row | open those lines, and hide them again on the next press |
 | `s` | stage the file the cursor is in, folding it away and moving to the next |
+| `s` / `u` on a walkthrough step | mark the step viewed and fold its explanation / unmark it and open it again |
 | `S` | switch `s` between the whole file and the hunk the cursor is in |
 | `s` (by hunk) | stage that hunk, moving to the next one still out of the index |
 | `s` `s` (by hunk) | the same key twice: stage the whole file |

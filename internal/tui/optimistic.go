@@ -138,6 +138,8 @@ type folds struct {
 	collapsed    map[string]bool
 	staged       map[string]bool
 	sides        map[string]bool
+	walkID       string
+	walkViewed   map[string]bool
 	walk         map[int]bool
 	comments     map[string]bool
 	othersHidden bool
@@ -148,6 +150,8 @@ func (m *Model) folds() folds {
 		collapsed:    copied(m.collapsed),
 		staged:       copied(m.stagedFolds),
 		sides:        copied(m.sideFolds),
+		walkID:       m.walkID,
+		walkViewed:   copied(m.walkViewed),
 		walk:         copied(m.walkFolded),
 		comments:     copied(m.commentFolds),
 		othersHidden: m.othersHidden,
@@ -164,7 +168,10 @@ func (m *Model) putFolds(before folds) {
 	m.putFoldsBack(before.collapsed)
 	m.stagedFolds = copied(before.staged)
 	m.sideFolds = copied(before.sides)
-	m.walkFolded = copied(before.walk)
+	if before.walkID == m.walkID {
+		m.walkFolded = copied(before.walk)
+	}
+	m.walkViewed = copied(before.walkViewed)
 	m.commentFolds = copied(before.comments)
 	m.setOthersHidden(before.othersHidden)
 }
