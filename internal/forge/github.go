@@ -213,7 +213,7 @@ func escapePath(path string) string {
 // reviewPayload is the request body for the create-review API.
 type reviewPayload struct {
 	Body     string                 `json:"body,omitempty"`
-	Event    string                 `json:"event"`
+	Event    string                 `json:"event,omitempty"`
 	Comments []reviewCommentPayload `json:"comments,omitempty"`
 }
 
@@ -223,6 +223,22 @@ type reviewCommentPayload struct {
 	Side string `json:"side,omitempty"`
 	Body string `json:"body"`
 }
+
+type submitPayload struct {
+	Body  string `json:"body,omitempty"`
+	Event string `json:"event"`
+}
+
+type createdReview struct {
+	ID     int64  `json:"id"`
+	NodeID string `json:"node_id"`
+}
+
+const addFileThreadMutation = `mutation($review: ID!, $path: String!, $body: String!) {
+  addPullRequestReviewThread(input: {pullRequestReviewId: $review, path: $path, body: $body, subjectType: FILE}) {
+    thread { id }
+  }
+}`
 
 // SubmitReview implements Provider.
 //
@@ -236,35 +252,108 @@ func (p *GitHubProvider) SubmitReview(ctx context.Context, ref Ref, review Revie
 		return err
 	}
 
-	payload := reviewPayload{Body: review.Body, Event: string(review.Event)}
+	var onLines, onFiles []ReviewComment
 	for _, c := range review.Comments {
+		if c.OnFile() {
+			onFiles = append(onFiles, c)
+		} else {
+			onLines = append(onLines, c)
+		}
+	}
+
+	if len(onFiles) == 0 {
+		_, err := p.createReview(ctx, ref, reviewPayload{
+			Body:     review.Body,
+			Event:    string(review.Event),
+			Comments: lineCommentPayloads(onLines),
+		})
+		if err != nil {
+			return fmt.Errorf("submit review to %s: %w", ref, err)
+		}
+		return nil
+	}
+
+	pending, err := p.createReview(ctx, ref, reviewPayload{Comments: lineCommentPayloads(onLines)})
+	if err != nil {
+		return fmt.Errorf("start a review on %s: %w", ref, err)
+	}
+	if err := p.finishReview(ctx, ref, pending, review.Body, review.Event, onFiles); err != nil {
+		if delErr := p.deletePendingReview(ctx, ref, pending); delErr != nil {
+			return fmt.Errorf("submit review to %s: %w; deleting the pending review also failed: %v", ref, err, delErr)
+		}
+		return fmt.Errorf("submit review to %s: %w", ref, err)
+	}
+	return nil
+}
+
+func lineCommentPayloads(comments []ReviewComment) []reviewCommentPayload {
+	var out []reviewCommentPayload
+	for _, c := range comments {
 		side := c.Side
 		if side == "" {
 			side = "RIGHT"
 		}
-		payload.Comments = append(payload.Comments, reviewCommentPayload{
-			Path: c.Path,
-			Line: c.Line,
-			Side: side,
-			Body: c.Body,
-		})
+		out = append(out, reviewCommentPayload{Path: c.Path, Line: c.Line, Side: side, Body: c.Body})
 	}
+	return out
+}
 
+func (p *GitHubProvider) reviewsEndpoint(ref Ref) string {
+	return fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", ref.Owner, ref.Repo, ref.Number)
+}
+
+func (p *GitHubProvider) createReview(ctx context.Context, ref Ref, payload reviewPayload) (createdReview, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return fmt.Errorf("encode review: %w", err)
+		return createdReview{}, fmt.Errorf("encode review: %w", err)
 	}
-
-	endpoint := fmt.Sprintf("repos/%s/%s/pulls/%d/reviews", ref.Owner, ref.Repo, ref.Number)
-	_, err = p.runner.Run(ctx, exec.Command{
+	res, err := p.runner.Run(ctx, exec.Command{
 		Name:  p.binary,
-		Args:  []string{"api", "--method", "POST", endpoint, "--input", "-"},
+		Args:  []string{"api", "--method", "POST", p.reviewsEndpoint(ref), "--input", "-"},
 		Stdin: strings.NewReader(string(body)),
 	})
 	if err != nil {
-		return fmt.Errorf("submit review to %s: %w", ref, err)
+		return createdReview{}, err
 	}
-	return nil
+	var created createdReview
+	if payload.Event == "" {
+		if err := json.Unmarshal(res.Stdout, &created); err != nil || created.ID == 0 || created.NodeID == "" {
+			return createdReview{}, fmt.Errorf("read the pending review gh created: %q", strings.TrimSpace(string(res.Stdout)))
+		}
+	}
+	return created, nil
+}
+
+func (p *GitHubProvider) finishReview(ctx context.Context, ref Ref, pending createdReview, body string, event ReviewEvent, onFiles []ReviewComment) error {
+	for _, c := range onFiles {
+		_, err := p.runner.Run(ctx, exec.Command{
+			Name: p.binary,
+			Args: []string{"api", "graphql", "-f", "query=" + addFileThreadMutation,
+				"-f", "review=" + pending.NodeID, "-f", "path=" + c.Path, "-f", "body=" + c.Body},
+		})
+		if err != nil {
+			return fmt.Errorf("add the note on %s: %w", c.Path, err)
+		}
+	}
+
+	payload, err := json.Marshal(submitPayload{Body: body, Event: string(event)})
+	if err != nil {
+		return fmt.Errorf("encode review: %w", err)
+	}
+	_, err = p.runner.Run(ctx, exec.Command{
+		Name:  p.binary,
+		Args:  []string{"api", "--method", "POST", fmt.Sprintf("%s/%d/events", p.reviewsEndpoint(ref), pending.ID), "--input", "-"},
+		Stdin: strings.NewReader(string(payload)),
+	})
+	return err
+}
+
+func (p *GitHubProvider) deletePendingReview(ctx context.Context, ref Ref, pending createdReview) error {
+	_, err := p.runner.Run(ctx, exec.Command{
+		Name: p.binary,
+		Args: []string{"api", "--method", "DELETE", fmt.Sprintf("%s/%d", p.reviewsEndpoint(ref), pending.ID)},
+	})
+	return err
 }
 
 func (p *GitHubProvider) Login(ctx context.Context) (string, error) {

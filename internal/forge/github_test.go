@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -303,6 +304,86 @@ func TestSubmitReviewApprovalNeedsNoBody(t *testing.T) {
 	}
 }
 
+func fileReviewRunner(failOn string) *exec.FakeRunner {
+	return exec.NewFakeRunner().RespondFunc("gh api", func(_ context.Context, cmd exec.Command) (exec.Result, error) {
+		line := cmd.String()
+		if failOn != "" && strings.Contains(line, failOn) {
+			return exec.Result{}, errors.New("HTTP 422")
+		}
+		if strings.HasSuffix(line, "pulls/412/reviews --input -") {
+			return exec.Result{Stdout: []byte(`{"id":77,"node_id":"PRR_77","state":"PENDING"}`)}, nil
+		}
+		return exec.Result{Stdout: []byte("{}")}, nil
+	})
+}
+
+func TestSubmitReviewWithAFileCommentGoesThroughAPendingReview(t *testing.T) {
+	runner := fileReviewRunner("")
+
+	review := Review{
+		Event: EventRequestChanges,
+		Comments: []ReviewComment{
+			{Path: "src/main.go", Line: 42, Body: "this leaks the tx"},
+			{Path: "db/V1__init.sql", Body: "split this migration"},
+		},
+	}
+	if err := newGitHub(runner).SubmitReview(context.Background(), Ref{"cli", "cli", 412}, review); err != nil {
+		t.Fatalf("SubmitReview: %v", err)
+	}
+
+	calls := runner.Calls()
+	if len(calls) != 3 {
+		t.Fatalf("got %d gh calls, want 3: %v", len(calls), calls)
+	}
+
+	var pending reviewPayload
+	if err := json.Unmarshal([]byte(calls[0].Stdin), &pending); err != nil {
+		t.Fatalf("pending payload: %v\n%s", err, calls[0].Stdin)
+	}
+	if pending.Event != "" {
+		t.Errorf("pending review Event = %q, want none so it stays pending", pending.Event)
+	}
+	if len(pending.Comments) != 1 || pending.Comments[0].Path != "src/main.go" {
+		t.Errorf("pending review comments = %+v, want only the line comment", pending.Comments)
+	}
+
+	thread := calls[1].Cmd.String()
+	for _, want := range []string{"api graphql", "subjectType: FILE", "review=PRR_77", "path=db/V1__init.sql", "body=split this migration"} {
+		if !strings.Contains(thread, want) {
+			t.Errorf("thread call = %q, want %q in it", thread, want)
+		}
+	}
+
+	submit := calls[2]
+	if got := submit.Cmd.String(); !strings.Contains(got, "--method POST repos/cli/cli/pulls/412/reviews/77/events") {
+		t.Errorf("submit call = %q", got)
+	}
+	if got, want := submit.Stdin, `{"event":"REQUEST_CHANGES"}`; got != want {
+		t.Errorf("submit payload = %s, want %s", got, want)
+	}
+}
+
+func TestSubmitReviewDeletesThePendingReviewWhenAFileCommentFails(t *testing.T) {
+	runner := fileReviewRunner("api graphql")
+
+	review := Review{Event: EventComment, Comments: []ReviewComment{{Path: "f.go", Body: "x"}}}
+	err := newGitHub(runner).SubmitReview(context.Background(), Ref{"o", "r", 412}, review)
+	if err == nil || !strings.Contains(err.Error(), "422") {
+		t.Fatalf("err = %v, want the failure", err)
+	}
+
+	calls := runner.Calls()
+	last := calls[len(calls)-1].Cmd.String()
+	if !strings.Contains(last, "--method DELETE repos/o/r/pulls/412/reviews/77") {
+		t.Errorf("last call = %q, want the pending review deleted", last)
+	}
+	for _, c := range calls {
+		if strings.Contains(c.Cmd.String(), "/events") {
+			t.Errorf("the review was submitted despite the failure: %q", c.Cmd.String())
+		}
+	}
+}
+
 func TestSubmitReviewValidation(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -314,7 +395,7 @@ func TestSubmitReviewValidation(t *testing.T) {
 		{"approval with a comment with no body", Review{Event: EventApprove, Comments: []ReviewComment{{Path: "f.go", Line: 1}}}},
 		{"comment with no path", Review{Event: EventComment, Comments: []ReviewComment{{Line: 1, Body: "x"}}}},
 		{"comment with no body", Review{Event: EventComment, Comments: []ReviewComment{{Path: "f.go", Line: 1}}}},
-		{"comment with no line", Review{Event: EventComment, Comments: []ReviewComment{{Path: "f.go", Body: "x"}}}},
+		{"comment with a negative line", Review{Event: EventComment, Comments: []ReviewComment{{Path: "f.go", Line: -1, Body: "x"}}}},
 		{"comment with bad side", Review{Event: EventComment, Comments: []ReviewComment{{Path: "f.go", Line: 1, Body: "x", Side: "MIDDLE"}}}},
 	}
 

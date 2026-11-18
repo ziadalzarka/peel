@@ -42,8 +42,7 @@ func (m *Model) openReview() {
 		m.status = "already posting a review"
 		return
 	}
-	inline, fileLevel := m.pendingReview()
-	if inline == 0 && fileLevel == 0 {
+	if m.pendingReview() == 0 {
 		m.status = "no open comments to post — c writes one, or write a summary; approve needs neither"
 	}
 
@@ -163,7 +162,7 @@ func postedNote(review forge.Review, ref string) string {
 }
 
 // carried is what a review is made of, for the sentence asking about it and the
-// one reporting it. A review with no inline notes is its summary.
+// one reporting it. A review with no notes is its summary.
 func carried(review forge.Review) string {
 	if len(review.Comments) == 0 {
 		return "a summary"
@@ -184,25 +183,20 @@ func eventName(event forge.ReviewEvent) string {
 	}
 }
 
-// pendingReview counts what a review would carry: the notes still open on this
-// review, and the ones written on a file rather than a line — those have
-// nowhere inline to attach, so they are said to be staying behind rather than
-// counted as going.
+// pendingReview counts the notes a review would carry: the ones still open on
+// this review.
 //
 // A note drawn ahead of its own write is left out: it has no id in the store
 // yet, so it is not one the payload can be built from.
-func (m *Model) pendingReview() (inline, fileLevel int) {
+func (m *Model) pendingReview() int {
+	count := 0
 	for _, c := range m.comments {
 		if c.Resolved || unsaved(c) || c.Remote != "" || !c.Author.PostsAs(m.me) {
 			continue
 		}
-		if c.Line > 0 {
-			inline++
-			continue
-		}
-		fileLevel++
+		count++
 	}
-	return inline, fileLevel
+	return count
 }
 
 // reviewWidth is the room the summary editor has in the panel.
@@ -220,13 +214,10 @@ func (m *Model) reviewLines(width int) []string {
 		head += "  " + m.theme.Header.Render(pr.Ref.String())
 	}
 
-	inline, fileLevel := m.pendingReview()
-	count := m.theme.Comment.Render(plural(inline, "comment"))
-	if inline == 0 {
+	pending := m.pendingReview()
+	count := m.theme.Comment.Render(plural(pending, "comment"))
+	if pending == 0 {
 		count = m.theme.Note.Render("no comments — only approve can go without a summary")
-	}
-	if fileLevel > 0 {
-		count += "  " + m.theme.Partial.Render(plural(fileLevel, "file note")+" cannot be posted inline")
 	}
 
 	lines := []string{

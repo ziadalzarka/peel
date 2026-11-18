@@ -110,15 +110,18 @@ func (e ReviewEvent) Valid() bool {
 	return false
 }
 
-// ReviewComment is one inline note to post.
+// ReviewComment is one note to post, on a line or, with no Line, on the whole
+// file.
 type ReviewComment struct {
 	Path string
-	// Line is the line number in the file, on Side.
+	// Line is the line number in the file, on Side, or 0 for the whole file.
 	Line int
 	// Side is "RIGHT" for the changed file or "LEFT" for the original.
 	Side string
 	Body string
 }
+
+func (c ReviewComment) OnFile() bool { return c.Line == 0 }
 
 // Review is a batch of notes submitted together.
 type Review struct {
@@ -146,8 +149,8 @@ func (r Review) Validate() error {
 		if strings.TrimSpace(c.Body) == "" {
 			return fmt.Errorf("comment %d on %s: body is required", i+1, c.Path)
 		}
-		if c.Line <= 0 {
-			return fmt.Errorf("comment %d on %s: line must be positive, got %d", i+1, c.Path, c.Line)
+		if c.Line < 0 {
+			return fmt.Errorf("comment %d on %s: line must not be negative, got %d", i+1, c.Path, c.Line)
 		}
 		if c.Side != "" && c.Side != "RIGHT" && c.Side != "LEFT" {
 			return fmt.Errorf("comment %d on %s: side must be RIGHT or LEFT, got %q", i+1, c.Path, c.Side)

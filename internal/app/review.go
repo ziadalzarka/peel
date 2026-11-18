@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/ziadalzarka/peel/internal/ai"
 	"github.com/ziadalzarka/peel/internal/forge"
@@ -101,20 +100,16 @@ func (a *App) buildReview(ctx context.Context, s *Session, opts SubmitOptions) (
 
 	me := a.Author(ctx)
 	var included []store.Comment
-	var skipped []string
 	for _, c := range comments {
 		if c.Remote != "" || !c.Author.PostsAs(me) {
 			continue
 		}
-		// A review comment must anchor to a line in the diff; a file-level note
-		// has nowhere to attach, so it is reported rather than dropped quietly.
-		if c.Line <= 0 {
-			skipped = append(skipped, c.Location())
-			continue
-		}
-		side := "RIGHT"
-		if c.Side == store.SideOld {
-			side = "LEFT"
+		side := ""
+		if c.Line > 0 {
+			side = "RIGHT"
+			if c.Side == store.SideOld {
+				side = "LEFT"
+			}
 		}
 		review.Comments = append(review.Comments, forge.ReviewComment{
 			Path: c.File,
@@ -125,11 +120,6 @@ func (a *App) buildReview(ctx context.Context, s *Session, opts SubmitOptions) (
 		included = append(included, c)
 	}
 
-	if len(skipped) > 0 && review.Empty() && event != forge.EventApprove {
-		return forge.Review{}, nil, fmt.Errorf(
-			"nothing to submit: %d file-level comment(s) (%s) cannot be posted inline; add a review body with --body",
-			len(skipped), strings.Join(skipped, ", "))
-	}
 	if err := review.Validate(); err != nil {
 		return forge.Review{}, nil, err
 	}

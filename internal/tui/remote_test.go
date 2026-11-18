@@ -15,8 +15,8 @@ func TestACommentFromThePullRequestIsNotPostedOrEditable(t *testing.T) {
 	}
 	m := newModel(t, backend, WithAuthor("ziadalzarka"))
 
-	if inline, _ := m.pendingReview(); inline != 1 {
-		t.Errorf("pending inline comments = %d, want only the one written here", inline)
+	if got := m.pendingReview(); got != 1 {
+		t.Errorf("pending comments = %d, want only the one written here", got)
 	}
 
 	m.moveTo(m.doc.RowOfComment("github-1"))

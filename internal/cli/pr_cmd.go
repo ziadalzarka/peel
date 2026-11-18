@@ -194,12 +194,16 @@ func printPreview(c *CLI, s *app.Session, review forge.Review) {
 		fmt.Fprintf(c.Stdout, "\n%s\n", review.Body)
 	}
 	if len(review.Comments) == 0 {
-		fmt.Fprintln(c.Stdout, "\nno inline comments")
+		fmt.Fprintln(c.Stdout, "\nno comments")
 		return
 	}
-	fmt.Fprintf(c.Stdout, "\n%s:\n", plural(len(review.Comments), "inline comment"))
+	fmt.Fprintf(c.Stdout, "\n%s:\n", plural(len(review.Comments), "comment"))
 	for _, comment := range review.Comments {
-		fmt.Fprintf(c.Stdout, "  %s:%d (%s)\n", comment.Path, comment.Line, strings.ToLower(comment.Side))
+		if comment.OnFile() {
+			fmt.Fprintf(c.Stdout, "  %s (whole file)\n", comment.Path)
+		} else {
+			fmt.Fprintf(c.Stdout, "  %s:%d (%s)\n", comment.Path, comment.Line, strings.ToLower(comment.Side))
+		}
 		for _, line := range strings.Split(comment.Body, "\n") {
 			fmt.Fprintf(c.Stdout, "    %s\n", line)
 		}

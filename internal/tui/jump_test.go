@@ -150,7 +150,7 @@ func TestPendingReviewLeavesOutAnAgentsNotes(t *testing.T) {
 		{ID: "b", File: "pr.go", Line: 1, Body: "agent", Author: "claude"},
 	}
 	m := New(context.Background(), f, s, comments, WithoutSyntax(), WithAuthor("ziad"))
-	if inline, _ := m.pendingReview(); inline != 1 {
-		t.Errorf("pending inline notes = %d, want 1", inline)
+	if got := m.pendingReview(); got != 1 {
+		t.Errorf("pending notes = %d, want 1", got)
 	}
 }

@@ -219,7 +219,7 @@ func TestReviewPanelSaysWhatIsAboutToGo(t *testing.T) {
 	press(t, m, "P")
 	view := m.View()
 
-	for _, want := range []string{"post review", "cli/cli#412", "1 comment", "cannot be posted inline"} {
+	for _, want := range []string{"post review", "cli/cli#412", "2 comments"} {
 		if !strings.Contains(view, want) {
 			t.Errorf("the panel does not say %q:\n%s", want, view)
 		}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -755,7 +756,7 @@ func TestSubmitReviewResolvesAfter(t *testing.T) {
 	}
 }
 
-func TestSubmitReviewFileLevelCommentsCannotBeInline(t *testing.T) {
+func TestSubmitReviewPostsAFileLevelCommentWithNoBody(t *testing.T) {
 	f := newFixture(t)
 	f.repo.Write("f.txt", "x\n")
 	f.repo.Commit("base")
@@ -763,15 +764,15 @@ func TestSubmitReviewFileLevelCommentsCannotBeInline(t *testing.T) {
 	s, _ := f.app.LoadPullRequest(f.ctx, "", "412")
 	mustAddComment(t, f, store.Comment{File: "pr.go", Body: "general thought", Target: s.Target})
 
-	_, err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{})
-	if err == nil {
-		t.Fatal("SubmitReview succeeded with only a file-level comment")
+	if _, err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{Event: forge.EventRequestChanges}); err != nil {
+		t.Fatalf("SubmitReview: %v", err)
 	}
-	if !strings.Contains(err.Error(), "--body") {
-		t.Errorf("error = %v, want it to suggest a review body", err)
+	if len(f.gh.submitted) != 1 {
+		t.Fatalf("submitted %d reviews, want 1", len(f.gh.submitted))
 	}
-	if len(f.gh.submitted) != 0 {
-		t.Error("a review was posted despite the error")
+	want := []forge.ReviewComment{{Path: "pr.go", Body: "general thought"}}
+	if got := f.gh.submitted[0].Comments; !reflect.DeepEqual(got, want) {
+		t.Errorf("Comments = %+v, want %+v", got, want)
 	}
 }
 
@@ -806,7 +807,7 @@ func TestSubmitReviewApprovalNeedsNoBodyOrComments(t *testing.T) {
 	}
 }
 
-func TestSubmitReviewApprovalLeavesAFileLevelCommentOpen(t *testing.T) {
+func TestSubmitReviewApprovalCarriesAFileLevelComment(t *testing.T) {
 	f := newFixture(t)
 	f.repo.Write("f.txt", "x\n")
 	f.repo.Commit("base")
@@ -819,8 +820,8 @@ func TestSubmitReviewApprovalLeavesAFileLevelCommentOpen(t *testing.T) {
 		t.Fatalf("SubmitReview: %v", err)
 	}
 
-	if len(f.gh.submitted) != 1 || len(f.gh.submitted[0].Comments) != 0 {
-		t.Fatalf("submitted = %v, want one approval with no comments", f.gh.submitted)
+	if len(f.gh.submitted) != 1 || len(f.gh.submitted[0].Comments) != 1 {
+		t.Fatalf("submitted = %v, want one approval with the file-level comment", f.gh.submitted)
 	}
 	filter := s.CommentFilter()
 	filter.Unresolved = true
@@ -828,8 +829,8 @@ func TestSubmitReviewApprovalLeavesAFileLevelCommentOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(remaining) != 1 {
-		t.Errorf("%d comments unresolved, want the file-level one still open", len(remaining))
+	if len(remaining) != 0 {
+		t.Errorf("%d comments unresolved, want the posted file-level one resolved", len(remaining))
 	}
 }
 
