@@ -112,10 +112,11 @@ func (a *App) buildReview(ctx context.Context, s *Session, opts SubmitOptions) (
 			}
 		}
 		review.Comments = append(review.Comments, forge.ReviewComment{
-			Path: c.File,
-			Line: c.Line,
-			Side: side,
-			Body: c.Body,
+			Path:    c.File,
+			Line:    c.Line,
+			EndLine: c.EndLine,
+			Side:    side,
+			Body:    c.Body,
 		})
 		included = append(included, c)
 	}

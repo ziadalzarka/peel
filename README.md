@@ -551,7 +551,8 @@ comments cannot be read, the review opens anyway and says so.
 approve, `r` request changes, `c` comment — and that choice sends it; `esc` backs
 out instead. What goes is every unresolved note written here, and posting
 resolves them: they are the other side's to answer now. A note left on a file
-rather than a line goes as a GitHub file comment. An approval can go with no
+rather than a line goes as a GitHub file comment, and one on a run of lines as
+a comment on that whole range. An approval can go with no
 summary and no notes; request changes and comment need one or the other. `peel pr submit` does the same thing from the
 command line, and prints the whole payload before it asks.
 

@@ -199,9 +199,12 @@ func printPreview(c *CLI, s *app.Session, review forge.Review) {
 	}
 	fmt.Fprintf(c.Stdout, "\n%s:\n", plural(len(review.Comments), "comment"))
 	for _, comment := range review.Comments {
-		if comment.OnFile() {
+		switch {
+		case comment.OnFile():
 			fmt.Fprintf(c.Stdout, "  %s (whole file)\n", comment.Path)
-		} else {
+		case comment.EndLine > comment.Line:
+			fmt.Fprintf(c.Stdout, "  %s:%d-%d (%s)\n", comment.Path, comment.Line, comment.EndLine, strings.ToLower(comment.Side))
+		default:
 			fmt.Fprintf(c.Stdout, "  %s:%d (%s)\n", comment.Path, comment.Line, strings.ToLower(comment.Side))
 		}
 		for _, line := range strings.Split(comment.Body, "\n") {

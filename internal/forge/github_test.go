@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -304,6 +305,33 @@ func TestSubmitReviewApprovalNeedsNoBody(t *testing.T) {
 	}
 }
 
+func TestSubmitReviewSendsARunOfLinesAsARange(t *testing.T) {
+	runner := exec.NewFakeRunner().Respond("gh api", "{}")
+
+	review := Review{
+		Event: EventComment,
+		Comments: []ReviewComment{
+			{Path: "a.go", Line: 10, EndLine: 14, Side: "LEFT", Body: "this block"},
+			{Path: "a.go", Line: 20, EndLine: 20, Body: "one line"},
+		},
+	}
+	if err := newGitHub(runner).SubmitReview(context.Background(), Ref{"o", "r", 1}, review); err != nil {
+		t.Fatalf("SubmitReview: %v", err)
+	}
+
+	var payload reviewPayload
+	if err := json.Unmarshal([]byte(runner.LastStdin()), &payload); err != nil {
+		t.Fatalf("payload: %v", err)
+	}
+	want := []reviewCommentPayload{
+		{Path: "a.go", StartLine: 10, StartSide: "LEFT", Line: 14, Side: "LEFT", Body: "this block"},
+		{Path: "a.go", Line: 20, Side: "RIGHT", Body: "one line"},
+	}
+	if !reflect.DeepEqual(payload.Comments, want) {
+		t.Errorf("comments = %+v, want %+v", payload.Comments, want)
+	}
+}
+
 func fileReviewRunner(failOn string) *exec.FakeRunner {
 	return exec.NewFakeRunner().RespondFunc("gh api", func(_ context.Context, cmd exec.Command) (exec.Result, error) {
 		line := cmd.String()
@@ -396,6 +424,8 @@ func TestSubmitReviewValidation(t *testing.T) {
 		{"comment with no path", Review{Event: EventComment, Comments: []ReviewComment{{Line: 1, Body: "x"}}}},
 		{"comment with no body", Review{Event: EventComment, Comments: []ReviewComment{{Path: "f.go", Line: 1}}}},
 		{"comment with a negative line", Review{Event: EventComment, Comments: []ReviewComment{{Path: "f.go", Line: -1, Body: "x"}}}},
+		{"comment ending before it starts", Review{Event: EventComment, Comments: []ReviewComment{{Path: "f.go", Line: 5, EndLine: 4, Body: "x"}}}},
+		{"comment with an end line and no line", Review{Event: EventComment, Comments: []ReviewComment{{Path: "f.go", EndLine: 4, Body: "x"}}}},
 		{"comment with bad side", Review{Event: EventComment, Comments: []ReviewComment{{Path: "f.go", Line: 1, Body: "x", Side: "MIDDLE"}}}},
 	}
 

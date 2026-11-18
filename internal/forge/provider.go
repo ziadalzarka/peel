@@ -115,7 +115,8 @@ func (e ReviewEvent) Valid() bool {
 type ReviewComment struct {
 	Path string
 	// Line is the line number in the file, on Side, or 0 for the whole file.
-	Line int
+	Line    int
+	EndLine int
 	// Side is "RIGHT" for the changed file or "LEFT" for the original.
 	Side string
 	Body string
@@ -151,6 +152,9 @@ func (r Review) Validate() error {
 		}
 		if c.Line < 0 {
 			return fmt.Errorf("comment %d on %s: line must not be negative, got %d", i+1, c.Path, c.Line)
+		}
+		if c.EndLine != 0 && (c.Line == 0 || c.EndLine < c.Line) {
+			return fmt.Errorf("comment %d on %s: end line %d does not follow line %d", i+1, c.Path, c.EndLine, c.Line)
 		}
 		if c.Side != "" && c.Side != "RIGHT" && c.Side != "LEFT" {
 			return fmt.Errorf("comment %d on %s: side must be RIGHT or LEFT, got %q", i+1, c.Path, c.Side)

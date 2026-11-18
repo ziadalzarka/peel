@@ -756,6 +756,23 @@ func TestSubmitReviewResolvesAfter(t *testing.T) {
 	}
 }
 
+func TestSubmitReviewPostsANoteOnARunOfLinesAsARange(t *testing.T) {
+	f := newFixture(t)
+	f.repo.Write("f.txt", "x\n")
+	f.repo.Commit("base")
+
+	s, _ := f.app.LoadPullRequest(f.ctx, "", "412")
+	mustAddComment(t, f, store.Comment{File: "pr.go", Line: 1, EndLine: 3, Body: "these three", Target: s.Target})
+
+	if _, err := f.app.SubmitReview(f.ctx, s, app.SubmitOptions{Event: forge.EventRequestChanges}); err != nil {
+		t.Fatalf("SubmitReview: %v", err)
+	}
+	want := []forge.ReviewComment{{Path: "pr.go", Line: 1, EndLine: 3, Side: "RIGHT", Body: "these three"}}
+	if got := f.gh.submitted[0].Comments; !reflect.DeepEqual(got, want) {
+		t.Errorf("Comments = %+v, want %+v", got, want)
+	}
+}
+
 func TestSubmitReviewPostsAFileLevelCommentWithNoBody(t *testing.T) {
 	f := newFixture(t)
 	f.repo.Write("f.txt", "x\n")

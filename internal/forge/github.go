@@ -218,10 +218,12 @@ type reviewPayload struct {
 }
 
 type reviewCommentPayload struct {
-	Path string `json:"path"`
-	Line int    `json:"line"`
-	Side string `json:"side,omitempty"`
-	Body string `json:"body"`
+	Path      string `json:"path"`
+	StartLine int    `json:"start_line,omitempty"`
+	StartSide string `json:"start_side,omitempty"`
+	Line      int    `json:"line"`
+	Side      string `json:"side,omitempty"`
+	Body      string `json:"body"`
 }
 
 type submitPayload struct {
@@ -293,7 +295,11 @@ func lineCommentPayloads(comments []ReviewComment) []reviewCommentPayload {
 		if side == "" {
 			side = "RIGHT"
 		}
-		out = append(out, reviewCommentPayload{Path: c.Path, Line: c.Line, Side: side, Body: c.Body})
+		payload := reviewCommentPayload{Path: c.Path, Line: c.Line, Side: side, Body: c.Body}
+		if c.EndLine > c.Line {
+			payload.StartLine, payload.StartSide, payload.Line = c.Line, side, c.EndLine
+		}
+		out = append(out, payload)
 	}
 	return out
 }
