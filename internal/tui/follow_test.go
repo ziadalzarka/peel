@@ -63,6 +63,83 @@ func body(m *Model) string {
 	return strings.Join(out, "\n")
 }
 
+func TestReloadOpensANewlySavedWalkthrough(t *testing.T) {
+	for _, mode := range []string{"manual", "follow"} {
+		t.Run(mode, func(t *testing.T) {
+			repo, m := followModel(t)
+			a := m.backend.(*appBackend).app
+			reload := func() {
+				if mode == "follow" {
+					poll(t, m)
+				} else {
+					press(t, m, "r")
+				}
+			}
+			save := func(title string) {
+				t.Helper()
+				steps := []store.WalkthroughStep{{Title: title, Text: "Read the call.", File: "main.go", Line: 3}}
+				if err := a.SetWalkthrough(m.session, "codex", steps); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			reload()
+			if m.err != nil || m.walkLoaded {
+				t.Fatalf("empty reload: walkthrough loaded = %t, err = %v", m.walkLoaded, m.err)
+			}
+			save("First review")
+			if mode == "follow" {
+				press(t, m, "c")
+				reload()
+				if m.walkOn || m.mode != modeComment {
+					t.Fatal("walkthrough interrupted the open comment")
+				}
+				press(t, m, "esc")
+			}
+			reload()
+			if !m.walkOn || m.doc.Steps[0].Title != "First review" || m.cursor != m.doc.Steps[0].Row {
+				t.Fatal("reload did not open the supplied walkthrough at its first step")
+			}
+			press(t, m, "enter")
+			at := m.cursor
+			reload()
+			if m.cursor != at {
+				t.Fatal("reloading the same walkthrough moved the cursor")
+			}
+			press(t, m, "w")
+			reload()
+			if m.walkOn {
+				t.Fatal("reload reopened the hidden walkthrough")
+			}
+			save("Second review")
+			reload()
+			if !m.walkOn || m.doc.Steps[0].Title != "Second review" {
+				t.Fatal("reload missed the replacement walkthrough")
+			}
+			press(t, m, "w")
+			save("Review of the old diff")
+			repo.Write("main.go", "package main\n\nfunc main() { println(2) }\n")
+			reload()
+			if m.walkOn {
+				t.Fatal("reload opened a walkthrough for an older diff")
+			}
+		})
+	}
+}
+
+func TestFollowOpensACachedProviderWalkthrough(t *testing.T) {
+	_, m := followModel(t)
+	backend := m.backend.(*appBackend)
+	w := store.Walkthrough{Body: "Read the main function.", Fingerprint: store.Fingerprint(m.session.DiffText)}
+	if err := backend.state.Walkthroughs.Save(w); err != nil {
+		t.Fatal(err)
+	}
+	poll(t, m)
+	if !m.walkOn || m.doc.Steps[0].Body != w.Body {
+		t.Fatal("follow missed the cached walkthrough")
+	}
+}
+
 func TestFollowPicksUpAFileChangedOnDisk(t *testing.T) {
 	repo, m := followModel(t)
 

@@ -43,8 +43,9 @@ keymap.
   "address my review comments" needs no copy-paste. `C` copies the threads you
   commented in as text for an agent that cannot.
 - **A walkthrough in the diff.** Press `w` to read the diff in walkthrough order.
-  Supply your own steps with `peel walkthrough set` and press Enter on a step
-  to jump to its line.
+  When a walkthrough is saved for the current diff, follow mode or a manual reload
+  opens it automatically. Press `w` to hide it. For steps supplied with
+  `peel walkthrough set`, press Enter on a step to jump to its line.
 - **It keeps up.** Follow mode re-reads the repository and the review's notes as
   they change, so a note an agent leaves shows up without a reload, and the
   screen moves on the keypress rather than waiting for git.

@@ -9,6 +9,27 @@ import (
 	"github.com/ziadalzarka/peel/internal/store"
 )
 
+func (a *App) SavedWalkthrough(s *Session, provider string) (*store.Walkthrough, error) {
+	written, ok, err := a.authoredWalkthroughStore(s).Walkthroughs().Load()
+	if err != nil {
+		return nil, err
+	}
+	if ok && written.Fresh(s.Target, s.WalkthroughFingerprint()) {
+		return &written, nil
+	}
+	if strings.TrimSpace(s.DiffText) == "" {
+		return nil, nil
+	}
+	cached, ok, err := a.StateFor(s).Walkthroughs.Load()
+	if err != nil {
+		return nil, err
+	}
+	if ok && (provider == "" || cached.Provider == provider) && cached.Fresh(s.Target, store.Fingerprint(s.DiffText)) {
+		return &cached, nil
+	}
+	return nil, nil
+}
+
 func (a *App) SetWalkthrough(s *Session, author store.Author, steps []store.WalkthroughStep) error {
 	if len(steps) == 0 {
 		return fmt.Errorf("a walkthrough needs at least one step")

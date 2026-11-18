@@ -526,6 +526,10 @@ func (f *fakeBackend) Copy(_ context.Context, text string) error {
 	return nil
 }
 
+func (f *fakeBackend) SavedWalkthrough(*app.Session) (*store.Walkthrough, error) {
+	return nil, nil
+}
+
 func (f *fakeBackend) WalkthroughViews() store.ViewedStore { return f.walkViews }
 
 func (f *fakeBackend) Walkthrough(_ context.Context, regenerate bool) (store.Walkthrough, error) {

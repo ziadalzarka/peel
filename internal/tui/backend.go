@@ -79,6 +79,7 @@ type Backend interface {
 	DescriptionFolded() (bool, error)
 	SetDescriptionFolded(folded bool) error
 
+	SavedWalkthrough(*app.Session) (*store.Walkthrough, error)
 	WalkthroughViews() store.ViewedStore
 	Walkthrough(ctx context.Context, regenerate bool) (store.Walkthrough, error)
 
@@ -589,6 +590,10 @@ func (b *appBackend) submitOptions(body string, event forge.ReviewEvent) app.Sub
 }
 
 func (b *appBackend) WalkthroughViews() store.ViewedStore { return b.walkViews }
+
+func (b *appBackend) SavedWalkthrough(s *app.Session) (*store.Walkthrough, error) {
+	return b.app.SavedWalkthrough(s, b.provider)
+}
 
 func (b *appBackend) Walkthrough(ctx context.Context, regenerate bool) (store.Walkthrough, error) {
 	return b.app.Walkthrough(ctx, b.session, app.WalkthroughRequest{

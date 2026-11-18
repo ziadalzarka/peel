@@ -136,11 +136,12 @@ type Model struct {
 	// puts the files back in git's order with no commentary between them.
 	walkOn bool
 	// walkFolded hides a step's explanation, by step index.
-	walkID       string
-	walkViewed   map[string]bool
-	walkFolded   map[int]bool
-	commentFolds map[string]bool
-	descFolded   bool
+	walkID         string
+	authoredWalkID string
+	walkViewed     map[string]bool
+	walkFolded     map[int]bool
+	commentFolds   map[string]bool
+	descFolded     bool
 	// hist is what has been pressed and what has been taken back.
 	hist history
 	// walkCode identifies the code the narrative was written about: git diff
@@ -974,6 +975,10 @@ func (m *Model) groups() Groups {
 // the renderer puts in front of it.
 func (m *Model) walkWidth() int { return max(m.diffWidth()-stepIndent-1, 20) }
 
+func walkthroughID(w store.Walkthrough) string {
+	return store.Fingerprint(w.Fingerprint + "\x00" + w.Markdown())
+}
+
 func (m *Model) showWalkthrough(walkthrough store.Walkthrough) {
 	if !m.walkLoaded {
 		viewed, err := m.backend.WalkthroughViews().Load()
@@ -986,9 +991,12 @@ func (m *Model) showWalkthrough(walkthrough store.Walkthrough) {
 			m.walkViewed[key] = true
 		}
 	}
-	m.walkID = store.Fingerprint(walkthrough.Fingerprint + "\x00" + walkthrough.Markdown())
+	m.walkID = walkthroughID(walkthrough)
 	m.walkSteps = walkthrough.Steps()
 	m.walkWritten = len(walkthrough.Written) > 0
+	if m.walkWritten {
+		m.authoredWalkID = m.walkID
+	}
 	m.walkIndex = 0
 	m.walkLoaded = true
 	m.walkOn = true
@@ -2523,7 +2531,7 @@ func (m *Model) walkCmd(regenerate bool) tea.Cmd {
 func (m *Model) reload(note string) tea.Cmd {
 	m.busy = "reloading"
 	backend, ctx := m.backend, m.ctx
-	return func() tea.Msg { return load(ctx, backend, note) }
+	return func() tea.Msg { return loadWithWalkthrough(ctx, backend, note) }
 }
 
 // toggleFollow turns the re-read timer on or off.
@@ -2553,7 +2561,7 @@ func (m *Model) pollCmd() tea.Cmd {
 	// comes back holding is only as new as the repository was when it started.
 	drawn := m.drawn.Load()
 	return func() tea.Msg {
-		msg := load(ctx, backend, "")
+		msg := loadWithWalkthrough(ctx, backend, "")
 		loaded, ok := msg.(loadedMsg)
 		if !ok {
 			// A failed poll is dropped: it is usually a mid-write index lock,
@@ -2563,6 +2571,19 @@ func (m *Model) pollCmd() tea.Cmd {
 		loaded.poll, loaded.drawn = true, drawn
 		return loaded
 	}
+}
+
+func loadWithWalkthrough(ctx context.Context, backend Backend, note string) tea.Msg {
+	msg := load(ctx, backend, note)
+	loaded, ok := msg.(loadedMsg)
+	if !ok {
+		return msg
+	}
+	loaded.walkthrough, loaded.walkErr = backend.SavedWalkthrough(loaded.session)
+	if loaded.walkthrough != nil {
+		loaded.walkID = walkthroughID(*loaded.walkthrough)
+	}
+	return loaded
 }
 
 // load re-reads the session and its comments.
@@ -2579,10 +2600,13 @@ func load(ctx context.Context, backend Backend, note string) tea.Msg {
 }
 
 type loadedMsg struct {
-	session  *app.Session
-	comments []store.Comment
-	runs     []store.HiddenRun
-	note     string
+	walkthrough *store.Walkthrough
+	walkID      string
+	walkErr     error
+	session     *app.Session
+	comments    []store.Comment
+	runs        []store.HiddenRun
+	note        string
 	// poll marks a load nobody asked for, which may be dropped.
 	poll bool
 	// drawn is the count of changes drawn when a poll's read went out, so a read
@@ -2675,7 +2699,8 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 		// off. The write behind it brings its own read-back.
 		return nil
 	}
-	if msg.poll && !m.acceptPoll(msg) {
+	newWalkthrough := msg.walkthrough != nil && msg.walkID != m.authoredWalkID && msg.walkID != m.walkID
+	if msg.poll && !m.acceptPoll(msg, newWalkthrough) {
 		return nil
 	}
 	at := m.spot()
@@ -2739,13 +2764,20 @@ func (m *Model) applyLoaded(msg loadedMsg) tea.Cmd {
 	if len(reopened) > 0 {
 		m.status = "reopened " + strings.Join(reopened, ", ") + " — changed since it was " + m.terms().staged
 	}
+	if newWalkthrough {
+		m.status = "opened walkthrough"
+		m.showWalkthrough(*msg.walkthrough)
+	}
+	if !msg.poll && msg.walkErr != nil {
+		m.err = msg.walkErr
+	}
 	return m.contextCmd()
 }
 
 // acceptPoll decides whether an unrequested reload is worth applying. Redrawing
 // while someone is mid-comment or mid-answer, or when nothing actually changed,
 // is worse than waiting for the next tick.
-func (m *Model) acceptPoll(msg loadedMsg) bool {
+func (m *Model) acceptPoll(msg loadedMsg, newWalkthrough bool) bool {
 	// A search half typed is a file about to be gone to, the way a comment half
 	// written is: relisting what it matches mid-thought is worse than waiting for
 	// the next tick, which will still find whatever changed. A review being
@@ -2775,7 +2807,7 @@ func (m *Model) acceptPoll(msg loadedMsg) bool {
 	if msg.drawn != m.drawn.Load() {
 		return false
 	}
-	return fingerprintOf(msg.session) != m.fingerprint || !sameComments(msg.comments, m.comments) ||
+	return newWalkthrough || fingerprintOf(msg.session) != m.fingerprint || !sameComments(msg.comments, m.comments) ||
 		!sameRuns(msg.runs, m.hiddenRuns)
 }
 

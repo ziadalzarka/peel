@@ -272,31 +272,17 @@ type WalkthroughRequest struct {
 // cache is missing or describes a different changeset.
 func (a *App) Walkthrough(ctx context.Context, s *Session, req WalkthroughRequest) (store.Walkthrough, error) {
 	if !req.Regenerate {
-		written, ok, err := a.authoredWalkthroughStore(s).Walkthroughs().Load()
+		saved, err := a.SavedWalkthrough(s, req.Provider)
 		if err != nil {
 			return store.Walkthrough{}, err
 		}
-		if ok && written.Fresh(s.Target, s.WalkthroughFingerprint()) {
-			return written, nil
+		if saved != nil {
+			return *saved, nil
 		}
 	}
 	if strings.TrimSpace(s.DiffText) == "" {
 		return store.Walkthrough{}, fmt.Errorf("nothing to summarise: %s has no changes", s.Title)
 	}
-	fingerprint := store.Fingerprint(s.DiffText)
-	cache := a.StateFor(s).Walkthroughs
-
-	if !req.Regenerate {
-		cached, ok, err := cache.Load()
-		if err != nil {
-			return store.Walkthrough{}, err
-		}
-		providerMatches := req.Provider == "" || cached.Provider == req.Provider
-		if ok && cached.Fresh(s.Target, fingerprint) && providerMatches {
-			return cached, nil
-		}
-	}
-
 	provider, err := a.AI.Resolve(ctx, req.Provider)
 	if err != nil {
 		return store.Walkthrough{}, err
@@ -309,11 +295,11 @@ func (a *App) Walkthrough(ctx context.Context, s *Session, req WalkthroughReques
 
 	result := store.Walkthrough{
 		Target:      s.Target,
-		Fingerprint: fingerprint,
+		Fingerprint: store.Fingerprint(s.DiffText),
 		Provider:    provider.Name(),
 		Body:        body,
 	}
-	if err := cache.Save(result); err != nil {
+	if err := a.StateFor(s).Walkthroughs.Save(result); err != nil {
 		return store.Walkthrough{}, err
 	}
 	return result, nil
