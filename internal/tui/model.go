@@ -126,7 +126,9 @@ type Model struct {
 
 	// walkSteps is the narrative parsed into the groups it comments on, kept so
 	// the diff can be laid out again when the terminal resizes or a step folds.
-	walkSteps []store.Step
+	walkSteps   []store.Step
+	walkIndex   int
+	walkWritten bool
 	// walkLoaded reports that a narrative has been fetched, so opening the
 	// walkthrough again does not pay a provider for one twice.
 	walkLoaded bool
@@ -450,7 +452,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case walkthroughMsg:
 		m.busy = ""
-		m.showWalkthrough(msg.body)
+		m.showWalkthrough(msg.Walkthrough)
 		return m, nil
 	case postedMsg:
 		m.busy = ""
@@ -728,9 +730,15 @@ func (m *Model) browseKey(msg tea.KeyMsg) tea.Cmd {
 	case "shift+up":
 		m.mark(-1)
 	case "alt+down":
-		m.showFile(m.doc.NextFile(m.cursor))
+		if !m.moveWalkthroughStep(1) {
+			m.showFile(m.doc.NextFile(m.cursor))
+		}
 	case "alt+up":
-		m.showFile(m.doc.PrevFile(m.cursor))
+		if !m.moveWalkthroughStep(-1) {
+			m.showFile(m.doc.PrevFile(m.cursor))
+		}
+	case "enter":
+		m.goToWalkthroughLine()
 	case "}":
 		m.scrollFiles(1)
 	case "{":
@@ -964,17 +972,47 @@ func (m *Model) groups() Groups {
 // the renderer puts in front of it.
 func (m *Model) walkWidth() int { return max(m.diffWidth()-stepIndent-1, 20) }
 
-// showWalkthrough lays the diff out under a freshly generated narrative.
-func (m *Model) showWalkthrough(body string) {
-	m.walkSteps = store.ParseSteps(body)
+func (m *Model) showWalkthrough(walkthrough store.Walkthrough) {
+	m.walkSteps = walkthrough.Steps()
+	m.walkWritten = len(walkthrough.Written) > 0
+	m.walkIndex = 0
 	m.walkLoaded = true
 	m.walkOn = true
 	m.walkFolded = map[int]bool{}
 	m.walkCode, m.walkStale = codeFingerprintOf(m.session), false
 	m.relayout()
+	if m.walkWritten {
+		m.showFile(m.doc.Steps[0].Row)
+	}
 	if len(m.walkSteps) == 0 {
 		m.status = "the walkthrough came back empty"
 	}
+}
+
+func (m *Model) moveWalkthroughStep(delta int) bool {
+	if !m.walkOn || !m.walkWritten {
+		return false
+	}
+	if step := m.doc.StepAt(m.cursor); step >= 0 {
+		m.walkIndex = step
+	}
+	m.walkIndex = max(0, min(m.walkIndex+delta, len(m.walkSteps)-1))
+	m.showFile(m.doc.Steps[m.walkIndex].Row)
+	return true
+}
+
+func (m *Model) goToWalkthroughLine() {
+	index := m.doc.StepAt(m.cursor)
+	if index < 0 || index >= len(m.walkSteps) || !m.walkWritten {
+		return
+	}
+	if m.walkStale {
+		m.status = "the diff changed since this walkthrough was written"
+		return
+	}
+	m.walkIndex = index
+	step := m.walkSteps[index]
+	m.goTo(step.Files[0], step.Line)
 }
 
 // toggleWalkthrough shows or hides the walkthrough's grouping, fetching the
@@ -986,7 +1024,7 @@ func (m *Model) toggleWalkthrough() tea.Cmd {
 		m.status = "walkthrough hidden"
 		return nil
 	}
-	if !m.walkLoaded {
+	if !m.walkLoaded || m.walkWritten {
 		return m.walkCmd(false)
 	}
 	m.walkOn = true
@@ -2440,11 +2478,11 @@ func (m *Model) walkCmd(regenerate bool) tea.Cmd {
 	m.busy = walkBusyNote
 	backend, ctx := m.backend, m.ctx
 	return func() tea.Msg {
-		body, err := backend.Walkthrough(ctx, regenerate)
+		walkthrough, err := backend.Walkthrough(ctx, regenerate)
 		if err != nil {
 			return errMsg{err}
 		}
-		return walkthroughMsg{body: body}
+		return walkthroughMsg{walkthrough}
 	}
 }
 
@@ -2522,7 +2560,7 @@ type loadedMsg struct {
 	reconcile bool
 }
 
-type walkthroughMsg struct{ body string }
+type walkthroughMsg struct{ store.Walkthrough }
 
 // contextMsg carries the copies of the files the diff is measured against, for
 // reading in the unchanged code it leaves out.
@@ -2770,15 +2808,11 @@ func fingerprintOf(s *app.Session) string {
 }
 
 // codeFingerprintOf identifies the changed code a narrative describes.
-//
-// It hashes git diff HEAD rather than the file entries: that text reads the same
-// whether a change is staged or not, so a walkthrough survives the staging it is
-// there to guide, and is only dated by the code actually changing.
 func codeFingerprintOf(s *app.Session) string {
 	if s == nil {
 		return ""
 	}
-	return store.Fingerprint(s.DiffText)
+	return s.WalkthroughFingerprint()
 }
 
 func writeSideFingerprint(b *strings.Builder, side string, d *git.FileDiff) {

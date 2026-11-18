@@ -10,33 +10,6 @@ import (
 	"github.com/ziadalzarka/peel/internal/forge"
 )
 
-// runWalkthrough generates or shows the AI narrative for the session.
-func runWalkthrough(ctx context.Context, c *CLI, args []string) error {
-	fs := newFlagSet("walkthrough")
-	regen := fs.Bool("regen", false, "ignore the cached narrative and generate a new one")
-	provider := fs.String("provider", c.ui.Provider, "AI provider to use (default: first available)")
-	instruction := fs.String("prompt", "", "replace the default instruction given to the provider")
-	if err := parse(fs, args); err != nil {
-		return err
-	}
-
-	a, s, err := c.openSession(ctx)
-	if err != nil {
-		return err
-	}
-
-	got, err := a.Walkthrough(ctx, s, app.WalkthroughRequest{
-		Provider:    *provider,
-		Regenerate:  *regen,
-		Instruction: *instruction,
-	})
-	if err != nil {
-		return err
-	}
-	fmt.Fprintln(c.Stdout, got.Body)
-	return nil
-}
-
 // runPR dispatches the `peel pr` group.
 func runPR(ctx context.Context, c *CLI, args []string) error {
 	subs := map[string]func(context.Context, *CLI, []string) error{

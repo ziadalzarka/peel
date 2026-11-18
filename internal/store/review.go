@@ -360,7 +360,7 @@ func (r reviewWalkthroughs) Load() (Walkthrough, bool, error) {
 	if f.Walkthrough == nil {
 		return Walkthrough{}, false, nil
 	}
-	return *f.Walkthrough, f.Walkthrough.Body != "", nil
+	return *f.Walkthrough, f.Walkthrough.hasContent(), nil
 }
 
 func (r reviewWalkthroughs) Save(w Walkthrough) error {
@@ -369,6 +369,15 @@ func (r reviewWalkthroughs) Save(w Walkthrough) error {
 	}
 	return r.s.mutate(func(f *reviewFile) error {
 		f.Walkthrough = &w
+		return nil
+	})
+}
+
+func (s *ReviewStore) ClearWalkthrough(author Author) error {
+	return s.mutate(func(f *reviewFile) error {
+		if f.Walkthrough != nil && f.Walkthrough.Author == author {
+			f.Walkthrough = nil
+		}
 		return nil
 	})
 }

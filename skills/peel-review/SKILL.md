@@ -278,11 +278,31 @@ What the user sees:
 
 ```bash
 peel walkthrough [--regen] [--provider <name>] [--prompt "..."]
+peel walkthrough set --author claude < steps.json
+peel walkthrough clear --author claude
 ```
 
 Generates a step-by-step walkthrough of the changeset and caches it. It shells
 out to an AI provider, so it is not free — read the cached one unless the diff has
 changed, in which case peel regenerates it for you. `--regen` forces a new one.
+
+To use steps you wrote, pass a JSON array on stdin. Each step needs a title,
+text, a repository-relative changed file, and a new-side line number in the diff.
+
+```json
+[
+  {"title":"Read the caller","text":"The caller passes the selected book.","file":"src/A.kt","line":42}
+]
+```
+
+The array sets the reading order. Several steps may point into the same file.
+Press `w` in the review, Option+Down or Option+Up to move through the steps, and
+Enter on a step to go to its line. Open the same review you wrote to, including
+the same `--rev <ref>` or `--pr <ref>` when used.
+
+A saved walkthrough takes priority while its diff matches. `set` replaces the
+supplied walkthrough for that review. `clear` removes it if the author matches.
+`--regen` generates an AI walkthrough and preserves the supplied steps.
 
 The output groups the changed files into numbered steps ordered so each sets up
 the next, starting at whatever the change rests on and following it out to the

@@ -271,6 +271,15 @@ type WalkthroughRequest struct {
 // Walkthrough returns a narrative of the session, generating one only when the
 // cache is missing or describes a different changeset.
 func (a *App) Walkthrough(ctx context.Context, s *Session, req WalkthroughRequest) (store.Walkthrough, error) {
+	if !req.Regenerate {
+		written, ok, err := a.authoredWalkthroughStore(s).Walkthroughs().Load()
+		if err != nil {
+			return store.Walkthrough{}, err
+		}
+		if ok && written.Fresh(s.Target, s.WalkthroughFingerprint()) {
+			return written, nil
+		}
+	}
 	if strings.TrimSpace(s.DiffText) == "" {
 		return store.Walkthrough{}, fmt.Errorf("nothing to summarise: %s has no changes", s.Title)
 	}

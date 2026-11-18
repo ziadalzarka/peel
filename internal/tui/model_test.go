@@ -2909,3 +2909,33 @@ func TestSOnAFileThatLeftTheDiffStagesNothing(t *testing.T) {
 		t.Errorf("status = %q, want it to say there is nothing there to stage", m.status)
 	}
 }
+
+func TestWrittenWalkthroughJumpsToEachLineInStepOrder(t *testing.T) {
+	backend := newFakeBackend(newSession(t, twoFileDiff))
+	backend.walkWritten = []store.WalkthroughStep{
+		{Title: "Output", Text: "Read the output first.", File: "beta.txt", Line: 2},
+		{Title: "Second function", Text: "Read the second function.", File: "alpha.go", Line: 4},
+		{Title: "First function", Text: "Return to the first function.", File: "alpha.go", Line: 3},
+	}
+	m := newModel(t, backend)
+	press(t, m, "w")
+
+	check := func(index int) {
+		t.Helper()
+		if got := m.doc.StepAt(m.cursor); got != index {
+			t.Fatalf("selected step = %d, want %d", got, index)
+		}
+		step := backend.walkWritten[index]
+		press(t, m, "enter")
+		if row, exact := m.doc.rowOfNewLine(step.File, step.Line); !exact || m.cursor != row {
+			t.Fatalf("enter landed at row %d, want %s:%d at row %d", m.cursor, step.File, step.Line, row)
+		}
+	}
+	check(0)
+	press(t, m, "alt+down")
+	check(1)
+	press(t, m, "alt+down")
+	check(2)
+	press(t, m, "alt+up")
+	check(1)
+}

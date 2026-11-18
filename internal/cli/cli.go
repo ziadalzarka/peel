@@ -97,7 +97,7 @@ func commands() []command {
 		{"fold", "fold <add|list|rm|clear>", "mark lines for review mode to collapse", runFold},
 		{"replace", "replace --author <name>", "swap one author's comments and folds for the ones on stdin", runReplace},
 		{"goto", "goto <file>[:<line>]", "move an open review UI to a place in the diff", runGoto},
-		{"walkthrough", "walkthrough [--regen]", "generate or show the AI narrative", runWalkthrough},
+		{"walkthrough", "walkthrough [--regen | set --author <name> | clear --author <name>]", "generate, show or write a walkthrough", runWalkthrough},
 		{"pr", "pr <view|submit>", "inspect a pull request or post a review to it", runPR},
 		{"providers", "providers", "list the AI and forge providers and their status", runProviders},
 		{"version", "version", "print the version", runVersion},

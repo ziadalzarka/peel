@@ -243,9 +243,10 @@ type fakeBackend struct {
 	restored     [][2]string
 	indexTreeErr error
 
-	walkCalls  int
-	regenerate bool
-	walkBody   string
+	walkCalls   int
+	regenerate  bool
+	walkWritten []store.WalkthroughStep
+	walkBody    string
 
 	// posted is every review handed to the code host, in order, and payloads is
 	// every one that was only built to be asked about.
@@ -524,13 +525,13 @@ func (f *fakeBackend) Copy(_ context.Context, text string) error {
 	return nil
 }
 
-func (f *fakeBackend) Walkthrough(_ context.Context, regenerate bool) (string, error) {
+func (f *fakeBackend) Walkthrough(_ context.Context, regenerate bool) (store.Walkthrough, error) {
 	f.walkCalls++
 	f.regenerate = regenerate
 	if err := f.take(); err != nil {
-		return "", err
+		return store.Walkthrough{}, err
 	}
-	return f.walkBody, nil
+	return store.Walkthrough{Body: f.walkBody, Written: f.walkWritten}, nil
 }
 
 // ReviewPayload builds what posting would send out of the comments the fake is

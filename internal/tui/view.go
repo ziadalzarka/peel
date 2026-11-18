@@ -160,6 +160,9 @@ func (m *Model) hints() string {
 	case modeReviewEvent:
 		return "a approve · r request changes · c comment · esc cancel"
 	default:
+		if m.walkOn && m.walkWritten {
+			return "opt+↓/↑ walkthrough step · enter go to code · w hide walkthrough · ? help"
+		}
 		t := m.terms()
 		stage := t.fileHint
 		if m.stageMode == app.StageModeHunk {
@@ -381,7 +384,8 @@ func (m *Model) helpBindings() []binding {
 		{"P", "post the review to the pull request: a summary, then approve / request changes / comment"},
 		{`\`, "toggle unified and side-by-side"},
 		{"w", "walkthrough: group the diff into steps, with a note before each"},
-		{"W", "regenerate the walkthrough"},
+		{"W", "generate an AI walkthrough"},
+		{"opt+↓/↑ / enter", "in a supplied walkthrough: move between steps / go to a step’s code"},
 		{"z / Z", "undo / redo a staging, a comment or a fold — cmd+z and cmd+shift+z too, where the terminal sends them"},
 		{"r", "reload from git"},
 		{"f", "follow: re-read the repository as it changes"},

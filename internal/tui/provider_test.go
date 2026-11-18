@@ -35,8 +35,8 @@ func TestBackendUsesSelectedWalkthroughProvider(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Walkthrough: %v", err)
 	}
-	if got != "from Codex" {
-		t.Errorf("Walkthrough = %q, want Codex output", got)
+	if got.Body != "from Codex" {
+		t.Errorf("Walkthrough = %q, want Codex output", got.Body)
 	}
 	if claude.calls != 0 || codex.calls != 1 {
 		t.Errorf("provider calls: Claude %d, Codex %d; want 0 and 1", claude.calls, codex.calls)

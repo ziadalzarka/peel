@@ -79,8 +79,7 @@ type Backend interface {
 	DescriptionFolded() (bool, error)
 	SetDescriptionFolded(folded bool) error
 
-	// Walkthrough returns the AI narrative of the session.
-	Walkthrough(ctx context.Context, regenerate bool) (string, error)
+	Walkthrough(ctx context.Context, regenerate bool) (store.Walkthrough, error)
 
 	// ReviewPayload is what posting the review would send: the summary written
 	// for it and the comments that can be posted inline. It is what the question
@@ -587,15 +586,9 @@ func (b *appBackend) submitOptions(body string, event forge.ReviewEvent) app.Sub
 	return app.SubmitOptions{Body: body, Event: event, ResolveAfter: true}
 }
 
-// Walkthrough returns the narrative of the session, cached with the rest of
-// this review's state.
-func (b *appBackend) Walkthrough(ctx context.Context, regenerate bool) (string, error) {
-	got, err := b.app.Walkthrough(ctx, b.session, app.WalkthroughRequest{
+func (b *appBackend) Walkthrough(ctx context.Context, regenerate bool) (store.Walkthrough, error) {
+	return b.app.Walkthrough(ctx, b.session, app.WalkthroughRequest{
 		Provider:   b.provider,
 		Regenerate: regenerate,
 	})
-	if err != nil {
-		return "", err
-	}
-	return got.Body, nil
 }

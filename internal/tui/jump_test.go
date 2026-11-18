@@ -154,3 +154,15 @@ func TestPendingReviewLeavesOutAnAgentsNotes(t *testing.T) {
 		t.Errorf("pending notes = %d, want 1", got)
 	}
 }
+
+func TestGoToPrefersTheWorkingCopyWhenBothSidesHaveTheLine(t *testing.T) {
+	s := partStagedSession(t)
+	m := newModel(t, newFakeBackend(s))
+	m.sideFolds["alpha.go"] = false
+	m.rebuild()
+	m.goTo("alpha.go", 4)
+
+	if newLineUnderCursor(t, m) != 4 || m.doc.Hunks[m.doc.Rows[m.cursor].Hunk].Staged {
+		t.Fatal("go to did not land on line 4 of the working copy")
+	}
+}

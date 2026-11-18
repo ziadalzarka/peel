@@ -88,7 +88,7 @@ func (m *Model) showRow(row int) {
 }
 
 func (d Document) rowOfNewLine(path string, line int) (int, bool) {
-	best, bestDistance := -1, 0
+	best, bestDistance, bestStaged := -1, 0, false
 	if line <= 0 {
 		return best, false
 	}
@@ -96,7 +96,8 @@ func (d Document) rowOfNewLine(path string, line int) (int, bool) {
 		if r.Kind != RowLine || r.Hunk < 0 || d.Hunks[r.Hunk].Path != path {
 			continue
 		}
-		lines := d.Hunks[r.Hunk].Hunk.Lines
+		ref := d.Hunks[r.Hunk]
+		lines := ref.Hunk.Lines
 		for _, at := range []int{r.Left, r.Right} {
 			if at < 0 || at >= len(lines) || lines[at].NewLine <= 0 {
 				continue
@@ -105,8 +106,8 @@ func (d Document) rowOfNewLine(path string, line int) (int, bool) {
 			if distance < 0 {
 				distance = -distance
 			}
-			if best < 0 || distance < bestDistance {
-				best, bestDistance = i, distance
+			if best < 0 || distance < bestDistance || (distance == bestDistance && bestStaged && !ref.Staged) {
+				best, bestDistance, bestStaged = i, distance, ref.Staged
 			}
 		}
 	}

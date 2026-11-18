@@ -42,8 +42,9 @@ keymap.
   for the working tree — which Claude Code reads through the bundled skill, so
   "address my review comments" needs no copy-paste. `C` copies the threads you
   commented in as text for an agent that cannot.
-- **A walkthrough in the diff.** `w` reorders the diff into the steps an AI
-  narrative reads it in, each explanation above the code it covers.
+- **A walkthrough in the diff.** Press `w` to read the diff in walkthrough order.
+  Supply your own steps with `peel walkthrough set` and press Enter on a step
+  to jump to its line.
 - **It keeps up.** Follow mode re-reads the repository and the review's notes as
   they change, so a note an agent leaves shows up without a reload, and the
   screen moves on the keypress rather than waiting for git.
@@ -156,7 +157,8 @@ keeps up as the repository changes.
 | `X` | delete every comment anyone else left |
 | `P` | post the review to the pull request: a summary, then approve / request changes / comment |
 | `\` | toggle unified and side-by-side |
-| `w` / `W` | walkthrough on-off / regenerate it |
+| `w` / `W` | walkthrough on-off / generate an AI walkthrough |
+| `opt+↓` / `opt+↑`, `enter` | in a supplied walkthrough, next or previous step, then jump to its code |
 | `f` | follow: re-read the repository as it changes |
 | `z` / `Z` | undo / redo the last staging, comment or fold — `cmd+z` / `cmd+shift+z` in the terminals that send `cmd` through |
 | `r` | reload from git |
@@ -574,7 +576,9 @@ peel fold clear --author claude         # its own, never the user's
 peel --pr <ref> fold add --file F --author claude  # the same on a pull request
 peel --pr <ref> replace --author claude < notes.json  # all its comments and folds in one call
 peel goto F:N                           # move the open review UI to a line
-peel walkthrough                        # the cached narrative, as markdown
+peel walkthrough                        # the walkthrough, as Markdown
+peel walkthrough set --author claude < steps.json
+peel walkthrough clear --author claude
 ```
 
 Two things it deliberately will not do:

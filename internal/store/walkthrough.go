@@ -15,7 +15,6 @@ import (
 	"unicode"
 )
 
-// Walkthrough is a cached AI narrative of a changeset.
 type Walkthrough struct {
 	// Target is what was summarised: empty for the working tree, or a pull
 	// request reference.
@@ -24,22 +23,59 @@ type Walkthrough struct {
 	// fingerprint means the cache is stale.
 	Fingerprint string `json:"fingerprint"`
 	// Provider records which AI provider produced it.
-	Provider  string    `json:"provider"`
-	Body      string    `json:"body"`
-	CreatedAt time.Time `json:"createdAt"`
+	Provider  string            `json:"provider,omitempty"`
+	Body      string            `json:"body,omitempty"`
+	Author    Author            `json:"author,omitempty"`
+	Written   []WalkthroughStep `json:"steps,omitempty"`
+	CreatedAt time.Time         `json:"createdAt"`
 }
 
 // Fresh reports whether the cached narrative still describes the given diff.
 func (w Walkthrough) Fresh(target, fingerprint string) bool {
-	return w.Body != "" && w.Target == target && w.Fingerprint == fingerprint
+	return w.hasContent() && w.Target == target && w.Fingerprint == fingerprint
 }
 
-// Steps splits the narrative into the groups it is written as.
-//
-// It parses rather than stores, so a narrative cached by an older build reads
-// back grouped without a migration, and the body on disk stays the markdown a
-// person or an agent would want to read.
-func (w Walkthrough) Steps() []Step { return ParseSteps(w.Body) }
+func (w Walkthrough) Steps() []Step {
+	if len(w.Written) == 0 {
+		return ParseSteps(w.Body)
+	}
+	steps := make([]Step, 0, len(w.Written))
+	for i, step := range w.Written {
+		steps = append(steps, Step{
+			Number: i + 1,
+			Title:  step.Title,
+			Files:  []string{step.File},
+			Line:   step.Line,
+			Body:   step.Text,
+		})
+	}
+	return steps
+}
+
+type WalkthroughStep struct {
+	Title string `json:"title"`
+	Text  string `json:"text"`
+	File  string `json:"file"`
+	Line  int    `json:"line"`
+}
+
+func (w Walkthrough) Markdown() string {
+	if len(w.Written) == 0 {
+		return w.Body
+	}
+	var out strings.Builder
+	for i, step := range w.Written {
+		if i > 0 {
+			out.WriteString("\n\n")
+		}
+		fmt.Fprintf(&out, "## %d. %s\n`%s:%d`\n\n%s", i+1, step.Title, step.File, step.Line, step.Text)
+	}
+	return out.String()
+}
+
+func (w Walkthrough) hasContent() bool {
+	return w.Body != "" || len(w.Written) > 0
+}
 
 // Step is one group of a walkthrough: a coherent piece of the change, the files
 // it touches, and the explanation tying them together.
@@ -52,6 +88,7 @@ type Step struct {
 	// Files are the paths the step covers, in the order the narrative lists
 	// them. A closing section usually has none.
 	Files []string
+	Line  int
 	// Body is the explanation, as markdown.
 	Body string
 }
@@ -225,7 +262,7 @@ func (c *JSONWalkthroughCache) Load() (Walkthrough, bool, error) {
 		// A corrupt cache is not worth failing over — regenerate instead.
 		return Walkthrough{}, false, nil
 	}
-	return w, w.Body != "", nil
+	return w, w.hasContent(), nil
 }
 
 // Save replaces the cached narrative.
